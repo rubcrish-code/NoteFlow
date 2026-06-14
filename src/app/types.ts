@@ -41,6 +41,7 @@ export interface TagRow {
   name: string;
   count: number;
   color: TagColor;
+  customColor?: string;
 }
 
 export interface ArchiveItem {

@@ -241,7 +241,7 @@ export function Icon({ name, ...props }: IconProps) {
     case "logo":
       return (
         <svg viewBox="0 0 24 24" fill="none" {...props}>
-          <path d="M4 17 L9 8 L13 14 L20 5" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M4 17 L9 8 L13 14 L20 5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "mention":
@@ -298,7 +298,7 @@ export function Icon({ name, ...props }: IconProps) {
       );
     case "send":
       return (
-        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="1.7" {...props}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
           <path d="M5 12h13M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );

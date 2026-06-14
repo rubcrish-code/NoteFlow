@@ -11,9 +11,9 @@ import { ProjectsPage } from "../features/projects/ProjectsPage";
 import { RagChatPage } from "../features/rag/RagChatPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { TagsPage } from "../features/tags/TagsPage";
-import { Icon } from "../shared/Icon";
 import { ResizeHandle } from "../shared/ResizeHandle";
 import { Toast } from "../shared/Toast";
+import { TooltipPortal } from "../shared/TooltipPortal";
 import { usePersistentNumber, usePersistentString } from "../shared/usePersistentState";
 
 const themeModes = ["light", "dark", "system"] as const;
@@ -236,11 +236,6 @@ export function AppShell() {
     <AppFrame
       footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}
     >
-      <button className={`focus-exit ${isFocusMode ? "show" : ""}`} data-tooltip="Выйти из режима фокуса" onClick={() => setIsFocusMode(false)} type="button">
-        <Icon name="focus" />
-        <span>Выйти из режима фокуса</span>
-        <kbd>Esc</kbd>
-      </button>
       <div className={`workspace ${isSidebarCollapsed ? "collapse-sb" : ""} ${isFocusMode ? "focus" : ""} ${isChatOpen ? "chat-open" : ""}`} style={workspaceStyle}>
         {!isFocusMode ? (
           <>
@@ -270,7 +265,7 @@ export function AppShell() {
           </>
         ) : null}
 
-        <EditorArea note={activeNote} onOpenChat={() => setIsChatOpen(true)} onToast={showToast} onToggleFocus={toggleFocusMode} />
+        <EditorArea isFocusMode={isFocusMode} note={activeNote} onExitFocus={() => setIsFocusMode(false)} onOpenChat={() => setIsChatOpen(true)} onToast={showToast} onToggleFocus={toggleFocusMode} />
 
         {isChatOpen && !isFocusMode ? (
           <NoteChatPanel
@@ -311,6 +306,7 @@ function SharedOverlays({ isNewNoteModalOpen, toastMessage, onCloseNewNote, onCr
     <>
       <NewNoteModal isOpen={isNewNoteModalOpen} onClose={onCloseNewNote} onCreate={onCreateNote} />
       <Toast message={toastMessage} />
+      <TooltipPortal />
     </>
   );
 }

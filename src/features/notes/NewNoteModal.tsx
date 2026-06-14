@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { formatDisplayDate, NoteDatePicker, todayIsoDate } from "./NoteDatePicker";
 
 interface NewNoteModalProps {
   isOpen: boolean;
@@ -6,20 +7,40 @@ interface NewNoteModalProps {
   onCreate: (title: string, noteDate: string) => void;
 }
 
-function todayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
   const [title, setTitle] = useState("");
   const [noteDate, setNoteDate] = useState(todayIsoDate);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setTitle("");
       setNoteDate(todayIsoDate());
+      setIsDatePickerOpen(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      event.stopPropagation();
+      if (isDatePickerOpen) {
+        setIsDatePickerOpen(false);
+        return;
+      }
+      onClose();
+    }
+
+    document.addEventListener("keydown", handleEscape, true);
+    return () => document.removeEventListener("keydown", handleEscape, true);
+  }, [isDatePickerOpen, isOpen, onClose]);
 
   if (!isOpen) {
     return null;
@@ -41,7 +62,8 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
         </label>
         <label>
           Дата заметки
-          <input onChange={(event) => setNoteDate(event.currentTarget.value)} type="date" value={noteDate} />
+          <NoteDatePicker isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} value={noteDate} />
+          <span className="date-picker-readable">Выбрана дата: {formatDisplayDate(noteDate)}</span>
         </label>
         <div className="new-note-actions">
           <button className="cancel" onClick={onClose} type="button">

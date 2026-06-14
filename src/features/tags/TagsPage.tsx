@@ -1,10 +1,9 @@
-import { useMemo, useState } from "react";
-import type { AppSection, TagColor, TagRow } from "../../app/types";
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import type { AppSection, TagRow } from "../../app/types";
 import { mockTags } from "../../data/mockData";
 import { Icon } from "../../shared/Icon";
 import { PageShell } from "../navigation/PageShell";
-
-const tagColorOrder: TagColor[] = ["blue", "purple", "green", "amber", "pink"];
+import { TagColorPopover, tagColorPalette } from "./TagColorPopover";
 
 interface TagsPageProps {
   onNavigate: (section: AppSection) => void;
@@ -12,9 +11,33 @@ interface TagsPageProps {
   onToast: (message: string) => void;
 }
 
+interface ColorEditorState {
+  position: {
+    left: number;
+    top: number;
+  };
+  tagId: string;
+}
+
+function getTagHex(tag: TagRow) {
+  return tag.customColor ?? tagColorPalette.find((paletteItem) => paletteItem.color === tag.color)?.hex ?? tagColorPalette[0].hex;
+}
+
+function getPopoverPosition(rect: DOMRect) {
+  const popoverWidth = 300;
+  const popoverHeight = 330;
+  const padding = 12;
+  const left = Math.min(window.innerWidth - popoverWidth - padding, Math.max(padding, rect.left));
+  const preferredTop = rect.bottom + 8;
+  const top = preferredTop + popoverHeight > window.innerHeight - padding ? Math.max(padding, rect.top - popoverHeight - 8) : preferredTop;
+
+  return { left, top };
+}
+
 export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
   const [tags, setTags] = useState<TagRow[]>(mockTags);
   const [query, setQuery] = useState("");
+  const [colorEditor, setColorEditor] = useState<ColorEditorState | null>(null);
 
   const filteredTags = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -38,19 +61,32 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
     onToast("Тег создан в мок-данных");
   }
 
-  function cycleColor(tagId: string) {
+  function openColorPopover(tagId: string, event: ReactMouseEvent<HTMLButtonElement>) {
+    setColorEditor({ tagId, position: getPopoverPosition(event.currentTarget.getBoundingClientRect()) });
+  }
+
+  function applyTagColor(hex: string) {
+    if (!colorEditor) {
+      return;
+    }
+
+    const preset = tagColorPalette.find((paletteItem) => paletteItem.hex.toUpperCase() === hex.toUpperCase());
     setTags((currentTags) =>
-      currentTags.map((tag) => {
-        if (tag.id !== tagId) {
-          return tag;
-        }
-        const currentIndex = tagColorOrder.indexOf(tag.color);
-        const nextColor = tagColorOrder[(currentIndex + 1) % tagColorOrder.length];
-        return { ...tag, color: nextColor };
-      }),
+      currentTags.map((tag) =>
+        tag.id === colorEditor.tagId
+          ? {
+              ...tag,
+              color: preset?.color ?? tag.color,
+              customColor: hex,
+            }
+          : tag,
+      ),
     );
+    setColorEditor(null);
     onToast("Цвет тега изменён");
   }
+
+  const editedTag = colorEditor ? tags.find((tag) => tag.id === colorEditor.tagId) : undefined;
 
   return (
     <PageShell activeSection="tags" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
@@ -72,7 +108,7 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
       <div className="tags-table">
         {filteredTags.map((tag) => (
           <div className="tag-row" key={tag.id}>
-            <span className={`tag-dot ${tag.color}`} />
+            <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagHex(tag) }} />
             <div>
               <b>{tag.name}</b>
               <small>{tag.count} заметок</small>
@@ -89,7 +125,7 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
             <button onClick={() => onToast("Переименование тега будет подключено к базе на следующем этапе")} type="button">
               Переименовать
             </button>
-            <button onClick={() => cycleColor(tag.id)} type="button">
+            <button onClick={(event) => openColorPopover(tag.id, event)} type="button">
               Цвет
             </button>
             <button onClick={() => onToast("Объединение тегов пока демонстрационное")} type="button">
@@ -101,6 +137,15 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
           </div>
         ))}
       </div>
+      {colorEditor && editedTag ? (
+        <TagColorPopover
+          currentHex={getTagHex(editedTag)}
+          onApply={applyTagColor}
+          onCancel={() => setColorEditor(null)}
+          position={colorEditor.position}
+          tagName={editedTag.name}
+        />
+      ) : null}
     </PageShell>
   );
 }

@@ -3,39 +3,51 @@ import { Icon } from "../../shared/Icon";
 import { FormattingToolbar } from "./FormattingToolbar";
 
 interface EditorAreaProps {
+  isFocusMode: boolean;
   note: Note;
+  onExitFocus: () => void;
   onOpenChat: () => void;
   onToggleFocus: () => void;
   onToast: (message: string) => void;
 }
 
-export function EditorArea({ note, onOpenChat, onToggleFocus, onToast }: EditorAreaProps) {
+export function EditorArea({ isFocusMode, note, onExitFocus, onOpenChat, onToggleFocus, onToast }: EditorAreaProps) {
   return (
     <section className="editor-col">
-      <div className="ed-top">
-        <div className="crumb">
-          <Icon name="folder" />
-          <span>Проекты</span>
-          <span className="sep">/</span>
-          <span>{note.project}</span>
-        </div>
-        <div className="ed-act">
-          <div className="saved">
-            <Icon name="check" />
-            <span>Сохранено</span>
+      {!isFocusMode ? (
+        <div className="ed-top">
+          <div className="crumb">
+            <Icon name="folder" />
+            <span>Проекты</span>
+            <span className="sep">/</span>
+            <span>{note.project}</span>
           </div>
-          <button className="ibtn ai" onClick={onOpenChat} type="button">
-            <Icon name="chat" />
-            <span>Чат по заметке</span>
-          </button>
-          <button className="ibtn" data-tooltip="Фокус-режим (Ctrl+\)" onClick={onToggleFocus} type="button">
+          <div className="ed-act">
+            <div className="saved">
+              <Icon name="check" />
+              <span>Сохранено</span>
+            </div>
+            <button className="ibtn ai" onClick={onOpenChat} type="button">
+              <Icon name="chat" />
+              <span>Чат по заметке</span>
+            </button>
+            <button className="ibtn" data-tooltip="Фокус-режим (Ctrl+\)" onClick={onToggleFocus} type="button">
+              <Icon name="focus" />
+            </button>
+            <button className="ibtn" data-tooltip="Меню заметки" onClick={() => onToast("Меню заметки пока демонстрационное")} type="button">
+              <Icon name="dots" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="focus-strip">
+          <button className="focus-exit" data-tooltip="Выйти из режима фокуса" onClick={onExitFocus} type="button">
             <Icon name="focus" />
-          </button>
-          <button className="ibtn" data-tooltip="Меню заметки" onClick={() => onToast("Меню заметки пока демонстрационное")} type="button">
-            <Icon name="dots" />
+            <span>Выйти из режима фокуса</span>
+            <kbd>Esc</kbd>
           </button>
         </div>
-      </div>
+      )}
 
       <FormattingToolbar />
 
