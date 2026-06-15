@@ -1,12 +1,58 @@
-import { useState } from "react";
+import { useEditorState, type Editor } from "@tiptap/react";
+import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shared/Icon";
+import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
+
+type ToolId =
+  | "ai"
+  | "align-center"
+  | "align-left"
+  | "align-right"
+  | "attach"
+  | "bold"
+  | "callout"
+  | "clear"
+  | "code-block"
+  | "color"
+  | "date"
+  | "divider"
+  | "formula"
+  | "h1"
+  | "h2"
+  | "h3"
+  | "highlight"
+  | "image"
+  | "inline-code"
+  | "italic"
+  | "link"
+  | "mention"
+  | "note-link"
+  | "ol"
+  | "p"
+  | "quote"
+  | "redo"
+  | "strike"
+  | "sub"
+  | "sup"
+  | "table"
+  | "task"
+  | "toggle"
+  | "ul"
+  | "underline"
+  | "undo";
 
 interface ToolbarTool {
-  id: string;
-  tip: string;
-  icon?: IconName;
-  label?: string;
   groupAfter?: boolean;
+  icon?: IconName;
+  id: ToolId;
+  label?: string;
+  tip: string;
+}
+
+interface FormattingToolbarProps {
+  editor: Editor | null;
+  onOpenAiSettings: () => void;
+  onToast: (message: string) => void;
 }
 
 const toolbarTools: ToolbarTool[] = [
@@ -48,25 +94,382 @@ const toolbarTools: ToolbarTool[] = [
   { id: "ai", tip: "ИИ-помощник", label: "AI" },
 ];
 
-export function FormattingToolbar() {
-  const [activeToolId, setActiveToolId] = useState("p");
+const deferredTools = new Set<ToolId>(["attach", "date", "formula", "mention", "note-link"]);
+
+interface ToolbarRuntimeState {
+  active: Partial<Record<ToolId, boolean>>;
+  canRedo: boolean;
+  canUndo: boolean;
+}
+
+const emptyToolbarState: ToolbarRuntimeState = {
+  active: {},
+  canRedo: false,
+  canUndo: false,
+};
+
+export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: FormattingToolbarProps) {
+  const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
+  const [popoverMode, setPopoverMode] = useState<EditorCommandPopoverMode | null>(null);
+  const aiMenuRef = useRef<HTMLDivElement>(null);
+  const mouseCommandRef = useRef(false);
+  const toolbarState =
+    useEditorState({
+      editor,
+      selector: ({ editor: currentEditor }) => buildToolbarState(currentEditor),
+    }) ?? emptyToolbarState;
+
+  useEffect(() => {
+    if (!isAiMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof Node && aiMenuRef.current && !aiMenuRef.current.contains(target)) {
+        setIsAiMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setIsAiMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [isAiMenuOpen]);
+
+  function runCommand(toolId: ToolId) {
+    if (toolId === "ai") {
+      setPopoverMode(null);
+      setIsAiMenuOpen((value) => !value);
+      return;
+    }
+
+    if (deferredTools.has(toolId)) {
+      onToast("Используйте нижнее меню + для вставки этого блока");
+      return;
+    }
+
+    if (!editor) {
+      return;
+    }
+
+    if (toolId === "link" || toolId === "image" || toolId === "table" || toolId === "color" || toolId === "highlight") {
+      setPopoverMode(toPopoverMode(toolId));
+      return;
+    }
+
+    setPopoverMode(null);
+
+    if (toolId === "undo") {
+      editor.chain().focus().undo().run();
+      return;
+    }
+    if (toolId === "redo") {
+      editor.chain().focus().redo().run();
+      return;
+    }
+    if (toolId === "h1" || toolId === "h2" || toolId === "h3") {
+      editor
+        .chain()
+        .focus()
+        .toggleHeading({ level: Number(toolId.slice(1)) as 1 | 2 | 3 })
+        .run();
+      return;
+    }
+    if (toolId === "p") {
+      editor.chain().focus().setParagraph().run();
+      return;
+    }
+    if (toolId === "bold") {
+      editor.chain().focus().toggleBold().run();
+      return;
+    }
+    if (toolId === "italic") {
+      editor.chain().focus().toggleItalic().run();
+      return;
+    }
+    if (toolId === "underline") {
+      editor.chain().focus().toggleUnderline().run();
+      return;
+    }
+    if (toolId === "strike") {
+      editor.chain().focus().toggleStrike().run();
+      return;
+    }
+    if (toolId === "inline-code") {
+      editor.chain().focus().toggleCode().run();
+      return;
+    }
+    if (toolId === "sup") {
+      editor.chain().focus().toggleSuperscript().run();
+      return;
+    }
+    if (toolId === "sub") {
+      editor.chain().focus().toggleSubscript().run();
+      return;
+    }
+    if (toolId === "ul") {
+      editor.chain().focus().toggleBulletList().run();
+      return;
+    }
+    if (toolId === "ol") {
+      editor.chain().focus().toggleOrderedList().run();
+      return;
+    }
+    if (toolId === "task") {
+      editor.chain().focus().toggleTaskList().run();
+      return;
+    }
+    if (toolId === "quote") {
+      editor.chain().focus().toggleBlockquote().run();
+      return;
+    }
+    if (toolId === "code-block") {
+      editor.chain().focus().toggleCodeBlock().run();
+      return;
+    }
+    if (toolId === "callout") {
+      editor.chain().focus().insertCallout({ variant: "info" }).run();
+      return;
+    }
+    if (toolId === "toggle") {
+      editor.chain().focus().insertDetailsBlock().run();
+      return;
+    }
+    if (toolId === "divider") {
+      editor.chain().focus().setHorizontalRule().run();
+      return;
+    }
+    if (toolId === "align-left" || toolId === "align-center" || toolId === "align-right") {
+      editor.chain().focus().setTextAlign(toolId.replace("align-", "")).run();
+      return;
+    }
+    if (toolId === "clear") {
+      editor.chain().focus().unsetAllMarks().clearNodes().run();
+    }
+  }
+
+  function applyPopoverCommand(value: EditorCommandSubmit) {
+    if (!editor) {
+      return;
+    }
+
+    if (value.mode === "link") {
+      if (value.text.length > 0) {
+        editor
+          .chain()
+          .focus()
+          .insertContent({ type: "text", text: value.text, marks: [{ type: "link", attrs: { href: value.href } }] })
+          .run();
+      } else {
+        editor.chain().focus().extendMarkRange("link").setLink({ href: value.href }).run();
+      }
+    }
+
+    if (value.mode === "image") {
+      editor.chain().focus().setImage({ src: value.src, alt: value.alt }).run();
+    }
+
+    if (value.mode === "table") {
+      editor.chain().focus().insertTable({ rows: value.rows, cols: value.cols, withHeaderRow: true }).run();
+    }
+
+    if (value.mode === "color") {
+      if (value.color) {
+        editor.chain().focus().setColor(value.color).run();
+      } else {
+        editor.chain().focus().unsetColor().run();
+      }
+    }
+
+    if (value.mode === "highlight") {
+      if (value.color) {
+        editor.chain().focus().toggleHighlight({ color: value.color }).run();
+      } else {
+        editor.chain().focus().unsetHighlight().run();
+      }
+    }
+
+    setPopoverMode(null);
+  }
+
+  const selectedText = getSelectedText(editor);
 
   return (
-    <div aria-label="Лента форматирования" className="toolbar" role="toolbar">
-      {toolbarTools.map((tool) => (
-        <span className="toolbar-slot" key={tool.id}>
+    <div className="toolbar-wrap">
+      <div aria-label="Лента форматирования" className="toolbar" role="toolbar">
+        {toolbarTools.map((tool) => {
+          const disabled = isToolDisabled(tool.id, editor, toolbarState);
+          return (
+            <span className="toolbar-slot" key={tool.id}>
+              <button
+                aria-label={tool.tip}
+                className={`tb ${toolbarState.active[tool.id] ? "active" : ""} ${tool.id === "ai" ? "ai" : ""}`}
+                data-tooltip={tool.tip}
+                disabled={disabled}
+                onClick={() => {
+                  if (mouseCommandRef.current) {
+                    mouseCommandRef.current = false;
+                    return;
+                  }
+                  runCommand(tool.id);
+                }}
+                onMouseDown={(event) => {
+                  if (event.button !== 0) {
+                    return;
+                  }
+                  event.preventDefault();
+                  mouseCommandRef.current = true;
+                  runCommand(tool.id);
+                }}
+                type="button"
+              >
+                {tool.icon ? <Icon name={tool.icon} /> : <span className="lbl">{tool.label}</span>}
+              </button>
+              {tool.groupAfter ? <span className="tb-sep" /> : null}
+            </span>
+          );
+        })}
+      </div>
+
+      {isAiMenuOpen ? (
+        <div className="editor-ai-menu" ref={aiMenuRef} role="menu">
+          <div className="editor-command-head">
+            <b>ИИ-помощник</b>
+            <button aria-label="Закрыть" className="editor-popover-close" onClick={() => setIsAiMenuOpen(false)} type="button">
+              <Icon name="x" />
+            </button>
+          </div>
+          <button onClick={() => onToast("ИИ-сокращение будет подключено после настройки провайдера")} type="button">
+            Сократить выделенный текст
+          </button>
+          <button onClick={() => onToast("ИИ-продолжение будет подключено после настройки провайдера")} type="button">
+            Продолжить мысль
+          </button>
+          <button onClick={() => onToast("Объяснение термина будет подключено после настройки провайдера")} type="button">
+            Объяснить термин
+          </button>
           <button
-            aria-label={tool.tip}
-            className={`tb ${activeToolId === tool.id ? "active" : ""} ${tool.id === "ai" ? "ai" : ""}`}
-            data-tooltip={tool.tip}
-            onClick={() => setActiveToolId(tool.id)}
+            className="ai-settings-link"
+            onClick={() => {
+              setIsAiMenuOpen(false);
+              onOpenAiSettings();
+            }}
             type="button"
           >
-            {tool.icon ? <Icon name={tool.icon} /> : <span className="lbl">{tool.label}</span>}
+            Настройки → Модели ИИ
           </button>
-          {tool.groupAfter ? <span className="tb-sep" /> : null}
-        </span>
-      ))}
+        </div>
+      ) : null}
+
+      {popoverMode ? (
+        <EditorCommandPopover
+          currentColor={getCurrentPopoverColor(editor, popoverMode)}
+          initialText={selectedText}
+          mode={popoverMode}
+          onClose={() => setPopoverMode(null)}
+          onSubmit={applyPopoverCommand}
+        />
+      ) : null}
     </div>
   );
+}
+
+function toPopoverMode(toolId: ToolId): EditorCommandPopoverMode {
+  if (toolId === "color") {
+    return "color";
+  }
+  if (toolId === "highlight") {
+    return "highlight";
+  }
+  if (toolId === "image") {
+    return "image";
+  }
+  if (toolId === "table") {
+    return "table";
+  }
+  return "link";
+}
+
+function getSelectedText(editor: Editor | null) {
+  if (!editor || editor.state.selection.empty) {
+    return "";
+  }
+  const { from, to } = editor.state.selection;
+  return editor.state.doc.textBetween(from, to, " ").trim();
+}
+
+function getCurrentPopoverColor(editor: Editor | null, mode: EditorCommandPopoverMode) {
+  if (!editor) {
+    return undefined;
+  }
+  if (mode === "color") {
+    const color = editor.getAttributes("textStyle").color;
+    return typeof color === "string" ? color : undefined;
+  }
+  if (mode === "highlight") {
+    const color = editor.getAttributes("highlight").color;
+    return typeof color === "string" ? color : undefined;
+  }
+  return undefined;
+}
+
+function buildToolbarState(editor: Editor | null): ToolbarRuntimeState {
+  if (!editor) {
+    return emptyToolbarState;
+  }
+
+  return {
+    active: {
+      "align-center": editor.isActive({ textAlign: "center" }),
+      "align-left": editor.isActive({ textAlign: "left" }),
+      "align-right": editor.isActive({ textAlign: "right" }),
+      bold: editor.isActive("bold"),
+      color: typeof editor.getAttributes("textStyle").color === "string",
+      "code-block": editor.isActive("codeBlock"),
+      h1: editor.isActive("heading", { level: 1 }),
+      h2: editor.isActive("heading", { level: 2 }),
+      h3: editor.isActive("heading", { level: 3 }),
+      highlight: editor.isActive("highlight"),
+      "inline-code": editor.isActive("code"),
+      italic: editor.isActive("italic"),
+      link: editor.isActive("link"),
+      ol: editor.isActive("orderedList"),
+      p: editor.isActive("paragraph"),
+      quote: editor.isActive("blockquote"),
+      strike: editor.isActive("strike"),
+      sub: editor.isActive("subscript"),
+      sup: editor.isActive("superscript"),
+      task: editor.isActive("taskList"),
+      ul: editor.isActive("bulletList"),
+      underline: editor.isActive("underline"),
+    },
+    canRedo: editor.can().redo(),
+    canUndo: editor.can().undo(),
+  };
+}
+
+function isToolDisabled(toolId: ToolId, editor: Editor | null, toolbarState: ToolbarRuntimeState) {
+  if (deferredTools.has(toolId)) {
+    return false;
+  }
+  if (!editor) {
+    return true;
+  }
+  if (toolId === "undo") {
+    return !toolbarState.canUndo;
+  }
+  if (toolId === "redo") {
+    return !toolbarState.canRedo;
+  }
+  return false;
 }

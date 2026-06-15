@@ -1,8 +1,14 @@
+import type { EditorDocument } from "../features/editor/markdownService";
+
+export type { EditorDocument };
+
 export type AppSection = "notes" | "projects" | "rag" | "tags" | "archive" | "settings";
 
 export type SettingsPanel = "models" | "appearance" | "language" | "data" | "shortcuts";
 
 export type ThemeMode = "light" | "dark" | "system";
+
+export type SaveStatus = "saved" | "saving";
 
 export type TagColor = "blue" | "green" | "purple" | "amber" | "pink";
 
@@ -14,11 +20,15 @@ export interface NoteTag {
 }
 
 export interface Note {
+  contentHtml: string;
+  contentMarkdown: string;
   id: string;
+  editorDocument: EditorDocument;
   title: string;
   summary: string;
   dateLabel: string;
   noteDate: string;
+  plainText: string;
   project: string;
   pinned?: boolean;
   icon: NoteIcon;

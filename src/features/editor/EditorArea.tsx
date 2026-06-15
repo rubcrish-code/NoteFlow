@@ -1,17 +1,179 @@
-import type { Note } from "../../app/types";
+import { useEffect, useRef, useState } from "react";
+import { Color } from "@tiptap/extension-color";
+import Highlight from "@tiptap/extension-highlight";
+import Image from "@tiptap/extension-image";
+import Link from "@tiptap/extension-link";
+import Subscript from "@tiptap/extension-subscript";
+import Superscript from "@tiptap/extension-superscript";
+import { Table } from "@tiptap/extension-table";
+import TableCell from "@tiptap/extension-table-cell";
+import TableHeader from "@tiptap/extension-table-header";
+import TableRow from "@tiptap/extension-table-row";
+import TaskItem from "@tiptap/extension-task-item";
+import TaskList from "@tiptap/extension-task-list";
+import TextAlign from "@tiptap/extension-text-align";
+import { TextStyle } from "@tiptap/extension-text-style";
+import Underline from "@tiptap/extension-underline";
+import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import type { EditorDocument, Note, SaveStatus } from "../../app/types";
 import { Icon } from "../../shared/Icon";
+import { BlockInsertMenu } from "./BlockInsertMenu";
 import { FormattingToolbar } from "./FormattingToolbar";
+import { NoteMenuPopover } from "./NoteMenuPopover";
+import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FileAttachment, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
+import { isMarkdownLike, markdownToTiptapDoc, tiptapJsonToMarkdown } from "./markdownService";
 
 interface EditorAreaProps {
   isFocusMode: boolean;
   note: Note;
+  notes: Note[];
+  onEditorChange: (noteId: string, editorDocument: EditorDocument, contentHtml: string, contentMarkdown: string, plainText: string, wordCount: number) => void;
+  onArchiveNote: (noteId: string) => void;
+  onDeleteNote: (noteId: string) => void;
+  onDuplicateNote: (noteId: string) => void;
   onExitFocus: () => void;
+  onExportMarkdown: (noteId: string) => void;
+  onMoveNote: (noteId: string, project: string) => void;
   onOpenChat: () => void;
+  onOpenNote: (noteId: string) => void;
+  onOpenSettingsModels: () => void;
+  onRenameNote: (noteId: string, title: string) => void;
+  onToggleFavorite: (noteId: string) => void;
   onToggleFocus: () => void;
   onToast: (message: string) => void;
+  projectOptions: string[];
+  saveStatus: SaveStatus;
 }
 
-export function EditorArea({ isFocusMode, note, onExitFocus, onOpenChat, onToggleFocus, onToast }: EditorAreaProps) {
+const editorExtensions = [
+  StarterKit.configure({
+    heading: {
+      levels: [1, 2, 3],
+    },
+  }),
+  Underline,
+  TextStyle,
+  Color,
+  Highlight.configure({ multicolor: true }),
+  Superscript,
+  Subscript,
+  TaskList,
+  TaskItem.configure({ nested: true }),
+  Table.configure({ resizable: true }),
+  TableRow,
+  TableHeader,
+  TableCell,
+  TextAlign.configure({
+    types: ["heading", "paragraph"],
+  }),
+  Link.configure({
+    autolink: true,
+    linkOnPaste: true,
+    openOnClick: false,
+  }),
+  Image.configure({
+    inline: false,
+  }),
+  Callout,
+  DetailsBlock,
+  DetailsSummary,
+  DetailsContent,
+  FileAttachment,
+  NoteMention,
+  InlineDate,
+  FormulaInline,
+  FormulaBlock,
+];
+
+export function EditorArea({
+  isFocusMode,
+  note,
+  notes,
+  onArchiveNote,
+  onDeleteNote,
+  onDuplicateNote,
+  onEditorChange,
+  onExitFocus,
+  onExportMarkdown,
+  onMoveNote,
+  onOpenChat,
+  onOpenNote,
+  onOpenSettingsModels,
+  onRenameNote,
+  onToggleFavorite,
+  onToggleFocus,
+  onToast,
+  projectOptions,
+  saveStatus,
+}: EditorAreaProps) {
+  const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
+  const [isNoteMenuOpen, setIsNoteMenuOpen] = useState(false);
+  const editorRef = useRef<Editor | null>(null);
+  const loadedNoteIdRef = useRef<string | null>(null);
+  const noteIdRef = useRef(note.id);
+  const onOpenNoteRef = useRef(onOpenNote);
+
+  const editor = useEditor({
+    content: note.editorDocument,
+    editorProps: {
+      handleClickOn: (_view, _pos, node, _nodePos, event, direct) => {
+        if (!direct || node.type.name !== "noteMention") {
+          return false;
+        }
+
+        const noteId = node.attrs.noteId;
+        if (typeof noteId !== "string") {
+          return false;
+        }
+
+        event.preventDefault();
+        onOpenNoteRef.current(noteId);
+        return true;
+      },
+      handlePaste: (_view, event) => {
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        const currentEditor = editorRef.current;
+
+        if (!currentEditor || !isMarkdownLike(text)) {
+          return false;
+        }
+
+        event.preventDefault();
+        currentEditor.commands.insertContent(markdownToTiptapDoc(text).content ?? []);
+        return true;
+      },
+    },
+    extensions: editorExtensions,
+    onUpdate: ({ editor: currentEditor }) => {
+      const editorDocument = currentEditor.getJSON() as EditorDocument;
+      const contentMarkdown = tiptapJsonToMarkdown(editorDocument);
+      const plainText = currentEditor.getText();
+      onEditorChange(noteIdRef.current, editorDocument, currentEditor.getHTML(), contentMarkdown, plainText, countWords(plainText));
+    },
+  });
+
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
+
+  useEffect(() => {
+    onOpenNoteRef.current = onOpenNote;
+  }, [onOpenNote]);
+
+  useEffect(() => {
+    noteIdRef.current = note.id;
+
+    if (!editor || loadedNoteIdRef.current === note.id) {
+      return;
+    }
+
+    editor.commands.setContent(note.editorDocument, { emitUpdate: false });
+    loadedNoteIdRef.current = note.id;
+  }, [editor, note.editorDocument, note.id]);
+
+  const isEmptyNote = note.contentMarkdown.trim().length === 0;
+
   return (
     <section className="editor-col">
       {!isFocusMode ? (
@@ -23,9 +185,9 @@ export function EditorArea({ isFocusMode, note, onExitFocus, onOpenChat, onToggl
             <span>{note.project}</span>
           </div>
           <div className="ed-act">
-            <div className="saved">
+            <div className={`saved ${saveStatus === "saving" ? "saving" : ""}`}>
               <Icon name="check" />
-              <span>Сохранено</span>
+              <span>{saveStatus === "saving" ? "Сохранение…" : "Сохранено"}</span>
             </div>
             <button className="ibtn ai" onClick={onOpenChat} type="button">
               <Icon name="chat" />
@@ -34,9 +196,23 @@ export function EditorArea({ isFocusMode, note, onExitFocus, onOpenChat, onToggl
             <button className="ibtn" data-tooltip="Фокус-режим (Ctrl+\)" onClick={onToggleFocus} type="button">
               <Icon name="focus" />
             </button>
-            <button className="ibtn" data-tooltip="Меню заметки" onClick={() => onToast("Меню заметки пока демонстрационное")} type="button">
+            <button className="ibtn" data-tooltip="Меню заметки" onClick={() => setIsNoteMenuOpen((value) => !value)} type="button">
               <Icon name="dots" />
             </button>
+            {isNoteMenuOpen ? (
+              <NoteMenuPopover
+                note={note}
+                onArchive={onArchiveNote}
+                onClose={() => setIsNoteMenuOpen(false)}
+                onDelete={onDeleteNote}
+                onDuplicate={onDuplicateNote}
+                onExportMarkdown={onExportMarkdown}
+                onMove={onMoveNote}
+                onRename={onRenameNote}
+                onToggleFavorite={onToggleFavorite}
+                projectOptions={projectOptions}
+              />
+            ) : null}
           </div>
         </div>
       ) : (
@@ -49,13 +225,11 @@ export function EditorArea({ isFocusMode, note, onExitFocus, onOpenChat, onToggl
         </div>
       )}
 
-      <FormattingToolbar />
+      <FormattingToolbar editor={editor} onOpenAiSettings={onOpenSettingsModels} onToast={onToast} />
 
       <div className="ed-scroll">
         <div className="ed-inner">
-          <h1 className="ed-title" contentEditable suppressContentEditableWarning>
-            {note.title}
-          </h1>
+          <h1 className="ed-title">{note.title}</h1>
           <div className="ed-tags">
             {note.tags.map((tag) => (
               <span className={`tag tag-${tag.color}`} key={tag.name}>
@@ -67,101 +241,35 @@ export function EditorArea({ isFocusMode, note, onExitFocus, onOpenChat, onToggl
               +
             </button>
           </div>
-          <div className={`ed-body ${note.isNew ? "empty-note" : ""}`} contentEditable suppressContentEditableWarning>
-            {note.isNew ? <NewNoteBody /> : <DemoNoteBody noteId={note.id} />}
+          <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
+            <EditorContent editor={editor} />
+            {isEmptyNote ? <NewNoteHelper /> : null}
           </div>
         </div>
       </div>
 
       <div className="ed-bottom">
-        <button className="ibtn" data-tooltip="Вставить блок" onClick={() => onToast("Вставка блоков пока визуальная")} type="button">
+        <button className="ibtn" data-tooltip="Вставить блок" onClick={() => setIsBlockMenuOpen((value) => !value)} type="button">
           <Icon name="plus" />
         </button>
+        {isBlockMenuOpen ? <BlockInsertMenu editor={editor} notes={notes} onClose={() => setIsBlockMenuOpen(false)} onToast={onToast} /> : null}
         <span className="words">{note.wordCount} слов</span>
       </div>
     </section>
   );
 }
 
-function NewNoteBody() {
+function countWords(text: string) {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+  return normalizedText.length > 0 ? normalizedText.split(" ").length : 0;
+}
+
+function NewNoteHelper() {
   return (
     <div className="new-note-helper">
       <b>Новая заметка создана.</b>
       <br />
-      Начните писать здесь или вставьте Markdown. На первом этапе это только демонстрационный редактор без сохранения.
+      Начните писать здесь или вставьте Markdown. Пока заметка хранится только в памяти текущего сеанса.
     </div>
-  );
-}
-
-function DemoNoteBody({ noteId }: { noteId: string }) {
-  if (noteId !== "architecture") {
-    return (
-      <>
-        <p>
-          Эта демонстрационная заметка показывает выбранный элемент списка. На первом этапе NoteFlow хранит такие данные только в памяти и использует их для проверки
-          навигации, поиска, панелей и визуального состояния редактора.
-        </p>
-        <h2>Рабочий контекст</h2>
-        <ul>
-          <li>Заголовок и тело можно выделить и редактировать визуально.</li>
-          <li>Лента форматирования пока переключает только active-состояния.</li>
-          <li>Реальное сохранение и Markdown появятся на следующих этапах.</li>
-        </ul>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <p>
-        Обзор структуры приложения NoteFlow, ключевых модулей и принципов взаимодействия между ними. <mark>Выделите любой текст</mark>, чтобы проверить визуальное
-        поведение редактора, или используйте панель сверху — там собраны все инструменты форматирования.
-      </p>
-      <h2>1. Общая структура</h2>
-      <p>
-        Приложение построено по модульному принципу с разделением на клиентскую часть, локальный бэкенд и слой хранения данных. Такой подход обеспечивает скорость,
-        приватность и работу офлайн.
-      </p>
-      <div className="callout">
-        <span className="em">i</span>
-        <div>
-          Совет: на первом этапе это UI-каркас. Полноценная Markdown-семантика будет добавлена вместе с TipTap/ProseMirror.
-        </div>
-      </div>
-      <h2>2. Ключевые модули</h2>
-      <ul>
-        <li>
-          <b>Редактор заметок</b> — будущий быстрый Markdown с WYSIWYG-представлением.
-        </li>
-        <li>
-          <b>База знаний</b> — организация заметок в проекты и связи.
-        </li>
-        <li>
-          <b>ИИ-ассистент</b> — правка текста, чат по заметке и чат по базе.
-        </li>
-        <li>
-          <b>Поиск</b> — полнотекстовый поиск и фильтрация.
-        </li>
-      </ul>
-      <h2>3. Принципы</h2>
-      <ul className="task">
-        <li>
-          <input checked readOnly type="checkbox" />
-          Скорость и плавность интерфейса
-        </li>
-        <li>
-          <input checked readOnly type="checkbox" />
-          Локальное хранение и приватность
-        </li>
-        <li>
-          <input readOnly type="checkbox" />
-          Минималистичный, мягкий дизайн
-        </li>
-      </ul>
-      <blockquote>Хорошая заметка — та, которую легко записать и легко найти.</blockquote>
-      <pre>
-        <code>{'const note = { title: "NoteFlow", local: true };'}</code>
-      </pre>
-    </>
   );
 }

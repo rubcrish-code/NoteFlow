@@ -25,7 +25,7 @@ function getTagHex(tag: TagRow) {
 
 function getPopoverPosition(rect: DOMRect) {
   const popoverWidth = 300;
-  const popoverHeight = 330;
+  const popoverHeight = 380;
   const padding = 12;
   const left = Math.min(window.innerWidth - popoverWidth - padding, Math.max(padding, rect.left));
   const preferredTop = rect.bottom + 8;

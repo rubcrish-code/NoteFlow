@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { AppSection } from "../../app/types";
 import { ragHistory } from "../../data/mockData";
 import { Icon } from "../../shared/Icon";
+import { ResizeHandle } from "../../shared/ResizeHandle";
+import { usePersistentNumber } from "../../shared/usePersistentState";
 import { PageShell } from "../navigation/PageShell";
 
 interface RagChatPageProps {
@@ -10,9 +12,25 @@ interface RagChatPageProps {
   onToast: (message: string) => void;
 }
 
+type RagPageStyle = CSSProperties & {
+  "--ragcw": string;
+  "--ragsw": string;
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function RagChatPage({ onNavigate, onNewNote, onToast }: RagChatPageProps) {
   const [draft, setDraft] = useState("");
   const [activeDialogIndex, setActiveDialogIndex] = useState(0);
+  const [conversationWidth, setConversationWidth] = usePersistentNumber("noteflow.ragConversationWidth", 280, 220, 380);
+  const [sourcesWidth, setSourcesWidth] = usePersistentNumber("noteflow.ragSourcesWidth", 320, 260, 460);
+
+  const ragPageStyle: RagPageStyle = {
+    "--ragcw": `${conversationWidth}px`,
+    "--ragsw": `${sourcesWidth}px`,
+  };
 
   function sendRagQuestion() {
     const trimmedDraft = draft.trim();
@@ -25,7 +43,7 @@ export function RagChatPage({ onNavigate, onNewNote, onToast }: RagChatPageProps
 
   return (
     <PageShell activeSection="rag" contentClassName="rag-simple-page" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
-      <div className="rag-page">
+      <div className="rag-page" style={ragPageStyle}>
         <aside className="rag-conversations" aria-label="История диалогов">
           <button className="new-btn rag-new-chat" onClick={() => onToast("Новый чат по базе создан в памяти")} type="button">
             <Icon name="plus" />
@@ -49,6 +67,12 @@ export function RagChatPage({ onNavigate, onNewNote, onToast }: RagChatPageProps
             ))}
           </div>
         </aside>
+        <ResizeHandle
+          className="rag-conversation-resize"
+          label="Изменить ширину истории диалогов"
+          onReset={() => setConversationWidth(280)}
+          onResize={(deltaX) => setConversationWidth((currentWidth) => clamp(currentWidth + deltaX, 220, 380))}
+        />
 
         <section className="rag-main-chat">
           <div className="ed-top rag-chat-top">
@@ -108,6 +132,35 @@ export function RagChatPage({ onNavigate, onNewNote, onToast }: RagChatPageProps
             </div>
           </div>
         </section>
+        <ResizeHandle
+          className="rag-sources-resize"
+          label="Изменить ширину источников RAG"
+          onReset={() => setSourcesWidth(320)}
+          onResize={(deltaX) => setSourcesWidth((currentWidth) => clamp(currentWidth - deltaX, 260, 460))}
+        />
+        <aside className="rag-sources-panel" aria-label="Источники ответа">
+          <div className="rag-sources-panel-head">
+            <b>Источники</b>
+            <span>мок-выдача</span>
+          </div>
+          <button className="rag-source-card" onClick={() => onNavigate("notes")} type="button">
+            <Icon name="doc" />
+            <span>
+              <b>Идеи для RAG-вкладки</b>
+              <small>Фрагмент про vector search и rerank</small>
+            </span>
+          </button>
+          <button className="rag-source-card" onClick={() => onNavigate("notes")} type="button">
+            <Icon name="doc" />
+            <span>
+              <b>Архитектура проекта</b>
+              <small>Модульная структура и локальное хранение</small>
+            </span>
+          </button>
+          <div className="rag-source-meta">
+            Источники пока статические. На этапе RAG здесь появятся реальные ссылки на заметки и цитаты из индекса.
+          </div>
+        </aside>
       </div>
     </PageShell>
   );

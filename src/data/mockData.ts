@@ -1,10 +1,56 @@
 import type { ArchiveItem, ChatMessage, Note, ProjectCard, TagRow } from "../app/types";
+import { markdownToTiptapDoc, tiptapJsonToHtml, tiptapJsonToMarkdown, tiptapJsonToPlainText } from "../features/editor/markdownService";
+import { createNotePreview } from "../features/notes/notePreview";
+
+export function createEditorStateFromMarkdown(markdown: string) {
+  const editorDocument = markdownToTiptapDoc(markdown);
+  return {
+    contentHtml: tiptapJsonToHtml(editorDocument),
+    contentMarkdown: tiptapJsonToMarkdown(editorDocument),
+    editorDocument,
+    plainText: tiptapJsonToPlainText(editorDocument),
+  };
+}
+
+const architectureMarkdown = `Обзор структуры приложения NoteFlow, ключевых модулей и принципов взаимодействия между ними. ==Выделите любой текст==, чтобы проверить визуальное поведение редактора, или используйте панель сверху.
+
+## 1. Общая структура
+
+Приложение построено по модульному принципу с разделением на клиентскую часть, локальный бэкенд и слой хранения данных. Такой подход обеспечивает скорость, приватность и работу офлайн.
+
+## 2. Ключевые модули
+
+- **Редактор заметок** — будущий быстрый Markdown с WYSIWYG-представлением.
+- **База знаний** — организация заметок в проекты и связи.
+- **ИИ-ассистент** — правка текста, чат по заметке и чат по базе.
+- **Поиск** — полнотекстовый поиск и фильтрация.
+
+## 3. Принципы
+
+- [x] Скорость и плавность интерфейса
+- [x] Локальное хранение и приватность
+- [ ] Минималистичный, мягкий дизайн
+
+> Хорошая заметка — та, которую легко записать и легко найти.
+
+\`\`\`ts
+const note = { title: "NoteFlow", local: true };
+\`\`\``;
+
+const defaultNoteMarkdown = `Эта демонстрационная заметка показывает выбранный элемент списка. На этом этапе NoteFlow хранит такие данные только в памяти и использует их для проверки редактора, навигации и поиска.
+
+## Рабочий контекст
+
+- Заголовок и тело можно редактировать в TipTap.
+- Лента форматирования теперь выполняет реальные команды.
+- Реальное сохранение в SQLite появится на следующем этапе данных.`;
 
 export const mockNotes: Note[] = [
   {
     id: "architecture",
+    ...createEditorStateFromMarkdown(architectureMarkdown),
     title: "Архитектура проекта",
-    summary: "Обзор структуры приложения, основные компоненты и их взаимодействие.",
+    summary: createNotePreview(tiptapJsonToPlainText(markdownToTiptapDoc(architectureMarkdown))),
     dateLabel: "10:24",
     noteDate: "2026-06-14",
     project: "NoteFlow",
@@ -19,8 +65,9 @@ export const mockNotes: Note[] = [
   },
   {
     id: "sprint",
+    ...createEditorStateFromMarkdown(`${defaultNoteMarkdown}\n\n1. Уточнить критерии готовности\n2. Проверить риски\n3. Подготовить демо`),
     title: "Планирование спринта",
-    summary: "Цели спринта, задачи, оценки и приоритеты команды.",
+    summary: createNotePreview(tiptapJsonToPlainText(markdownToTiptapDoc(`${defaultNoteMarkdown}\n\n1. Уточнить критерии готовности\n2. Проверить риски\n3. Подготовить демо`))),
     dateLabel: "Вчера",
     noteDate: "2026-06-13",
     project: "NoteFlow",
@@ -30,8 +77,9 @@ export const mockNotes: Note[] = [
   },
   {
     id: "research",
+    ...createEditorStateFromMarkdown(`${defaultNoteMarkdown}\n\n| Сегмент | Боль |\n| --- | --- |\n| Исследователи | Сложно быстро находить старые выводы |\n| Команды | Заметки разбросаны по инструментам |`),
     title: "Исследование пользователей",
-    summary: "Интервью, боли, инсайты и ключевые выводы.",
+    summary: createNotePreview(tiptapJsonToPlainText(markdownToTiptapDoc(`${defaultNoteMarkdown}\n\n| Сегмент | Боль |\n| --- | --- |\n| Исследователи | Сложно быстро находить старые выводы |\n| Команды | Заметки разбросаны по инструментам |`))),
     dateLabel: "22 мая",
     noteDate: "2026-05-22",
     project: "Исследование рынка",
@@ -41,8 +89,9 @@ export const mockNotes: Note[] = [
   },
   {
     id: "ideas",
+    ...createEditorStateFromMarkdown(defaultNoteMarkdown),
     title: "Идеи для улучшения",
-    summary: "Список идей по улучшению продукта на основе фидбэка.",
+    summary: createNotePreview(tiptapJsonToPlainText(markdownToTiptapDoc(defaultNoteMarkdown))),
     dateLabel: "20 мая",
     noteDate: "2026-05-20",
     project: "Исследование рынка",
@@ -52,8 +101,9 @@ export const mockNotes: Note[] = [
   },
   {
     id: "api",
+    ...createEditorStateFromMarkdown(`${defaultNoteMarkdown}\n\n\`\`\`http\nGET /notes?query=markdown\n\`\`\``),
     title: "Документация API",
-    summary: "Эндпоинты, параметры, примеры запросов и ответов.",
+    summary: createNotePreview(tiptapJsonToPlainText(markdownToTiptapDoc(`${defaultNoteMarkdown}\n\n\`\`\`http\nGET /notes?query=markdown\n\`\`\``))),
     dateLabel: "18 мая",
     noteDate: "2026-05-18",
     project: "NoteFlow",
@@ -63,8 +113,9 @@ export const mockNotes: Note[] = [
   },
   {
     id: "retro",
+    ...createEditorStateFromMarkdown(defaultNoteMarkdown),
     title: "Ретроспектива команды",
-    summary: "Что прошло хорошо, что можно улучшить, действия.",
+    summary: createNotePreview(tiptapJsonToPlainText(markdownToTiptapDoc(defaultNoteMarkdown))),
     dateLabel: "15 мая",
     noteDate: "2026-05-15",
     project: "NoteFlow",
@@ -74,8 +125,9 @@ export const mockNotes: Note[] = [
   },
   {
     id: "garden",
+    ...createEditorStateFromMarkdown(`${defaultNoteMarkdown}\n\n> Ирисы лучше делить после цветения, когда корневища видно и проще оценить состояние.`),
     title: "Заметки по саду",
-    summary: "Ирисы бородатые — пересадка, деление корневищ, сроки.",
+    summary: createNotePreview(tiptapJsonToPlainText(markdownToTiptapDoc(`${defaultNoteMarkdown}\n\n> Ирисы лучше делить после цветения, когда корневища видно и проще оценить состояние.`))),
     dateLabel: "12 мая",
     noteDate: "2026-05-12",
     project: "Личные заметки",
