@@ -25,6 +25,9 @@ export function createNotePreview(sourceText: string, limit = 150) {
     .replace(/[|*_`~=#\[\]{}]/g, " ")
     .replace(/<\/?u>/gi, " ")
     .replace(/\s+/g, " ")
+    .replace(/"\s*([^"]*?)\s*"/g, (_match: string, content: string) => `"${content.trim()}"`)
+    .replace(/([(«“])\s+/g, "$1")
+    .replace(/\s+([),.;:!?»”])/g, "$1")
     .trim();
 
   if (plainText.length <= limit) {

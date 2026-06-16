@@ -5,19 +5,10 @@ import { Icon, type IconName } from "../../shared/Icon";
 import type { CalloutVariant } from "./customExtensions";
 
 type SimpleBlockCommand =
-  | "blockquote"
-  | "bulletList"
   | "callout"
-  | "codeBlock"
   | "details"
   | "divider"
-  | "h1"
-  | "h2"
-  | "h3"
-  | "orderedList"
-  | "paragraph"
-  | "table"
-  | "taskList";
+  | "table";
 
 interface BlockInsertMenuProps {
   editor: Editor | null;
@@ -34,15 +25,6 @@ interface BlockMenuItem {
 }
 
 const blockMenuItems: BlockMenuItem[] = [
-  { command: "paragraph", icon: "doc", title: "Абзац", description: "Обычный текстовый блок" },
-  { command: "h1", icon: "doc", title: "Заголовок 1", description: "Крупный раздел заметки" },
-  { command: "h2", icon: "doc", title: "Заголовок 2", description: "Подраздел" },
-  { command: "h3", icon: "doc", title: "Заголовок 3", description: "Малый заголовок" },
-  { command: "bulletList", icon: "ul", title: "Список", description: "Маркированные пункты" },
-  { command: "orderedList", icon: "ol", title: "Нумерация", description: "Последовательные шаги" },
-  { command: "taskList", icon: "task", title: "Чек-лист", description: "Задачи с отметками" },
-  { command: "blockquote", icon: "quote", title: "Цитата", description: "Выделенный фрагмент" },
-  { command: "codeBlock", icon: "codeBlock", title: "Код", description: "Моноширинный блок" },
   { command: "table", icon: "table", title: "Таблица", description: "3 строки и 3 колонки" },
   { command: "callout", icon: "callout", title: "Выноска", description: "Информационный блок" },
   { command: "details", icon: "toggle", title: "Сворачиваемый блок", description: "Summary/details" },
@@ -121,27 +103,6 @@ export function BlockInsertMenu({ editor, notes, onClose, onToast }: BlockInsert
     }
 
     const chain = editor.chain().focus();
-    if (command === "paragraph") {
-      chain.setParagraph().run();
-    }
-    if (command === "h1" || command === "h2" || command === "h3") {
-      chain.toggleHeading({ level: Number(command.slice(1)) as 1 | 2 | 3 }).run();
-    }
-    if (command === "bulletList") {
-      chain.toggleBulletList().run();
-    }
-    if (command === "orderedList") {
-      chain.toggleOrderedList().run();
-    }
-    if (command === "taskList") {
-      chain.toggleTaskList().run();
-    }
-    if (command === "blockquote") {
-      chain.toggleBlockquote().run();
-    }
-    if (command === "codeBlock") {
-      chain.toggleCodeBlock().run();
-    }
     if (command === "table") {
       chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
     }
@@ -233,7 +194,10 @@ export function BlockInsertMenu({ editor, notes, onClose, onToast }: BlockInsert
   return (
     <div className="block-insert-menu" ref={menuRef} role="dialog">
       <div className="block-menu-head">
-        <b>Вставить блок</b>
+        <div>
+          <b>Вставить сложный блок</b>
+          <span>Заголовки, списки, цитата и код форматируются верхней панелью.</span>
+        </div>
         <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
           <Icon name="x" />
         </button>

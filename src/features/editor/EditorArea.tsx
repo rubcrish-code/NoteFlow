@@ -21,7 +21,7 @@ import { Icon } from "../../shared/Icon";
 import { BlockInsertMenu } from "./BlockInsertMenu";
 import { FormattingToolbar } from "./FormattingToolbar";
 import { NoteMenuPopover } from "./NoteMenuPopover";
-import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FileAttachment, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
+import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FileAttachment, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
 import { isMarkdownLike, markdownToTiptapDoc, tiptapJsonToMarkdown } from "./markdownService";
 
 interface EditorAreaProps {
@@ -54,6 +54,7 @@ const editorExtensions = [
   }),
   Underline,
   TextStyle,
+  FontFormat,
   Color,
   Highlight.configure({ multicolor: true }),
   Superscript,
@@ -249,7 +250,7 @@ export function EditorArea({
       </div>
 
       <div className="ed-bottom">
-        <button className="ibtn" data-tooltip="Вставить блок" onClick={() => setIsBlockMenuOpen((value) => !value)} type="button">
+        <button className="ibtn" data-tooltip="Вставить сложный блок" onClick={() => setIsBlockMenuOpen((value) => !value)} type="button">
           <Icon name="plus" />
         </button>
         {isBlockMenuOpen ? <BlockInsertMenu editor={editor} notes={notes} onClose={() => setIsBlockMenuOpen(false)} onToast={onToast} /> : null}

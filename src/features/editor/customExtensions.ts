@@ -1,4 +1,4 @@
-import { Node, mergeAttributes } from "@tiptap/core";
+import { Mark, Node, mergeAttributes } from "@tiptap/core";
 
 export type CalloutVariant = "important" | "info" | "tip" | "warning";
 
@@ -29,11 +29,111 @@ declare module "@tiptap/core" {
     inlineDate: {
       insertInlineDate: (attrs: { value: string }) => ReturnType;
     };
+    fontFormat: {
+      setFontFamily: (fontFamily: string) => ReturnType;
+      setFontSize: (fontSize: string) => ReturnType;
+      unsetFontFamily: () => ReturnType;
+      unsetFontSize: () => ReturnType;
+      unsetFontFormat: () => ReturnType;
+    };
     noteMention: {
       insertNoteMention: (attrs: { label: string; noteId: string }) => ReturnType;
     };
   }
 }
+
+function normalizeFontSize(fontSize: string) {
+  const trimmedSize = fontSize.trim();
+  return /^\d+$/.test(trimmedSize) ? `${trimmedSize}px` : trimmedSize;
+}
+
+export const FontFormat = Mark.create({
+  name: "fontFormat",
+
+  addAttributes() {
+    return {
+      fontFamily: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-font-family") ?? (element.style.fontFamily.replace(/['"]/g, "") || null),
+        renderHTML: (attributes) => {
+          const fontFamily = attributes.fontFamily;
+          return typeof fontFamily === "string" && fontFamily ? { "data-font-family": fontFamily } : {};
+        },
+      },
+      fontSize: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-font-size") ?? (element.style.fontSize || null),
+        renderHTML: (attributes) => {
+          const fontSize = attributes.fontSize;
+          return typeof fontSize === "string" && fontSize ? { "data-font-size": fontSize } : {};
+        },
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-type="font-format"]' }, { style: "font-family" }, { style: "font-size" }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    const fontFamily = String(HTMLAttributes["data-font-family"] ?? "");
+    const fontSize = String(HTMLAttributes["data-font-size"] ?? "");
+    const styles = [
+      fontFamily ? `font-family: ${fontFamily}` : "",
+      fontSize ? `font-size: ${normalizeFontSize(fontSize)}` : "",
+    ].filter(Boolean);
+
+    return [
+      "span",
+      mergeAttributes(HTMLAttributes, {
+        "data-type": "font-format",
+        style: styles.join("; "),
+      }),
+      0,
+    ];
+  },
+
+  addCommands() {
+    return {
+      setFontFamily:
+        (fontFamily) =>
+        ({ commands, editor }) => {
+          const currentFontSize = editor.getAttributes(this.name).fontSize;
+          return commands.setMark(this.name, {
+            fontFamily,
+            fontSize: typeof currentFontSize === "string" ? currentFontSize : null,
+          });
+        },
+      setFontSize:
+        (fontSize) =>
+        ({ commands, editor }) => {
+          const currentFontFamily = editor.getAttributes(this.name).fontFamily;
+          return commands.setMark(this.name, {
+            fontFamily: typeof currentFontFamily === "string" ? currentFontFamily : null,
+            fontSize: normalizeFontSize(fontSize),
+          });
+        },
+      unsetFontFamily:
+        () =>
+        ({ commands, editor }) => {
+          const currentFontSize = editor.getAttributes(this.name).fontSize;
+          return typeof currentFontSize === "string" && currentFontSize ? commands.setMark(this.name, { fontSize: currentFontSize }) : commands.unsetMark(this.name);
+        },
+      unsetFontSize:
+        () =>
+        ({ commands, editor }) => {
+          const currentFontFamily = editor.getAttributes(this.name).fontFamily;
+          return typeof currentFontFamily === "string" && currentFontFamily
+            ? commands.setMark(this.name, { fontFamily: currentFontFamily })
+            : commands.unsetMark(this.name);
+        },
+      unsetFontFormat:
+        () =>
+        ({ commands }) =>
+          commands.unsetMark(this.name),
+    };
+  },
+});
 
 export const Callout = Node.create({
   name: "callout",

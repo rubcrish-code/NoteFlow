@@ -397,6 +397,10 @@ function inlineToMarkdown(nodes: EditorNode[] | undefined) {
           const color = typeof mark.attrs?.color === "string" ? mark.attrs.color : "";
           return color ? `<span style="color: ${color}">${value}</span>` : value;
         }
+        if (mark.type === "fontFormat") {
+          const style = getFontFormatStyle(mark.attrs);
+          return style ? `<span style="${style}">${value}</span>` : value;
+        }
         if (mark.type === "link") {
           return `[${value}](${String(mark.attrs?.href ?? "")})`;
         }
@@ -529,6 +533,26 @@ function escapeHtml(value: string) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escapeHtmlAttribute(value: string) {
+  return escapeHtml(value).replace(/"/g, "&quot;");
+}
+
+function normalizeFontSize(fontSize: string) {
+  const trimmedSize = fontSize.trim();
+  return /^\d+$/.test(trimmedSize) ? `${trimmedSize}px` : trimmedSize;
+}
+
+function getFontFormatStyle(attrs: Record<string, unknown> | undefined) {
+  const fontFamily = typeof attrs?.fontFamily === "string" ? attrs.fontFamily : "";
+  const fontSize = typeof attrs?.fontSize === "string" ? normalizeFontSize(attrs.fontSize) : "";
+  return [
+    fontFamily ? `font-family: ${fontFamily}` : "",
+    fontSize ? `font-size: ${fontSize}` : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
 function formatDate(value: string) {
   const [year, month, day] = value.split("-");
   return year && month && day ? `${day}.${month}.${year}` : value;
@@ -571,6 +595,10 @@ function inlineToHtml(nodes: EditorNode[] | undefined) {
         if (mark.type === "textStyle") {
           const color = typeof mark.attrs?.color === "string" ? mark.attrs.color : "";
           return color ? `<span style="color: ${escapeHtml(color)}">${value}</span>` : value;
+        }
+        if (mark.type === "fontFormat") {
+          const style = getFontFormatStyle(mark.attrs);
+          return style ? `<span style="${escapeHtmlAttribute(style)}">${value}</span>` : value;
         }
         if (mark.type === "link") {
           return `<a href="${escapeHtml(String(mark.attrs?.href ?? ""))}">${value}</a>`;

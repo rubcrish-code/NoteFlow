@@ -2,31 +2,25 @@ import { useEditorState, type Editor } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shared/Icon";
 import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
+import { FontFormatPopover, type FontFormatDraft } from "./FontFormatPopover";
+import { findFontFamilyValue, formatFontSize, normalizeFontSizeValue } from "./fontFormatOptions";
 
 type ToolId =
   | "ai"
   | "align-center"
   | "align-left"
   | "align-right"
-  | "attach"
   | "bold"
-  | "callout"
   | "clear"
   | "code-block"
   | "color"
-  | "date"
-  | "divider"
-  | "formula"
   | "h1"
   | "h2"
   | "h3"
   | "highlight"
-  | "image"
   | "inline-code"
   | "italic"
   | "link"
-  | "mention"
-  | "note-link"
   | "ol"
   | "p"
   | "quote"
@@ -34,9 +28,7 @@ type ToolId =
   | "strike"
   | "sub"
   | "sup"
-  | "table"
   | "task"
-  | "toggle"
   | "ul"
   | "underline"
   | "undo";
@@ -75,43 +67,40 @@ const toolbarTools: ToolbarTool[] = [
   { id: "ol", tip: "Нумерованный список", icon: "ol" },
   { id: "task", tip: "Чек-лист", icon: "task" },
   { id: "quote", tip: "Цитата", icon: "quote" },
-  { id: "code-block", tip: "Блок кода", icon: "codeBlock" },
-  { id: "callout", tip: "Выноска", icon: "callout" },
-  { id: "toggle", tip: "Сворачиваемый блок", icon: "toggle" },
-  { id: "table", tip: "Таблица", icon: "table" },
-  { id: "divider", tip: "Разделитель", icon: "divider", groupAfter: true },
+  { id: "code-block", tip: "Блок кода", icon: "codeBlock", groupAfter: true },
   { id: "align-left", tip: "По левому краю", icon: "alignLeft" },
   { id: "align-center", tip: "По центру", icon: "alignCenter" },
   { id: "align-right", tip: "По правому краю", icon: "alignRight", groupAfter: true },
   { id: "link", tip: "Ссылка", icon: "link" },
-  { id: "note-link", tip: "Ссылка на заметку [[ ]]", icon: "noteLink" },
-  { id: "image", tip: "Изображение", icon: "image" },
-  { id: "attach", tip: "Файл", icon: "attach" },
-  { id: "mention", tip: "Упоминание @", icon: "mention" },
-  { id: "date", tip: "Дата", icon: "date" },
-  { id: "formula", tip: "Формула", icon: "formula", groupAfter: true },
   { id: "clear", tip: "Очистить форматирование", icon: "clear" },
   { id: "ai", tip: "ИИ-помощник", label: "AI" },
 ];
 
-const deferredTools = new Set<ToolId>(["attach", "date", "formula", "mention", "note-link"]);
+const deferredTools = new Set<ToolId>();
 
 interface ToolbarRuntimeState {
   active: Partial<Record<ToolId, boolean>>;
   canRedo: boolean;
   canUndo: boolean;
+  fontFamily: string;
+  fontSize: string;
 }
 
 const emptyToolbarState: ToolbarRuntimeState = {
   active: {},
   canRedo: false,
   canUndo: false,
+  fontFamily: "",
+  fontSize: "",
 };
 
 export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: FormattingToolbarProps) {
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
+  const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
+  const [fontDraft, setFontDraft] = useState<FontFormatDraft>({ fontFamily: "", fontSize: "" });
   const [popoverMode, setPopoverMode] = useState<EditorCommandPopoverMode | null>(null);
   const aiMenuRef = useRef<HTMLDivElement>(null);
+  const fontMenuRef = useRef<HTMLSpanElement>(null);
   const mouseCommandRef = useRef(false);
   const toolbarState =
     useEditorState({
@@ -119,15 +108,21 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
       selector: ({ editor: currentEditor }) => buildToolbarState(currentEditor),
     }) ?? emptyToolbarState;
 
+  const activeFontFamily = findFontFamilyValue(toolbarState.fontFamily);
+  const activeFontSize = formatFontSize(toolbarState.fontSize);
+
   useEffect(() => {
-    if (!isAiMenuOpen) {
+    if (!isAiMenuOpen && !isFontMenuOpen) {
       return;
     }
 
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
-      if (target instanceof Node && aiMenuRef.current && !aiMenuRef.current.contains(target)) {
+      if (target instanceof Node && isAiMenuOpen && aiMenuRef.current && !aiMenuRef.current.contains(target)) {
         setIsAiMenuOpen(false);
+      }
+      if (target instanceof Node && isFontMenuOpen && fontMenuRef.current && !fontMenuRef.current.contains(target)) {
+        setIsFontMenuOpen(false);
       }
     }
 
@@ -135,6 +130,7 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
       if (event.key === "Escape") {
         event.stopPropagation();
         setIsAiMenuOpen(false);
+        setIsFontMenuOpen(false);
       }
     }
 
@@ -144,10 +140,11 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [isAiMenuOpen]);
+  }, [isAiMenuOpen, isFontMenuOpen]);
 
   function runCommand(toolId: ToolId) {
     if (toolId === "ai") {
+      setIsFontMenuOpen(false);
       setPopoverMode(null);
       setIsAiMenuOpen((value) => !value);
       return;
@@ -162,11 +159,13 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
       return;
     }
 
-    if (toolId === "link" || toolId === "image" || toolId === "table" || toolId === "color" || toolId === "highlight") {
+    if (toolId === "link" || toolId === "color" || toolId === "highlight") {
+      setIsFontMenuOpen(false);
       setPopoverMode(toPopoverMode(toolId));
       return;
     }
 
+    setIsFontMenuOpen(false);
     setPopoverMode(null);
 
     if (toolId === "undo") {
@@ -237,18 +236,6 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
       editor.chain().focus().toggleCodeBlock().run();
       return;
     }
-    if (toolId === "callout") {
-      editor.chain().focus().insertCallout({ variant: "info" }).run();
-      return;
-    }
-    if (toolId === "toggle") {
-      editor.chain().focus().insertDetailsBlock().run();
-      return;
-    }
-    if (toolId === "divider") {
-      editor.chain().focus().setHorizontalRule().run();
-      return;
-    }
     if (toolId === "align-left" || toolId === "align-center" || toolId === "align-right") {
       editor.chain().focus().setTextAlign(toolId.replace("align-", "")).run();
       return;
@@ -275,14 +262,6 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
       }
     }
 
-    if (value.mode === "image") {
-      editor.chain().focus().setImage({ src: value.src, alt: value.alt }).run();
-    }
-
-    if (value.mode === "table") {
-      editor.chain().focus().insertTable({ rows: value.rows, cols: value.cols, withHeaderRow: true }).run();
-    }
-
     if (value.mode === "color") {
       if (value.color) {
         editor.chain().focus().setColor(value.color).run();
@@ -300,6 +279,44 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
     }
 
     setPopoverMode(null);
+  }
+
+  function toggleFontMenu() {
+    if (!editor) {
+      return;
+    }
+
+    setIsAiMenuOpen(false);
+    setPopoverMode(null);
+    setFontDraft({ fontFamily: activeFontFamily, fontSize: activeFontSize });
+    setIsFontMenuOpen((value) => !value);
+  }
+
+  function applyFontDraft() {
+    if (!editor) {
+      return;
+    }
+
+    const nextFontSize = normalizeFontSizeValue(fontDraft.fontSize);
+    if (fontDraft.fontFamily || nextFontSize) {
+      editor
+        .chain()
+        .focus()
+        .setMark("fontFormat", {
+          fontFamily: fontDraft.fontFamily || null,
+          fontSize: nextFontSize || null,
+        })
+        .run();
+    } else {
+      editor.chain().focus().unsetFontFormat().run();
+    }
+    setIsFontMenuOpen(false);
+  }
+
+  function resetFontFormat() {
+    editor?.chain().focus().unsetFontFormat().run();
+    setFontDraft({ fontFamily: "", fontSize: "" });
+    setIsFontMenuOpen(false);
   }
 
   const selectedText = getSelectedText(editor);
@@ -336,6 +353,48 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
                 {tool.icon ? <Icon name={tool.icon} /> : <span className="lbl">{tool.label}</span>}
               </button>
               {tool.groupAfter ? <span className="tb-sep" /> : null}
+              {tool.id === "p" ? (
+                <>
+                  <span className="font-menu-anchor" data-toolbar-font-controls ref={fontMenuRef}>
+                    <button
+                      aria-expanded={isFontMenuOpen}
+                      aria-label="Шрифт и размер"
+                      className={`tb font-trigger ${isFontMenuOpen || activeFontFamily || activeFontSize ? "active" : ""}`}
+                      data-toolbar-font-trigger
+                      data-tooltip="Шрифт и размер"
+                      disabled={!editor}
+                      onClick={() => {
+                        if (mouseCommandRef.current) {
+                          mouseCommandRef.current = false;
+                          return;
+                        }
+                        toggleFontMenu();
+                      }}
+                      onMouseDown={(event) => {
+                        if (event.button !== 0) {
+                          return;
+                        }
+                        event.preventDefault();
+                        mouseCommandRef.current = true;
+                        toggleFontMenu();
+                      }}
+                      type="button"
+                    >
+                      <span className="lbl font-trigger-label">Aa</span>
+                    </button>
+                    {isFontMenuOpen ? (
+                      <FontFormatPopover
+                        draft={fontDraft}
+                        onApply={applyFontDraft}
+                        onCancel={() => setIsFontMenuOpen(false)}
+                        onChange={setFontDraft}
+                        onReset={resetFontFormat}
+                      />
+                    ) : null}
+                  </span>
+                  <span className="tb-sep" />
+                </>
+              ) : null}
             </span>
           );
         })}
@@ -349,15 +408,10 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
               <Icon name="x" />
             </button>
           </div>
-          <button onClick={() => onToast("ИИ-сокращение будет подключено после настройки провайдера")} type="button">
-            Сократить выделенный текст
-          </button>
-          <button onClick={() => onToast("ИИ-продолжение будет подключено после настройки провайдера")} type="button">
-            Продолжить мысль
-          </button>
-          <button onClick={() => onToast("Объяснение термина будет подключено после настройки провайдера")} type="button">
-            Объяснить термин
-          </button>
+          <div className="ai-disconnected-state">
+            <b>ИИ-модель не подключена</b>
+            <span>Подключите локальную или OpenAI-совместимую модель, чтобы использовать действия для выделения и текущей заметки.</span>
+          </div>
           <button
             className="ai-settings-link"
             onClick={() => {
@@ -366,7 +420,7 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
             }}
             type="button"
           >
-            Настройки → Модели ИИ
+            Подключить модель
           </button>
         </div>
       ) : null}
@@ -390,12 +444,6 @@ function toPopoverMode(toolId: ToolId): EditorCommandPopoverMode {
   }
   if (toolId === "highlight") {
     return "highlight";
-  }
-  if (toolId === "image") {
-    return "image";
-  }
-  if (toolId === "table") {
-    return "table";
   }
   return "link";
 }
@@ -428,6 +476,10 @@ function buildToolbarState(editor: Editor | null): ToolbarRuntimeState {
     return emptyToolbarState;
   }
 
+  const fontAttributes = editor.getAttributes("fontFormat");
+  const fontFamily = typeof fontAttributes.fontFamily === "string" ? fontAttributes.fontFamily : "";
+  const fontSize = typeof fontAttributes.fontSize === "string" ? fontAttributes.fontSize : "";
+
   return {
     active: {
       "align-center": editor.isActive({ textAlign: "center" }),
@@ -455,6 +507,8 @@ function buildToolbarState(editor: Editor | null): ToolbarRuntimeState {
     },
     canRedo: editor.can().redo(),
     canUndo: editor.can().undo(),
+    fontFamily,
+    fontSize,
   };
 }
 

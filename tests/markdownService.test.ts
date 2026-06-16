@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isMarkdownLike, markdownToHtml, markdownToTiptapDoc, tiptapJsonToMarkdown } from "../src/features/editor/markdownService.ts";
+import { isMarkdownLike, markdownToHtml, markdownToTiptapDoc, tiptapJsonToHtml, tiptapJsonToMarkdown, type EditorDocument } from "../src/features/editor/markdownService.ts";
 
 describe("markdownService.isMarkdownLike", () => {
   it("does not treat ordinary text as Markdown", () => {
@@ -89,5 +89,29 @@ describe("markdownService conversion", () => {
     assert.match(markdown, /\{\{date:2026-06-15\}\}/);
     assert.match(markdown, /@\[\[Архитектура проекта\]\]/);
     assert.match(markdown, /\$a\+b\$/);
+  });
+
+  it("keeps non-standard font family and size through inline HTML export", () => {
+    const document: EditorDocument = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "Акцент",
+              marks: [{ type: "fontFormat", attrs: { fontFamily: "Georgia, serif", fontSize: "20px" } }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const markdown = tiptapJsonToMarkdown(document);
+    const html = tiptapJsonToHtml(document);
+
+    assert.match(markdown, /<span style="font-family: Georgia, serif; font-size: 20px">Акцент<\/span>/);
+    assert.match(html, /<span style="font-family: Georgia, serif; font-size: 20px">Акцент<\/span>/);
   });
 });

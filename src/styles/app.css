@@ -692,6 +692,195 @@
   margin: 0 4px;
 }
 
+.font-menu-anchor {
+  display: inline-flex;
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+}
+
+.font-trigger {
+  width: 100%;
+}
+
+.font-trigger-label {
+  font-size: clamp(9px, 80%, 12.5px);
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.font-format-popover {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-pop);
+  display: grid;
+  gap: 12px;
+  left: 0;
+  padding: 12px;
+  position: absolute;
+  top: calc(100% + 8px);
+  width: min(306px, calc(100vw - 36px));
+  z-index: 110;
+}
+
+.font-popover-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.font-popover-head b {
+  display: block;
+  font-size: 14px;
+}
+
+.font-popover-head span {
+  color: var(--tsoft);
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.font-popover-section {
+  display: grid;
+  gap: 7px;
+}
+
+.font-popover-sec {
+  color: var(--tfaint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0 2px;
+}
+
+.font-family-list {
+  display: grid;
+  gap: 5px;
+}
+
+.font-family-choice {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text);
+  display: flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 10px;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  width: 100%;
+}
+
+.font-family-choice:hover {
+  background: var(--bsoft);
+  border-color: var(--border);
+}
+
+.font-family-choice.active {
+  background: var(--asoft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--accent);
+}
+
+.font-choice-check {
+  color: var(--accent);
+  display: grid;
+  flex: 0 0 17px;
+  height: 17px;
+  place-items: center;
+  width: 17px;
+}
+
+.font-choice-check svg {
+  height: 15px;
+  width: 15px;
+}
+
+.font-size-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.font-size-choice {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+  height: 32px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.font-size-choice:hover {
+  background: var(--bsoft);
+}
+
+.font-size-choice.active {
+  background: var(--asoft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.font-popover-actions {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 12px;
+}
+
+.font-action {
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 650;
+  height: 34px;
+  padding: 0 12px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.font-action.reset {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--tsoft);
+  margin-right: auto;
+}
+
+.font-action.reset:hover {
+  background: var(--bsoft);
+  color: var(--text);
+}
+
+.font-action.secondary {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.font-action.secondary:hover {
+  background: var(--bsoft);
+}
+
+.font-action.primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--on-accent);
+}
+
+.font-action.primary:hover {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
 .tb.wide {
   flex: 0 0 auto;
   font-size: 12.5px;
@@ -768,6 +957,24 @@
   border-color: color-mix(in srgb, var(--accent) 28%, transparent);
   color: var(--accent);
   font-weight: 700;
+  text-align: center;
+}
+
+.ai-disconnected-state {
+  background: var(--side);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--tsoft);
+  display: grid;
+  font-size: 12.5px;
+  gap: 5px;
+  line-height: 1.45;
+  padding: 12px;
+}
+
+.ai-disconnected-state b {
+  color: var(--text);
+  font-size: 13px;
 }
 
 .note-menu-popover {
@@ -792,6 +999,14 @@
 .block-menu-head b {
   display: block;
   font-size: 14px;
+}
+
+.block-menu-head span {
+  color: var(--tsoft);
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 3px;
 }
 
 .note-menu-head span {
@@ -1694,10 +1909,15 @@
   grid-template-columns: var(--page-sbw) minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
+  position: relative;
 }
 
 .page-shell .sb {
   grid-column: auto;
+}
+
+.page-resize-sb {
+  left: var(--page-sbw);
 }
 
 .simple-page {

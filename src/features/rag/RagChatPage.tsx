@@ -9,6 +9,11 @@ import { PageShell } from "../navigation/PageShell";
 interface RagChatPageProps {
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
+  onSidebarReset: () => void;
+  onSidebarResize: (deltaX: number) => void;
+  onToggleSidebarCollapse: () => void;
+  sidebarCollapsed: boolean;
+  sidebarWidth: number;
   onToast: (message: string) => void;
 }
 
@@ -21,7 +26,16 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export function RagChatPage({ onNavigate, onNewNote, onToast }: RagChatPageProps) {
+export function RagChatPage({
+  onNavigate,
+  onNewNote,
+  onSidebarReset,
+  onSidebarResize,
+  onToggleSidebarCollapse,
+  onToast,
+  sidebarCollapsed,
+  sidebarWidth,
+}: RagChatPageProps) {
   const [draft, setDraft] = useState("");
   const [activeDialogIndex, setActiveDialogIndex] = useState(0);
   const [conversationWidth, setConversationWidth] = usePersistentNumber("noteflow.ragConversationWidth", 280, 220, 380);
@@ -42,7 +56,18 @@ export function RagChatPage({ onNavigate, onNewNote, onToast }: RagChatPageProps
   }
 
   return (
-    <PageShell activeSection="rag" contentClassName="rag-simple-page" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
+    <PageShell
+      activeSection="rag"
+      contentClassName="rag-simple-page"
+      onNavigate={onNavigate}
+      onNewNote={onNewNote}
+      onSidebarReset={onSidebarReset}
+      onSidebarResize={onSidebarResize}
+      onToggleSidebarCollapse={onToggleSidebarCollapse}
+      onToast={onToast}
+      sidebarCollapsed={sidebarCollapsed}
+      sidebarWidth={sidebarWidth}
+    >
       <div className="rag-page" style={ragPageStyle}>
         <aside className="rag-conversations" aria-label="История диалогов">
           <button className="new-btn rag-new-chat" onClick={() => onToast("Новый чат по базе создан в памяти")} type="button">

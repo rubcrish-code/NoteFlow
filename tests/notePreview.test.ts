@@ -17,6 +17,30 @@ describe("createNotePreview", () => {
     assert.doesNotMatch(preview, /[#*_`]/);
   });
 
+  it("removes spaces before commas and dots", () => {
+    const preview = createNotePreview("Заголовок\n\nТекст с **жирным** , _курсивом_ и `кодом` .");
+
+    assert.equal(preview, "Заголовок Текст с жирным, курсивом и кодом.");
+  });
+
+  it("keeps parentheses tight after cleanup", () => {
+    const preview = createNotePreview("План ( **важно** ) и финал ( _готово_ ).");
+
+    assert.equal(preview, "План (важно) и финал (готово).");
+  });
+
+  it("keeps quotes tight after cleanup", () => {
+    const preview = createNotePreview('Цитата: " **важно** " и « _точно_ ».');
+
+    assert.equal(preview, 'Цитата: "важно" и «точно».');
+  });
+
+  it("collapses repeated spaces", () => {
+    const preview = createNotePreview("Раз    два\n\n\tтри");
+
+    assert.equal(preview, "Раз два три");
+  });
+
   it("cleans Markdown tables", () => {
     const preview = createNotePreview("| Имя | Статус |\n| --- | --- |\n| NoteFlow | готово |");
 

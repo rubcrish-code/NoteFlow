@@ -331,7 +331,16 @@ export function AppShell() {
 
   if (activeSection === "rag") {
     return <AppFrame footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}>
-      <RagChatPage onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} />
+      <RagChatPage
+        onNavigate={navigate}
+        onNewNote={openNewNoteModal}
+        onSidebarReset={() => setSidebarWidth(250)}
+        onSidebarResize={(deltaX) => setSidebarWidth((currentWidth) => clamp(currentWidth + deltaX, 190, 360))}
+        onToggleSidebarCollapse={() => setIsSidebarCollapsed((value) => !value)}
+        onToast={showToast}
+        sidebarCollapsed={isSidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+      />
     </AppFrame>;
   }
 
