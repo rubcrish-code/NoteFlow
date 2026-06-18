@@ -1,0 +1,2576 @@
+use chrono::{SecondsFormat, Utc};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::HashSet,
+    fs::{self, File},
+    io::{Cursor, Read},
+    path::{Component, Path, PathBuf},
+    sync::Mutex,
+};
+use tauri::{App, Manager, State};
+use uuid::Uuid;
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
+
+type DataResult<T> = Result<T, DataError>;
+
+const DATABASE_FILE: &str = "database.sqlite";
+const CURRENT_BACKUP_VERSION: u32 = 1;
+
+#[derive(Debug)]
+pub enum DataError {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    Sql(rusqlite::Error),
+    Zip(zip::result::ZipError),
+    InvalidInput(String),
+    NotFound(String),
+    State(String),
+}
+
+impl From<std::io::Error> for DataError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<serde_json::Error> for DataError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
+    }
+}
+
+impl From<rusqlite::Error> for DataError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::Sql(value)
+    }
+}
+
+impl From<zip::result::ZipError> for DataError {
+    fn from(value: zip::result::ZipError) -> Self {
+        Self::Zip(value)
+    }
+}
+
+impl std::fmt::Display for DataError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "Ошибка файловой системы: {error}"),
+            Self::Json(error) => write!(formatter, "Ошибка JSON: {error}"),
+            Self::Sql(error) => write!(formatter, "Ошибка SQLite: {error}"),
+            Self::Zip(error) => write!(formatter, "Ошибка ZIP: {error}"),
+            Self::InvalidInput(message) | Self::NotFound(message) | Self::State(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteTagDto {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub custom_color: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentDto {
+    pub id: String,
+    pub note_id: String,
+    pub kind: String,
+    pub original_name: String,
+    pub storage_rel_path: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteDto {
+    pub id: String,
+    pub title: String,
+    pub note_date: String,
+    pub content_json: Value,
+    pub content_markdown: String,
+    pub content_html: String,
+    pub plain_text: String,
+    pub project_id: Option<String>,
+    pub project: String,
+    pub is_favorite: bool,
+    pub icon: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub archived_at: Option<String>,
+    pub deleted_at: Option<String>,
+    pub tags: Vec<NoteTagDto>,
+    pub attachments: Vec<AttachmentDto>,
+    pub word_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCardDto {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub notes: i64,
+    pub tasks: i64,
+    pub files: Option<i64>,
+    pub status: String,
+    pub archived_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagRowDto {
+    pub id: String,
+    pub name: String,
+    pub count: i64,
+    pub color: String,
+    pub custom_color: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveItemDto {
+    pub id: String,
+    pub title: String,
+    pub archived_at: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResultDto {
+    pub path: String,
+    pub relative_path: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentStoreResultDto {
+    pub attachment: AttachmentDto,
+    pub size_label: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataLocationDto {
+    pub data_dir: String,
+    pub database_path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSnapshotDto {
+    pub notes: Vec<NoteDto>,
+    pub projects: Vec<ProjectCardDto>,
+    pub tags: Vec<TagRowDto>,
+    pub archive_items: Vec<ArchiveItemDto>,
+    pub data_location: DataLocationDto,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateNoteRequest {
+    pub title: String,
+    pub note_date: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNoteContentRequest {
+    pub note_id: String,
+    pub content_json: Value,
+    pub content_markdown: String,
+    pub content_html: String,
+    pub plain_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameNoteRequest {
+    pub note_id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveNoteRequest {
+    pub note_id: String,
+    pub project_title: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectRequest {
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTagRequest {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameTagRequest {
+    pub tag_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTagColorRequest {
+    pub tag_id: String,
+    pub color: String,
+    pub custom_color: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeTagsRequest {
+    pub source_tag_id: String,
+    pub target_tag_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreAttachmentRequest {
+    pub note_id: String,
+    pub kind: String,
+    pub original_name: String,
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBackupRequest {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct Migration {
+    version: i64,
+    name: &'static str,
+    sql: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct NoteRow {
+    id: String,
+    title: String,
+    note_date: String,
+    content_json: String,
+    content_markdown: String,
+    content_html: String,
+    plain_text: String,
+    project_id: Option<String>,
+    project: String,
+    is_favorite: bool,
+    icon: String,
+    created_at: String,
+    updated_at: String,
+    archived_at: Option<String>,
+    deleted_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupData {
+    version: u32,
+    exported_at: String,
+    projects: Vec<ProjectBackup>,
+    tags: Vec<TagBackup>,
+    notes: Vec<NoteBackup>,
+    note_tags: Vec<NoteTagBackup>,
+    attachments: Vec<AttachmentBackup>,
+    app_settings: Vec<SettingBackup>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProjectBackup {
+    id: String,
+    title: String,
+    description: String,
+    status: String,
+    created_at: String,
+    updated_at: String,
+    archived_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TagBackup {
+    id: String,
+    name: String,
+    color: String,
+    custom_color: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NoteBackup {
+    id: String,
+    title: String,
+    note_date: String,
+    content_json: Value,
+    content_markdown: String,
+    content_html: String,
+    plain_text: String,
+    project_id: Option<String>,
+    is_favorite: bool,
+    icon: String,
+    created_at: String,
+    updated_at: String,
+    archived_at: Option<String>,
+    deleted_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NoteTagBackup {
+    note_id: String,
+    tag_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AttachmentBackup {
+    id: String,
+    note_id: String,
+    kind: String,
+    original_name: String,
+    storage_rel_path: String,
+    mime_type: String,
+    size_bytes: i64,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SettingBackup {
+    key: String,
+    value_json: Value,
+    updated_at: String,
+}
+
+pub struct AppState {
+    store: Mutex<DataStore>,
+}
+
+impl AppState {
+    fn new(store: DataStore) -> Self {
+        Self {
+            store: Mutex::new(store),
+        }
+    }
+
+    fn with_store<T>(&self, action: impl FnOnce(&mut DataStore) -> DataResult<T>) -> DataResult<T> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| DataError::State("Хранилище данных временно недоступно".to_string()))?;
+        action(&mut store)
+    }
+}
+
+pub fn init_state(app: &mut App) -> Result<AppState, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Не удалось определить директорию данных: {error}"))?;
+    DataStore::open(data_dir)
+        .map(AppState::new)
+        .map_err(command_error)
+}
+
+pub struct DataStore {
+    base_dir: PathBuf,
+    conn: Connection,
+}
+
+impl DataStore {
+    pub fn open(base_dir: PathBuf) -> DataResult<Self> {
+        ensure_storage_dirs(&base_dir)?;
+        let database_path = base_dir.join(DATABASE_FILE);
+        let mut conn = Connection::open(database_path)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        Self::run_migrations(&mut conn)?;
+        let mut store = Self { base_dir, conn };
+        store.seed_demo_data_if_needed()?;
+        Ok(store)
+    }
+
+    fn run_migrations(conn: &mut Connection) -> DataResult<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );",
+        )?;
+
+        let applied_versions = {
+            let mut statement = conn.prepare("SELECT version FROM schema_migrations")?;
+            let rows = statement.query_map([], |row| row.get::<_, i64>(0))?;
+            rows.collect::<Result<HashSet<_>, _>>()?
+        };
+
+        for migration in migrations() {
+            if applied_versions.contains(&migration.version) {
+                continue;
+            }
+
+            let transaction = conn.transaction()?;
+            transaction.execute_batch(migration.sql)?;
+            transaction.execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![migration.version, migration.name, now_iso()],
+            )?;
+            transaction.commit()?;
+        }
+
+        Ok(())
+    }
+
+    fn seed_demo_data_if_needed(&mut self) -> DataResult<()> {
+        let existing_seed = self.get_setting("seed.demo.v1")?;
+        if existing_seed.is_some() {
+            return Ok(());
+        }
+
+        let transaction = self.conn.transaction()?;
+        seed_projects(&transaction)?;
+        seed_tags(&transaction)?;
+        seed_notes(&transaction)?;
+        set_setting_tx(
+            &transaction,
+            "seed.demo.v1",
+            json!({ "seededAt": now_iso() }),
+        )?;
+        transaction.commit()?;
+        self.rebuild_search_index()?;
+        Ok(())
+    }
+
+    fn get_setting(&self, key: &str) -> DataResult<Option<Value>> {
+        self.conn
+            .query_row(
+                "SELECT value_json FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| {
+                    let value: String = row.get(0)?;
+                    Ok(value)
+                },
+            )
+            .optional()?
+            .map(|value| serde_json::from_str(&value).map_err(DataError::from))
+            .transpose()
+    }
+
+    fn load_workspace(&mut self) -> DataResult<WorkspaceSnapshotDto> {
+        Ok(WorkspaceSnapshotDto {
+            notes: self.list_notes(None, false)?,
+            projects: self.list_projects(false)?,
+            tags: self.list_tags(None)?,
+            archive_items: self.list_archive(None)?,
+            data_location: self.data_location(),
+        })
+    }
+
+    fn data_location(&self) -> DataLocationDto {
+        DataLocationDto {
+            data_dir: self.base_dir.to_string_lossy().to_string(),
+            database_path: self
+                .base_dir
+                .join(DATABASE_FILE)
+                .to_string_lossy()
+                .to_string(),
+        }
+    }
+
+    fn list_notes(
+        &self,
+        query: Option<String>,
+        include_archived: bool,
+    ) -> DataResult<Vec<NoteDto>> {
+        let trimmed_query = query.unwrap_or_default().trim().to_string();
+        let rows = if trimmed_query.is_empty() {
+            self.query_note_rows(
+                "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
+                        n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
+                        n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+                 FROM notes n
+                 LEFT JOIN projects p ON p.id = n.project_id
+                 WHERE n.deleted_at IS NULL AND (?1 OR n.archived_at IS NULL)
+                 ORDER BY n.is_favorite DESC, n.updated_at DESC",
+                params![include_archived],
+            )?
+        } else if let Some(fts_query) = build_fts_query(&trimmed_query) {
+            match self.query_note_rows(
+                "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
+                        n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
+                        n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+                 FROM notes n
+                 LEFT JOIN projects p ON p.id = n.project_id
+                 WHERE n.deleted_at IS NULL
+                   AND (?1 OR n.archived_at IS NULL)
+                   AND n.id IN (SELECT note_id FROM notes_fts WHERE notes_fts MATCH ?2)
+                 ORDER BY n.is_favorite DESC, n.updated_at DESC",
+                params![include_archived, fts_query],
+            ) {
+                Ok(rows) => rows,
+                Err(_) => self.list_notes_like(&trimmed_query, include_archived)?,
+            }
+        } else {
+            self.list_notes_like(&trimmed_query, include_archived)?
+        };
+
+        rows.into_iter()
+            .map(|row| self.note_dto_from_row(row))
+            .collect()
+    }
+
+    fn list_notes_like(&self, query: &str, include_archived: bool) -> DataResult<Vec<NoteRow>> {
+        let like_query = format!("%{}%", query.to_lowercase());
+        self.query_note_rows(
+            "SELECT DISTINCT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
+                    n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
+                    n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+             FROM notes n
+             LEFT JOIN projects p ON p.id = n.project_id
+             LEFT JOIN note_tags nt ON nt.note_id = n.id
+             LEFT JOIN tags t ON t.id = nt.tag_id
+             WHERE n.deleted_at IS NULL
+               AND (?1 OR n.archived_at IS NULL)
+               AND (
+                    lower(n.title) LIKE ?2
+                    OR lower(n.plain_text) LIKE ?2
+                    OR lower(COALESCE(p.title, '')) LIKE ?2
+                    OR lower(COALESCE(t.name, '')) LIKE ?2
+               )
+             ORDER BY n.is_favorite DESC, n.updated_at DESC",
+            params![include_archived, like_query],
+        )
+    }
+
+    fn query_note_rows<P>(&self, sql: &str, params: P) -> DataResult<Vec<NoteRow>>
+    where
+        P: rusqlite::Params,
+    {
+        let mut statement = self.conn.prepare(sql)?;
+        let rows = statement.query_map(params, |row| {
+            Ok(NoteRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                note_date: row.get(2)?,
+                content_json: row.get(3)?,
+                content_markdown: row.get(4)?,
+                content_html: row.get(5)?,
+                plain_text: row.get(6)?,
+                project_id: row.get(7)?,
+                project: row.get(8)?,
+                is_favorite: row.get::<_, i64>(9)? != 0,
+                icon: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+                archived_at: row.get(13)?,
+                deleted_at: row.get(14)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn note_dto_from_row(&self, row: NoteRow) -> DataResult<NoteDto> {
+        let content_json =
+            serde_json::from_str(&row.content_json).unwrap_or_else(|_| empty_document());
+        let tags = self.get_note_tags(&row.id)?;
+        let attachments = self.get_note_attachments(&row.id)?;
+        let word_count = count_words(&row.plain_text);
+
+        Ok(NoteDto {
+            id: row.id,
+            title: row.title,
+            note_date: row.note_date,
+            content_json,
+            content_markdown: row.content_markdown,
+            content_html: row.content_html,
+            plain_text: row.plain_text,
+            project_id: row.project_id,
+            project: row.project,
+            is_favorite: row.is_favorite,
+            icon: row.icon,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+            deleted_at: row.deleted_at,
+            tags,
+            attachments,
+            word_count,
+        })
+    }
+
+    fn get_note(&self, note_id: &str) -> DataResult<NoteDto> {
+        let rows = self.query_note_rows(
+            "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
+                    n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
+                    n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+             FROM notes n
+             LEFT JOIN projects p ON p.id = n.project_id
+             WHERE n.id = ?1 AND n.deleted_at IS NULL",
+            params![note_id],
+        )?;
+
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| DataError::NotFound("Заметка не найдена".to_string()))
+            .and_then(|row| self.note_dto_from_row(row))
+    }
+
+    fn get_note_tags(&self, note_id: &str) -> DataResult<Vec<NoteTagDto>> {
+        let mut statement = self.conn.prepare(
+            "SELECT t.id, t.name, t.color, t.custom_color
+             FROM tags t
+             INNER JOIN note_tags nt ON nt.tag_id = t.id
+             WHERE nt.note_id = ?1
+             ORDER BY lower(t.name)",
+        )?;
+        let rows = statement.query_map(params![note_id], |row| {
+            Ok(NoteTagDto {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+                custom_color: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn get_note_attachments(&self, note_id: &str) -> DataResult<Vec<AttachmentDto>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at
+             FROM attachments
+             WHERE note_id = ?1
+             ORDER BY created_at",
+        )?;
+        let rows = statement.query_map(params![note_id], attachment_from_row)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn create_note(&mut self, request: CreateNoteRequest) -> DataResult<NoteDto> {
+        let title = normalize_required_text(&request.title, "Название заметки")?;
+        validate_iso_date(&request.note_date)?;
+        let now = now_iso();
+        let note_id = Uuid::new_v4().to_string();
+        let default_tag_id = self.ensure_tag("новая", "blue")?;
+        let project_id = self.ensure_project("Входящие", "Быстрые заметки без проекта")?;
+
+        self.conn.execute(
+            "INSERT INTO notes (
+                id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                project_id, is_favorite, icon, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, '', '', '', ?5, 0, 'doc', ?6, ?6)",
+            params![
+                note_id,
+                title,
+                request.note_date,
+                empty_document().to_string(),
+                project_id,
+                now
+            ],
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+            params![note_id, default_tag_id],
+        )?;
+        self.refresh_note_search_index(&note_id)?;
+        self.get_note(&note_id)
+    }
+
+    fn update_note_content(&mut self, request: UpdateNoteContentRequest) -> DataResult<NoteDto> {
+        let current = self.get_note(&request.note_id)?;
+        let now = now_iso();
+        self.conn.execute(
+            "INSERT INTO note_revisions (
+                id, note_id, content_json, content_markdown, content_html, plain_text, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                Uuid::new_v4().to_string(),
+                request.note_id,
+                current.content_json.to_string(),
+                current.content_markdown,
+                current.content_html,
+                current.plain_text,
+                now
+            ],
+        )?;
+        self.conn.execute(
+            "UPDATE notes
+             SET content_json = ?1, content_markdown = ?2, content_html = ?3, plain_text = ?4, updated_at = ?5
+             WHERE id = ?6 AND deleted_at IS NULL",
+            params![
+                request.content_json.to_string(),
+                request.content_markdown,
+                request.content_html,
+                request.plain_text,
+                now,
+                request.note_id
+            ],
+        )?;
+        self.refresh_note_search_index(&request.note_id)?;
+        self.get_note(&request.note_id)
+    }
+
+    fn rename_note(&mut self, request: RenameNoteRequest) -> DataResult<NoteDto> {
+        let title = normalize_required_text(&request.title, "Название заметки")?;
+        self.conn.execute(
+            "UPDATE notes SET title = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+            params![title, now_iso(), request.note_id],
+        )?;
+        self.refresh_note_search_index(&request.note_id)?;
+        self.get_note(&request.note_id)
+    }
+
+    fn duplicate_note(&mut self, note_id: &str) -> DataResult<NoteDto> {
+        let source = self.get_note(note_id)?;
+        let new_id = Uuid::new_v4().to_string();
+        let now = now_iso();
+        self.conn.execute(
+            "INSERT INTO notes (
+                id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                project_id, is_favorite, icon, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10, ?10)",
+            params![
+                new_id,
+                format!("{} - копия", source.title),
+                source.note_date,
+                source.content_json.to_string(),
+                source.content_markdown,
+                source.content_html,
+                source.plain_text,
+                source.project_id,
+                source.icon,
+                now
+            ],
+        )?;
+
+        for tag in source.tags {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+                params![new_id, tag.id],
+            )?;
+        }
+
+        self.refresh_note_search_index(&new_id)?;
+        self.get_note(&new_id)
+    }
+
+    fn toggle_favorite_note(&mut self, note_id: &str) -> DataResult<NoteDto> {
+        self.conn.execute(
+            "UPDATE notes
+             SET is_favorite = CASE WHEN is_favorite = 1 THEN 0 ELSE 1 END, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL",
+            params![now_iso(), note_id],
+        )?;
+        self.get_note(note_id)
+    }
+
+    fn move_note_to_project(&mut self, request: MoveNoteRequest) -> DataResult<NoteDto> {
+        let project_title = normalize_required_text(&request.project_title, "Название проекта")?;
+        let project_id = self.ensure_project(&project_title, "Проект заметок")?;
+        self.conn.execute(
+            "UPDATE notes SET project_id = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+            params![project_id, now_iso(), request.note_id],
+        )?;
+        self.refresh_note_search_index(&request.note_id)?;
+        self.get_note(&request.note_id)
+    }
+
+    fn archive_note(&mut self, note_id: &str) -> DataResult<()> {
+        self.conn.execute(
+            "UPDATE notes SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            params![now_iso(), note_id],
+        )?;
+        self.refresh_note_search_index(note_id)?;
+        Ok(())
+    }
+
+    fn restore_note(&mut self, note_id: &str) -> DataResult<NoteDto> {
+        self.conn.execute(
+            "UPDATE notes SET archived_at = NULL, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            params![now_iso(), note_id],
+        )?;
+        self.refresh_note_search_index(note_id)?;
+        self.get_note(note_id)
+    }
+
+    fn delete_note(&mut self, note_id: &str) -> DataResult<()> {
+        self.conn.execute(
+            "UPDATE notes SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+            params![now_iso(), note_id],
+        )?;
+        self.conn
+            .execute("DELETE FROM notes_fts WHERE note_id = ?1", params![note_id])?;
+        Ok(())
+    }
+
+    fn delete_note_permanently(&mut self, note_id: &str) -> DataResult<()> {
+        let attachments = self.get_note_attachments(note_id)?;
+        for attachment in attachments {
+            let path = self.resolve_storage_path(&attachment.storage_rel_path)?;
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+        }
+        self.conn
+            .execute("DELETE FROM notes WHERE id = ?1", params![note_id])?;
+        self.conn
+            .execute("DELETE FROM notes_fts WHERE note_id = ?1", params![note_id])?;
+        Ok(())
+    }
+
+    fn list_projects(&self, include_archived: bool) -> DataResult<Vec<ProjectCardDto>> {
+        let mut statement = self.conn.prepare(
+            "SELECT p.id, p.title, p.description, p.status, p.archived_at,
+                    COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND n.archived_at IS NULL THEN n.id END) AS note_count,
+                    COUNT(DISTINCT a.id) AS file_count
+             FROM projects p
+             LEFT JOIN notes n ON n.project_id = p.id
+             LEFT JOIN attachments a ON a.note_id = n.id
+             WHERE ?1 OR p.archived_at IS NULL
+             GROUP BY p.id
+             ORDER BY lower(p.title)",
+        )?;
+        let rows = statement.query_map(params![include_archived], |row| {
+            let files: i64 = row.get(6)?;
+            Ok(ProjectCardDto {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: row.get(3)?,
+                archived_at: row.get(4)?,
+                notes: row.get(5)?,
+                tasks: 0,
+                files: if files > 0 { Some(files) } else { None },
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn create_project(&mut self, request: CreateProjectRequest) -> DataResult<ProjectCardDto> {
+        let title = normalize_required_text(&request.title, "Название проекта")?;
+        let description = if request.description.trim().is_empty() {
+            "Новое пространство заметок".to_string()
+        } else {
+            request.description.trim().to_string()
+        };
+        let project_id = Uuid::new_v4().to_string();
+        let now = now_iso();
+        self.conn.execute(
+            "INSERT INTO projects (id, title, description, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'active', ?4, ?4)",
+            params![project_id, title, description, now],
+        )?;
+        self.list_projects(false)?
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| DataError::NotFound("Проект не найден после создания".to_string()))
+    }
+
+    fn list_tags(&self, query: Option<String>) -> DataResult<Vec<TagRowDto>> {
+        let trimmed_query = query.unwrap_or_default().trim().to_lowercase();
+        let like_query = format!("%{trimmed_query}%");
+        let mut statement = self.conn.prepare(
+            "SELECT t.id, t.name, t.color, t.custom_color,
+                    COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND n.archived_at IS NULL THEN n.id END) AS note_count
+             FROM tags t
+             LEFT JOIN note_tags nt ON nt.tag_id = t.id
+             LEFT JOIN notes n ON n.id = nt.note_id
+             WHERE ?1 = '' OR lower(t.name) LIKE ?2
+             GROUP BY t.id
+             ORDER BY lower(t.name)",
+        )?;
+        let rows = statement.query_map(params![trimmed_query, like_query], |row| {
+            Ok(TagRowDto {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+                custom_color: row.get(3)?,
+                count: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn create_tag(&mut self, request: CreateTagRequest) -> DataResult<TagRowDto> {
+        let name = normalize_required_text(&request.name, "Название тега")?;
+        let tag_id = self.ensure_tag(&name, &request.color)?;
+        self.list_tags(None)?
+            .into_iter()
+            .find(|tag| tag.id == tag_id)
+            .ok_or_else(|| DataError::NotFound("Тег не найден после создания".to_string()))
+    }
+
+    fn rename_tag(&mut self, request: RenameTagRequest) -> DataResult<Vec<TagRowDto>> {
+        let name = normalize_required_text(&request.name, "Название тега")?;
+        self.conn.execute(
+            "UPDATE tags SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, now_iso(), request.tag_id],
+        )?;
+        self.rebuild_search_index()?;
+        self.list_tags(None)
+    }
+
+    fn update_tag_color(&mut self, request: UpdateTagColorRequest) -> DataResult<Vec<TagRowDto>> {
+        self.conn.execute(
+            "UPDATE tags SET color = ?1, custom_color = ?2, updated_at = ?3 WHERE id = ?4",
+            params![
+                request.color,
+                request.custom_color,
+                now_iso(),
+                request.tag_id
+            ],
+        )?;
+        self.list_tags(None)
+    }
+
+    fn delete_tag(&mut self, tag_id: &str) -> DataResult<Vec<TagRowDto>> {
+        self.conn
+            .execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
+        self.rebuild_search_index()?;
+        self.list_tags(None)
+    }
+
+    fn merge_tags(&mut self, request: MergeTagsRequest) -> DataResult<Vec<TagRowDto>> {
+        if request.source_tag_id == request.target_tag_id {
+            return Err(DataError::InvalidInput(
+                "Выберите два разных тега".to_string(),
+            ));
+        }
+
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO note_tags (note_id, tag_id)
+             SELECT note_id, ?1 FROM note_tags WHERE tag_id = ?2",
+            params![request.target_tag_id, request.source_tag_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM tags WHERE id = ?1",
+            params![request.source_tag_id],
+        )?;
+        transaction.commit()?;
+        self.rebuild_search_index()?;
+        self.list_tags(None)
+    }
+
+    fn ensure_project(&mut self, title: &str, description: &str) -> DataResult<String> {
+        if let Some(project_id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM projects WHERE lower(title) = lower(?1) LIMIT 1",
+                params![title],
+                |row| row.get(0),
+            )
+            .optional()?
+        {
+            return Ok(project_id);
+        }
+
+        let project_id = Uuid::new_v4().to_string();
+        let now = now_iso();
+        self.conn.execute(
+            "INSERT INTO projects (id, title, description, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'active', ?4, ?4)",
+            params![project_id, title, description, now],
+        )?;
+        Ok(project_id)
+    }
+
+    fn ensure_tag(&mut self, name: &str, color: &str) -> DataResult<String> {
+        if let Some(tag_id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM tags WHERE lower(name) = lower(?1) LIMIT 1",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()?
+        {
+            return Ok(tag_id);
+        }
+
+        let tag_id = Uuid::new_v4().to_string();
+        let now = now_iso();
+        self.conn.execute(
+            "INSERT INTO tags (id, name, color, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![tag_id, name, normalize_tag_color(color), now],
+        )?;
+        Ok(tag_id)
+    }
+
+    fn list_archive(&self, query: Option<String>) -> DataResult<Vec<ArchiveItemDto>> {
+        let query = query.unwrap_or_default().trim().to_lowercase();
+        let like_query = format!("%{query}%");
+        let mut items = Vec::new();
+
+        let mut note_statement = self.conn.prepare(
+            "SELECT id, title, archived_at
+             FROM notes
+             WHERE archived_at IS NOT NULL AND deleted_at IS NULL
+               AND (?1 = '' OR lower(title) LIKE ?2)
+             ORDER BY archived_at DESC",
+        )?;
+        let note_rows = note_statement.query_map(params![query, like_query], |row| {
+            Ok(ArchiveItemDto {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                archived_at: format_archived_at(row.get::<_, String>(2)?),
+                kind: "Заметка".to_string(),
+            })
+        })?;
+        items.extend(note_rows.collect::<Result<Vec<_>, _>>()?);
+
+        let mut project_statement = self.conn.prepare(
+            "SELECT id, title, archived_at
+             FROM projects
+             WHERE archived_at IS NOT NULL
+               AND (?1 = '' OR lower(title) LIKE ?2)
+             ORDER BY archived_at DESC",
+        )?;
+        let project_rows = project_statement.query_map(params![query, like_query], |row| {
+            Ok(ArchiveItemDto {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                archived_at: format_archived_at(row.get::<_, String>(2)?),
+                kind: "Проект".to_string(),
+            })
+        })?;
+        items.extend(project_rows.collect::<Result<Vec<_>, _>>()?);
+
+        Ok(items)
+    }
+
+    fn restore_archive_item(&mut self, item_id: &str, kind: &str) -> DataResult<()> {
+        let table = if kind == "Проект" {
+            "projects"
+        } else {
+            "notes"
+        };
+        self.conn.execute(
+            &format!("UPDATE {table} SET archived_at = NULL, updated_at = ?1 WHERE id = ?2"),
+            params![now_iso(), item_id],
+        )?;
+        if table == "notes" {
+            self.refresh_note_search_index(item_id)?;
+        } else {
+            self.rebuild_search_index()?;
+        }
+        Ok(())
+    }
+
+    fn delete_archive_item(&mut self, item_id: &str, kind: &str) -> DataResult<()> {
+        if kind == "Проект" {
+            self.conn
+                .execute("DELETE FROM projects WHERE id = ?1", params![item_id])?;
+            self.rebuild_search_index()?;
+        } else {
+            self.delete_note_permanently(item_id)?;
+        }
+        Ok(())
+    }
+
+    fn store_attachment(
+        &mut self,
+        request: StoreAttachmentRequest,
+    ) -> DataResult<AttachmentStoreResultDto> {
+        self.get_note(&request.note_id)?;
+        if request.bytes.is_empty() {
+            return Err(DataError::InvalidInput("Файл пустой".to_string()));
+        }
+
+        let kind = if request.kind == "image" {
+            "image"
+        } else {
+            "file"
+        };
+        let folder = if kind == "image" {
+            "images"
+        } else {
+            "attachments"
+        };
+        let safe_name = sanitize_file_name(&request.original_name);
+        let attachment_id = Uuid::new_v4().to_string();
+        let relative_path = format!("{folder}/{}/{}-{safe_name}", request.note_id, attachment_id);
+        let absolute_path = self.resolve_storage_path(&relative_path)?;
+        if let Some(parent) = absolute_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&absolute_path, &request.bytes)?;
+
+        let attachment = AttachmentDto {
+            id: attachment_id,
+            note_id: request.note_id,
+            kind: kind.to_string(),
+            original_name: request.original_name,
+            storage_rel_path: relative_path,
+            mime_type: request.mime_type,
+            size_bytes: i64::try_from(request.bytes.len()).unwrap_or(i64::MAX),
+            created_at: now_iso(),
+        };
+        self.conn.execute(
+            "INSERT INTO attachments (id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                attachment.id,
+                attachment.note_id,
+                attachment.kind,
+                attachment.original_name,
+                attachment.storage_rel_path,
+                attachment.mime_type,
+                attachment.size_bytes,
+                attachment.created_at
+            ],
+        )?;
+
+        Ok(AttachmentStoreResultDto {
+            size_label: format_file_size(attachment.size_bytes),
+            attachment,
+        })
+    }
+
+    fn export_note_markdown(&self, note_id: &str) -> DataResult<ExportResultDto> {
+        let note = self.get_note(note_id)?;
+        let file_name = format!("{}.md", sanitize_file_name(&note.title));
+        let relative_path = format!("exports/{file_name}");
+        let path = self.resolve_storage_path(&relative_path)?;
+        fs::write(&path, note.content_markdown)?;
+        Ok(export_result(
+            path,
+            relative_path,
+            "Markdown-экспорт заметки создан",
+        ))
+    }
+
+    fn export_note_zip(&self, note_id: &str) -> DataResult<ExportResultDto> {
+        let note = self.get_note(note_id)?;
+        let file_name = format!("{}-note.zip", sanitize_file_name(&note.title));
+        let relative_path = format!("exports/{file_name}");
+        let path = self.resolve_storage_path(&relative_path)?;
+        let file = File::create(&path)?;
+        let mut zip = ZipWriter::new(file);
+        let options = zip_options();
+
+        zip.start_file("note.md", options)?;
+        std::io::copy(&mut Cursor::new(note.content_markdown.as_bytes()), &mut zip)?;
+        zip.start_file("note.html", options)?;
+        std::io::copy(&mut Cursor::new(note.content_html.as_bytes()), &mut zip)?;
+        zip.start_file("note.json", options)?;
+        let note_json = serde_json::to_vec_pretty(&note)?;
+        std::io::copy(&mut Cursor::new(note_json), &mut zip)?;
+        self.write_note_attachments_to_zip(&mut zip, &note.attachments)?;
+        zip.finish()?;
+
+        Ok(export_result(
+            path,
+            relative_path,
+            "ZIP-экспорт заметки создан",
+        ))
+    }
+
+    fn export_project_zip(&self, project_id: &str) -> DataResult<ExportResultDto> {
+        let project = self
+            .list_projects(true)?
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| DataError::NotFound("Проект не найден".to_string()))?;
+        let rows = self.query_note_rows(
+            "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
+                    n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
+                    n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+             FROM notes n
+             LEFT JOIN projects p ON p.id = n.project_id
+             WHERE n.project_id = ?1 AND n.deleted_at IS NULL
+             ORDER BY n.updated_at DESC",
+            params![project_id],
+        )?;
+        let notes = rows
+            .into_iter()
+            .map(|row| self.note_dto_from_row(row))
+            .collect::<DataResult<Vec<_>>>()?;
+
+        let file_name = format!("{}-project.zip", sanitize_file_name(&project.title));
+        let relative_path = format!("exports/{file_name}");
+        let path = self.resolve_storage_path(&relative_path)?;
+        let file = File::create(&path)?;
+        let mut zip = ZipWriter::new(file);
+        let options = zip_options();
+        let project_json =
+            serde_json::to_vec_pretty(&json!({ "project": project, "notes": notes }))?;
+
+        zip.start_file("project.json", options)?;
+        std::io::copy(&mut Cursor::new(project_json), &mut zip)?;
+        for note in &notes {
+            let note_file_name = sanitize_file_name(&note.title);
+            zip.start_file(format!("notes/{note_file_name}.md"), options)?;
+            std::io::copy(&mut Cursor::new(note.content_markdown.as_bytes()), &mut zip)?;
+            self.write_note_attachments_to_zip(&mut zip, &note.attachments)?;
+        }
+        zip.finish()?;
+
+        Ok(export_result(
+            path,
+            relative_path,
+            "ZIP-экспорт проекта создан",
+        ))
+    }
+
+    fn create_backup(&self) -> DataResult<ExportResultDto> {
+        let backup_data = self.collect_backup_data()?;
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S");
+        let relative_path = format!("backups/noteflow-backup-{stamp}.zip");
+        let path = self.resolve_storage_path(&relative_path)?;
+        let file = File::create(&path)?;
+        let mut zip = ZipWriter::new(file);
+        let options = zip_options();
+        let backup_json = serde_json::to_vec_pretty(&backup_data)?;
+
+        zip.start_file("noteflow-backup.json", options)?;
+        std::io::copy(&mut Cursor::new(backup_json), &mut zip)?;
+        for attachment in &backup_data.attachments {
+            let source = self.resolve_storage_path(&attachment.storage_rel_path)?;
+            if source.exists() {
+                zip.start_file(format!("files/{}", attachment.storage_rel_path), options)?;
+                let mut file = File::open(source)?;
+                std::io::copy(&mut file, &mut zip)?;
+            }
+        }
+        zip.finish()?;
+
+        Ok(export_result(
+            path,
+            relative_path,
+            "Резервная копия базы создана",
+        ))
+    }
+
+    fn import_backup(&mut self, request: ImportBackupRequest) -> DataResult<WorkspaceSnapshotDto> {
+        if request.bytes.is_empty() {
+            return Err(DataError::InvalidInput(
+                "Файл резервной копии пустой".to_string(),
+            ));
+        }
+
+        let cache_name = format!(
+            "import-{}-{}",
+            Uuid::new_v4(),
+            sanitize_file_name(&request.file_name)
+        );
+        let cache_relative = format!("cache/{cache_name}");
+        let cache_path = self.resolve_storage_path(&cache_relative)?;
+        fs::write(cache_path, &request.bytes)?;
+
+        let reader = Cursor::new(request.bytes);
+        let mut archive = ZipArchive::new(reader)?;
+        let backup_json = {
+            let mut backup_file = archive.by_name("noteflow-backup.json")?;
+            let mut json_text = String::new();
+            backup_file.read_to_string(&mut json_text)?;
+            json_text
+        };
+        let backup_data: BackupData = serde_json::from_str(&backup_json)?;
+        if backup_data.version > CURRENT_BACKUP_VERSION {
+            return Err(DataError::InvalidInput(
+                "Резервная копия создана более новой версией NoteFlow".to_string(),
+            ));
+        }
+
+        let transaction = self.conn.transaction()?;
+        transaction.execute("DELETE FROM note_tags", [])?;
+        transaction.execute("DELETE FROM attachments", [])?;
+        transaction.execute("DELETE FROM note_revisions", [])?;
+        transaction.execute("DELETE FROM ai_messages", [])?;
+        transaction.execute("DELETE FROM ai_chats", [])?;
+        transaction.execute("DELETE FROM notes", [])?;
+        transaction.execute("DELETE FROM tags", [])?;
+        transaction.execute("DELETE FROM projects", [])?;
+        transaction.execute("DELETE FROM app_settings WHERE key NOT LIKE 'ui.%'", [])?;
+
+        for project in &backup_data.projects {
+            transaction.execute(
+                "INSERT INTO projects (id, title, description, status, created_at, updated_at, archived_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    project.id,
+                    project.title,
+                    project.description,
+                    project.status,
+                    project.created_at,
+                    project.updated_at,
+                    project.archived_at
+                ],
+            )?;
+        }
+        for tag in &backup_data.tags {
+            transaction.execute(
+                "INSERT INTO tags (id, name, color, custom_color, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    tag.id,
+                    tag.name,
+                    tag.color,
+                    tag.custom_color,
+                    tag.created_at,
+                    tag.updated_at
+                ],
+            )?;
+        }
+        for note in &backup_data.notes {
+            transaction.execute(
+                "INSERT INTO notes (
+                    id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                    project_id, is_favorite, icon, created_at, updated_at, archived_at, deleted_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    note.id,
+                    note.title,
+                    note.note_date,
+                    note.content_json.to_string(),
+                    note.content_markdown,
+                    note.content_html,
+                    note.plain_text,
+                    note.project_id,
+                    note.is_favorite,
+                    note.icon,
+                    note.created_at,
+                    note.updated_at,
+                    note.archived_at,
+                    note.deleted_at
+                ],
+            )?;
+        }
+        for note_tag in &backup_data.note_tags {
+            transaction.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+                params![note_tag.note_id, note_tag.tag_id],
+            )?;
+        }
+        for attachment in &backup_data.attachments {
+            transaction.execute(
+                "INSERT INTO attachments (id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    attachment.id,
+                    attachment.note_id,
+                    attachment.kind,
+                    attachment.original_name,
+                    attachment.storage_rel_path,
+                    attachment.mime_type,
+                    attachment.size_bytes,
+                    attachment.created_at
+                ],
+            )?;
+        }
+        for setting in &backup_data.app_settings {
+            if setting.key.contains("api")
+                || setting.key.contains("secret")
+                || setting.key.contains("key")
+            {
+                continue;
+            }
+            set_setting_tx(&transaction, &setting.key, setting.value_json.clone())?;
+        }
+        transaction.commit()?;
+
+        for attachment in &backup_data.attachments {
+            let zip_path = format!("files/{}", attachment.storage_rel_path);
+            if let Ok(mut zip_file) = archive.by_name(&zip_path) {
+                let output_path = self.resolve_storage_path(&attachment.storage_rel_path)?;
+                if let Some(parent) = output_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut output = File::create(output_path)?;
+                std::io::copy(&mut zip_file, &mut output)?;
+            }
+        }
+
+        self.rebuild_search_index()?;
+        self.load_workspace()
+    }
+
+    fn write_note_attachments_to_zip(
+        &self,
+        zip: &mut ZipWriter<File>,
+        attachments: &[AttachmentDto],
+    ) -> DataResult<()> {
+        let options = zip_options();
+        for attachment in attachments {
+            let source = self.resolve_storage_path(&attachment.storage_rel_path)?;
+            if source.exists() {
+                zip.start_file(format!("attachments/{}", attachment.original_name), options)?;
+                let mut file = File::open(source)?;
+                std::io::copy(&mut file, zip)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_backup_data(&self) -> DataResult<BackupData> {
+        Ok(BackupData {
+            version: CURRENT_BACKUP_VERSION,
+            exported_at: now_iso(),
+            projects: self.collect_projects_backup()?,
+            tags: self.collect_tags_backup()?,
+            notes: self.collect_notes_backup()?,
+            note_tags: self.collect_note_tags_backup()?,
+            attachments: self.collect_attachments_backup()?,
+            app_settings: self.collect_settings_backup()?,
+        })
+    }
+
+    fn collect_projects_backup(&self) -> DataResult<Vec<ProjectBackup>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT id, title, description, status, created_at, updated_at, archived_at FROM projects ORDER BY title")?;
+        let rows = statement.query_map([], |row| {
+            Ok(ProjectBackup {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                archived_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_tags_backup(&self) -> DataResult<Vec<TagBackup>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, name, color, custom_color, created_at, updated_at FROM tags ORDER BY name",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(TagBackup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+                custom_color: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_notes_backup(&self) -> DataResult<Vec<NoteBackup>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                    project_id, is_favorite, icon, created_at, updated_at, archived_at, deleted_at
+             FROM notes
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let content_json: String = row.get(3)?;
+            Ok(NoteBackup {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                note_date: row.get(2)?,
+                content_json: serde_json::from_str(&content_json)
+                    .unwrap_or_else(|_| empty_document()),
+                content_markdown: row.get(4)?,
+                content_html: row.get(5)?,
+                plain_text: row.get(6)?,
+                project_id: row.get(7)?,
+                is_favorite: row.get::<_, i64>(8)? != 0,
+                icon: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+                archived_at: row.get(12)?,
+                deleted_at: row.get(13)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_note_tags_backup(&self) -> DataResult<Vec<NoteTagBackup>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT note_id, tag_id FROM note_tags ORDER BY note_id, tag_id")?;
+        let rows = statement.query_map([], |row| {
+            Ok(NoteTagBackup {
+                note_id: row.get(0)?,
+                tag_id: row.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_attachments_backup(&self) -> DataResult<Vec<AttachmentBackup>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at
+             FROM attachments
+             ORDER BY created_at",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(AttachmentBackup {
+                id: row.get(0)?,
+                note_id: row.get(1)?,
+                kind: row.get(2)?,
+                original_name: row.get(3)?,
+                storage_rel_path: row.get(4)?,
+                mime_type: row.get(5)?,
+                size_bytes: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_settings_backup(&self) -> DataResult<Vec<SettingBackup>> {
+        let mut statement = self.conn.prepare(
+            "SELECT key, value_json, updated_at
+             FROM app_settings
+             WHERE lower(key) NOT LIKE '%api%' AND lower(key) NOT LIKE '%secret%' AND lower(key) NOT LIKE '%key%'
+             ORDER BY key",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let value_json: String = row.get(1)?;
+            Ok(SettingBackup {
+                key: row.get(0)?,
+                value_json: serde_json::from_str(&value_json).unwrap_or(Value::Null),
+                updated_at: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn refresh_note_search_index(&self, note_id: &str) -> DataResult<()> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT n.title, n.plain_text, COALESCE(p.title, '')
+                 FROM notes n
+                 LEFT JOIN projects p ON p.id = n.project_id
+                 WHERE n.id = ?1 AND n.deleted_at IS NULL",
+                params![note_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        self.conn
+            .execute("DELETE FROM notes_fts WHERE note_id = ?1", params![note_id])?;
+        if let Some((title, plain_text, project_title)) = row {
+            let tag_names = self
+                .conn
+                .query_row(
+                    "SELECT COALESCE(GROUP_CONCAT(t.name, ' '), '')
+                     FROM tags t
+                     INNER JOIN note_tags nt ON nt.tag_id = t.id
+                     WHERE nt.note_id = ?1",
+                    params![note_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .unwrap_or_default();
+            self.conn.execute(
+                "INSERT INTO notes_fts (note_id, title, plain_text, tag_names, project_title)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![note_id, title, plain_text, tag_names, project_title],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn rebuild_search_index(&self) -> DataResult<()> {
+        self.conn.execute("DELETE FROM notes_fts", [])?;
+        let mut statement = self
+            .conn
+            .prepare("SELECT id FROM notes WHERE deleted_at IS NULL")?;
+        let note_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        for note_id in note_ids {
+            self.refresh_note_search_index(&note_id)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_storage_path(&self, relative_path: &str) -> DataResult<PathBuf> {
+        ensure_safe_relative_path(relative_path)?;
+        Ok(self.base_dir.join(relative_path))
+    }
+}
+
+fn migrations() -> Vec<Migration> {
+    vec![
+        Migration {
+            version: 1,
+            name: "initial_schema",
+            sql: "
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS tags (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    color TEXT NOT NULL DEFAULT 'blue',
+                    custom_color TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS notes (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    note_date TEXT NOT NULL,
+                    content_json TEXT NOT NULL,
+                    content_markdown TEXT NOT NULL DEFAULT '',
+                    content_html TEXT NOT NULL DEFAULT '',
+                    plain_text TEXT NOT NULL DEFAULT '',
+                    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+                    is_favorite INTEGER NOT NULL DEFAULT 0,
+                    icon TEXT NOT NULL DEFAULT 'doc',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT,
+                    deleted_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS note_tags (
+                    note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                    PRIMARY KEY (note_id, tag_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id TEXT PRIMARY KEY,
+                    note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    original_name TEXT NOT NULL,
+                    storage_rel_path TEXT NOT NULL,
+                    mime_type TEXT NOT NULL DEFAULT '',
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS note_revisions (
+                    id TEXT PRIMARY KEY,
+                    note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                    content_json TEXT NOT NULL,
+                    content_markdown TEXT NOT NULL,
+                    content_html TEXT NOT NULL,
+                    plain_text TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS ai_chats (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    note_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS ai_messages (
+                    id TEXT PRIMARY KEY,
+                    chat_id TEXT NOT NULL REFERENCES ai_chats(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    sources_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+                    note_id UNINDEXED,
+                    title,
+                    plain_text,
+                    tag_names,
+                    project_title,
+                    tokenize = 'unicode61'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_notes_project_id ON notes(project_id);
+                CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at);
+                CREATE INDEX IF NOT EXISTS idx_notes_archived_at ON notes(archived_at);
+                CREATE INDEX IF NOT EXISTS idx_note_tags_tag_id ON note_tags(tag_id);
+                CREATE INDEX IF NOT EXISTS idx_attachments_note_id ON attachments(note_id);
+                CREATE INDEX IF NOT EXISTS idx_ai_messages_chat_id ON ai_messages(chat_id);
+            ",
+        },
+        Migration {
+            version: 2,
+            name: "storage_metadata",
+            sql: "
+                CREATE INDEX IF NOT EXISTS idx_projects_archived_at ON projects(archived_at);
+                CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+            ",
+        },
+    ]
+}
+
+fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
+    let now = now_iso();
+    let projects = [
+        (
+            "project-noteflow",
+            "NoteFlow",
+            "Приложение для заметок и базы знаний",
+            "active",
+            None,
+        ),
+        (
+            "project-market",
+            "Исследование рынка",
+            "Конкуренты, пользователи и идеи развития",
+            "active",
+            None,
+        ),
+        (
+            "project-personal",
+            "Личные заметки",
+            "Идеи, обучение и личные планы",
+            "active",
+            None,
+        ),
+        (
+            "project-old-redesign",
+            "Старый проект редизайна",
+            "Архивное направление",
+            "archived",
+            Some(now.clone()),
+        ),
+    ];
+
+    for (id, title, description, status, archived_at) in projects {
+        transaction.execute(
+            "INSERT OR IGNORE INTO projects (id, title, description, status, created_at, updated_at, archived_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+            params![id, title, description, status, now, archived_at],
+        )?;
+    }
+    Ok(())
+}
+
+fn seed_tags(transaction: &Transaction<'_>) -> DataResult<()> {
+    let now = now_iso();
+    let tags = [
+        ("tag-project", "проект", "blue"),
+        ("tag-architecture", "архитектура", "purple"),
+        ("tag-docs", "документация", "green"),
+        ("tag-ideas", "идеи", "amber"),
+        ("tag-personal", "личное", "pink"),
+        ("tag-planning", "планирование", "green"),
+        ("tag-research", "исследования", "purple"),
+    ];
+
+    for (id, name, color) in tags {
+        transaction.execute(
+            "INSERT OR IGNORE INTO tags (id, name, color, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![id, name, color, now],
+        )?;
+    }
+    Ok(())
+}
+
+fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
+    let now = now_iso();
+    let notes = [
+        SeedNote {
+            id: "note-architecture",
+            title: "Архитектура проекта",
+            note_date: "2026-06-14",
+            project_id: "project-noteflow",
+            icon: "doc",
+            is_favorite: true,
+            tags: &["tag-project", "tag-architecture", "tag-docs"],
+            archived: false,
+            markdown: "# Архитектура проекта\n\nОбзор структуры приложения NoteFlow, ключевых модулей и принципов взаимодействия между ними.\n\n- Скорость и плавность интерфейса\n- Локальное хранение и приватность\n- Поиск, проекты, теги и будущий RAG",
+        },
+        SeedNote {
+            id: "note-sprint",
+            title: "Планирование спринта",
+            note_date: "2026-06-13",
+            project_id: "project-noteflow",
+            icon: "check",
+            is_favorite: false,
+            tags: &["tag-planning"],
+            archived: false,
+            markdown: "Цели спринта, задачи, оценки и приоритеты команды.\n\n1. Уточнить критерии готовности\n2. Проверить риски\n3. Подготовить демо",
+        },
+        SeedNote {
+            id: "note-research",
+            title: "Исследование пользователей",
+            note_date: "2026-05-22",
+            project_id: "project-market",
+            icon: "person",
+            is_favorite: false,
+            tags: &["tag-research"],
+            archived: false,
+            markdown: "Интервью, боли, инсайты и ключевые выводы.\n\n| Сегмент | Боль |\n| --- | --- |\n| Исследователи | Сложно быстро находить старые выводы |\n| Команды | Заметки разбросаны по инструментам |",
+        },
+        SeedNote {
+            id: "note-ideas",
+            title: "Идеи для улучшения",
+            note_date: "2026-05-20",
+            project_id: "project-market",
+            icon: "bulb",
+            is_favorite: false,
+            tags: &["tag-ideas"],
+            archived: false,
+            markdown: "Список идей по улучшению продукта на основе обратной связи.\n\n> Хорошая заметка легко записывается и легко находится.",
+        },
+        SeedNote {
+            id: "note-api",
+            title: "Документация API",
+            note_date: "2026-05-18",
+            project_id: "project-noteflow",
+            icon: "code",
+            is_favorite: false,
+            tags: &["tag-docs"],
+            archived: false,
+            markdown: "Эндпоинты, параметры, примеры запросов и ответов.\n\n```http\nGET /notes?query=markdown\n```",
+        },
+        SeedNote {
+            id: "note-garden",
+            title: "Заметки по саду",
+            note_date: "2026-05-12",
+            project_id: "project-personal",
+            icon: "bulb",
+            is_favorite: false,
+            tags: &["tag-personal"],
+            archived: false,
+            markdown: "Ирисы бородатые: пересадка, деление корневищ, сроки.\n\n> Делить лучше после цветения, когда корневища видны.",
+        },
+        SeedNote {
+            id: "note-launch-v2",
+            title: "План запуска версии 2.0",
+            note_date: "2026-05-25",
+            project_id: "project-noteflow",
+            icon: "doc",
+            is_favorite: false,
+            tags: &["tag-planning"],
+            archived: true,
+            markdown: "Архивный план запуска версии 2.0.",
+        },
+        SeedNote {
+            id: "note-market-q1",
+            title: "Исследование рынка Q1",
+            note_date: "2026-05-18",
+            project_id: "project-market",
+            icon: "person",
+            is_favorite: false,
+            tags: &["tag-research"],
+            archived: true,
+            markdown: "Архивная сводка исследования рынка за Q1.",
+        },
+    ];
+
+    for note in notes {
+        let plain_text = markdown_to_plain_text(note.markdown);
+        let content_json = document_from_text(&plain_text);
+        let content_html = plain_text_to_html(&plain_text);
+        let archived_at = if note.archived {
+            Some(now.clone())
+        } else {
+            None
+        };
+        transaction.execute(
+            "INSERT OR IGNORE INTO notes (
+                id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                project_id, is_favorite, icon, created_at, updated_at, archived_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)",
+            params![
+                note.id,
+                note.title,
+                note.note_date,
+                content_json.to_string(),
+                note.markdown,
+                content_html,
+                plain_text,
+                note.project_id,
+                note.is_favorite,
+                note.icon,
+                now,
+                archived_at
+            ],
+        )?;
+
+        for tag_id in note.tags {
+            transaction.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+                params![note.id, tag_id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+struct SeedNote {
+    id: &'static str,
+    title: &'static str,
+    note_date: &'static str,
+    project_id: &'static str,
+    icon: &'static str,
+    is_favorite: bool,
+    tags: &'static [&'static str],
+    archived: bool,
+    markdown: &'static str,
+}
+
+fn set_setting_tx(transaction: &Transaction<'_>, key: &str, value: Value) -> DataResult<()> {
+    transaction.execute(
+        "INSERT INTO app_settings (key, value_json, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+        params![key, value.to_string(), now_iso()],
+    )?;
+    Ok(())
+}
+
+fn attachment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentDto> {
+    Ok(AttachmentDto {
+        id: row.get(0)?,
+        note_id: row.get(1)?,
+        kind: row.get(2)?,
+        original_name: row.get(3)?,
+        storage_rel_path: row.get(4)?,
+        mime_type: row.get(5)?,
+        size_bytes: row.get(6)?,
+        created_at: row.get(7)?,
+    })
+}
+
+fn ensure_storage_dirs(base_dir: &Path) -> DataResult<()> {
+    fs::create_dir_all(base_dir)?;
+    for folder in ["attachments", "images", "exports", "backups", "cache"] {
+        fs::create_dir_all(base_dir.join(folder))?;
+    }
+    Ok(())
+}
+
+fn ensure_safe_relative_path(relative_path: &str) -> DataResult<()> {
+    let path = Path::new(relative_path);
+    if path.is_absolute() {
+        return Err(DataError::InvalidInput(
+            "Абсолютные пути в managed storage запрещены".to_string(),
+        ));
+    }
+
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => {
+                return Err(DataError::InvalidInput(
+                    "Путь содержит небезопасные компоненты".to_string(),
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sanitize_file_name(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches(['.', '_', '-']).to_string();
+    if trimmed.is_empty() {
+        "noteflow-file".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn normalize_required_text(value: &str, field_name: &str) -> DataResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(DataError::InvalidInput(format!(
+            "{field_name} не может быть пустым"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_tag_color(color: &str) -> String {
+    match color {
+        "blue" | "green" | "purple" | "amber" | "pink" => color.to_string(),
+        _ => "blue".to_string(),
+    }
+}
+
+fn validate_iso_date(value: &str) -> DataResult<()> {
+    let bytes = value.as_bytes();
+    let is_valid = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
+    if is_valid {
+        Ok(())
+    } else {
+        Err(DataError::InvalidInput(
+            "Дата заметки должна быть в формате YYYY-MM-DD".to_string(),
+        ))
+    }
+}
+
+fn now_iso() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn empty_document() -> Value {
+    json!({ "type": "doc", "content": [{ "type": "paragraph" }] })
+}
+
+fn document_from_text(text: &str) -> Value {
+    let content: Vec<Value> = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|paragraph| !paragraph.is_empty())
+        .map(|paragraph| json!({ "type": "paragraph", "content": [{ "type": "text", "text": paragraph }] }))
+        .collect();
+    if content.is_empty() {
+        empty_document()
+    } else {
+        json!({ "type": "doc", "content": content })
+    }
+}
+
+fn markdown_to_plain_text(markdown: &str) -> String {
+    markdown
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.starts_with('|') && !trimmed.starts_with("```")
+        })
+        .map(|line| {
+            line.replace('#', "")
+                .replace("**", "")
+                .replace('*', "")
+                .replace('`', "")
+                .replace("- [x]", "")
+                .replace("- [ ]", "")
+                .replace("- ", "")
+                .replace("> ", "")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn plain_text_to_html(text: &str) -> String {
+    if text.trim().is_empty() {
+        String::new()
+    } else {
+        format!("<p>{}</p>", escape_html(text))
+    }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn count_words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
+fn format_archived_at(value: String) -> String {
+    let date = value.split('T').next().unwrap_or(value.as_str());
+    format!("Архивировано {date}")
+}
+
+fn format_file_size(size: i64) -> String {
+    if size < 1024 {
+        format!("{size} Б")
+    } else if size < 1024 * 1024 {
+        format!("{} КБ", size / 1024)
+    } else {
+        format!("{:.1} МБ", size as f64 / 1024.0 / 1024.0)
+    }
+}
+
+fn zip_options() -> SimpleFileOptions {
+    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
+}
+
+fn export_result(path: PathBuf, relative_path: String, message: &str) -> ExportResultDto {
+    ExportResultDto {
+        path: path.to_string_lossy().to_string(),
+        relative_path,
+        message: message.to_string(),
+    }
+}
+
+fn build_fts_query(query: &str) -> Option<String> {
+    let terms = query
+        .split_whitespace()
+        .map(|term| {
+            term.chars()
+                .filter(|character| character.is_alphanumeric())
+                .collect::<String>()
+        })
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("{term}*"))
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" "))
+    }
+}
+
+fn command_error(error: DataError) -> String {
+    error.to_string()
+}
+
+#[tauri::command]
+pub fn load_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapshotDto, String> {
+    state
+        .with_store(|store| store.load_workspace())
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_notes(
+    query: Option<String>,
+    include_archived: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<NoteDto>, String> {
+    state
+        .with_store(|store| store.list_notes(query, include_archived))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn create_note(
+    request: CreateNoteRequest,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.create_note(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn update_note_content(
+    request: UpdateNoteContentRequest,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.update_note_content(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn rename_note(
+    request: RenameNoteRequest,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.rename_note(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn duplicate_note(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.duplicate_note(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn toggle_favorite_note(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.toggle_favorite_note(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn move_note_to_project(
+    request: MoveNoteRequest,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.move_note_to_project(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn archive_note(note_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .with_store(|store| store.archive_note(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn restore_note(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.restore_note(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn delete_note(note_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .with_store(|store| store.delete_note(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn delete_note_permanently(note_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .with_store(|store| store.delete_note_permanently(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_projects(
+    include_archived: bool,
+    state: State<'_, AppState>,
+) -> Result<Vec<ProjectCardDto>, String> {
+    state
+        .with_store(|store| store.list_projects(include_archived))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn create_project(
+    request: CreateProjectRequest,
+    state: State<'_, AppState>,
+) -> Result<ProjectCardDto, String> {
+    state
+        .with_store(|store| store.create_project(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_tags(
+    query: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<TagRowDto>, String> {
+    state
+        .with_store(|store| store.list_tags(query))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn create_tag(
+    request: CreateTagRequest,
+    state: State<'_, AppState>,
+) -> Result<TagRowDto, String> {
+    state
+        .with_store(|store| store.create_tag(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn rename_tag(
+    request: RenameTagRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<TagRowDto>, String> {
+    state
+        .with_store(|store| store.rename_tag(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn update_tag_color(
+    request: UpdateTagColorRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<TagRowDto>, String> {
+    state
+        .with_store(|store| store.update_tag_color(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn delete_tag(tag_id: String, state: State<'_, AppState>) -> Result<Vec<TagRowDto>, String> {
+    state
+        .with_store(|store| store.delete_tag(&tag_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn merge_tags(
+    request: MergeTagsRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<TagRowDto>, String> {
+    state
+        .with_store(|store| store.merge_tags(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_archive(
+    query: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ArchiveItemDto>, String> {
+    state
+        .with_store(|store| store.list_archive(query))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn restore_archive_item(
+    item_id: String,
+    kind: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .with_store(|store| store.restore_archive_item(&item_id, &kind))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn delete_archive_item(
+    item_id: String,
+    kind: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .with_store(|store| store.delete_archive_item(&item_id, &kind))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn store_attachment(
+    request: StoreAttachmentRequest,
+    state: State<'_, AppState>,
+) -> Result<AttachmentStoreResultDto, String> {
+    state
+        .with_store(|store| store.store_attachment(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn export_note_markdown(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, String> {
+    state
+        .with_store(|store| store.export_note_markdown(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn export_note_zip(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, String> {
+    state
+        .with_store(|store| store.export_note_zip(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn export_project_zip(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, String> {
+    state
+        .with_store(|store| store.export_project_zip(&project_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn create_backup(state: State<'_, AppState>) -> Result<ExportResultDto, String> {
+    state
+        .with_store(|store| store.create_backup())
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn import_backup(
+    request: ImportBackupRequest,
+    state: State<'_, AppState>,
+) -> Result<WorkspaceSnapshotDto, String> {
+    state
+        .with_store(|store| store.import_backup(request))
+        .map_err(command_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store() -> DataStore {
+        let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));
+        DataStore::open(dir).expect("store opens")
+    }
+
+    #[test]
+    fn migrations_seed_only_once() {
+        let mut store = temp_store();
+        let first_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .expect("count notes");
+        store.seed_demo_data_if_needed().expect("seed idempotent");
+        let second_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .expect("count notes again");
+
+        assert_eq!(first_count, second_count);
+        assert!(first_count > 0);
+    }
+
+    #[test]
+    fn notes_projects_and_tags_crud_work() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Новая заметка".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create note");
+        let updated = store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("Текст"),
+                content_markdown: "Текст".to_string(),
+                content_html: "<p>Текст</p>".to_string(),
+                plain_text: "Текст".to_string(),
+            })
+            .expect("update note");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Проект теста".to_string(),
+                description: "Описание".to_string(),
+            })
+            .expect("create project");
+        let moved = store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: updated.id.clone(),
+                project_title: project.title.clone(),
+            })
+            .expect("move note");
+        let tag = store
+            .create_tag(CreateTagRequest {
+                name: "тест".to_string(),
+                color: "purple".to_string(),
+            })
+            .expect("create tag");
+
+        assert_eq!(updated.plain_text, "Текст");
+        assert_eq!(moved.project, "Проект теста");
+        assert_eq!(tag.name, "тест");
+    }
+
+    #[test]
+    fn search_uses_persisted_content() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "FTS проверка".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create note");
+        store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("уникальный маркер"),
+                content_markdown: "уникальный маркер".to_string(),
+                content_html: "<p>уникальный маркер</p>".to_string(),
+                plain_text: "уникальный маркер".to_string(),
+            })
+            .expect("update note");
+
+        let results = store
+            .list_notes(Some("уникальный".to_string()), false)
+            .expect("search notes");
+
+        assert!(results.iter().any(|item| item.id == note.id));
+    }
+
+    #[test]
+    fn attachments_are_written_under_managed_storage() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "С файлом".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create note");
+        let stored = store
+            .store_attachment(StoreAttachmentRequest {
+                note_id: note.id,
+                kind: "file".to_string(),
+                original_name: "../unsafe.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                bytes: b"hello".to_vec(),
+            })
+            .expect("store attachment");
+        let path = store
+            .resolve_storage_path(&stored.attachment.storage_rel_path)
+            .expect("safe path");
+
+        assert!(path.exists());
+        assert!(!stored.attachment.storage_rel_path.contains(".."));
+    }
+
+    #[test]
+    fn backup_can_be_imported_into_fresh_store() {
+        let store = temp_store();
+        let backup = store.create_backup().expect("create backup");
+        let bytes = fs::read(backup.path).expect("read backup");
+        let mut imported_store = temp_store();
+        let snapshot = imported_store
+            .import_backup(ImportBackupRequest {
+                file_name: "backup.zip".to_string(),
+                bytes,
+            })
+            .expect("import backup");
+
+        assert!(!snapshot.notes.is_empty());
+        assert!(!snapshot.projects.is_empty());
+        assert!(!snapshot.tags.is_empty());
+    }
+}

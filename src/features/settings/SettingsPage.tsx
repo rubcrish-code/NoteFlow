@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
 import { PageShell } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
@@ -8,6 +8,10 @@ interface SettingsPageProps {
   theme: ThemeMode;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
+  onBackupCreate: () => void;
+  onExportCurrentNote: () => void;
+  onExportCurrentProject: () => void;
+  onImportBackup: (file: File) => void;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
   onZoomDecrease: () => void;
@@ -32,7 +36,21 @@ const providerPresets = [
 
 type ProviderPreset = (typeof providerPresets)[number];
 
-export function SettingsPage({ appZoomPercent, theme, onNavigate, onNewNote, onThemeChange, onToast, onZoomDecrease, onZoomIncrease, onZoomReset }: SettingsPageProps) {
+export function SettingsPage({
+  appZoomPercent,
+  theme,
+  onBackupCreate,
+  onExportCurrentNote,
+  onExportCurrentProject,
+  onImportBackup,
+  onNavigate,
+  onNewNote,
+  onThemeChange,
+  onToast,
+  onZoomDecrease,
+  onZoomIncrease,
+  onZoomReset,
+}: SettingsPageProps) {
   const [activePanel, setActivePanel] = useState<SettingsPanel>("models");
   const [activeProvider, setActiveProvider] = useState<ProviderPreset>(providerPresets[0]);
 
@@ -64,7 +82,9 @@ export function SettingsPage({ appZoomPercent, theme, onNavigate, onNewNote, onT
             />
           ) : null}
           {activePanel === "language" ? <LanguageSettings onToast={onToast} /> : null}
-          {activePanel === "data" ? <DataSettings onToast={onToast} /> : null}
+          {activePanel === "data" ? (
+            <DataSettings onBackupCreate={onBackupCreate} onExportCurrentNote={onExportCurrentNote} onExportCurrentProject={onExportCurrentProject} onImportBackup={onImportBackup} />
+          ) : null}
           {activePanel === "shortcuts" ? <ShortcutsSettings /> : null}
         </section>
       </div>
@@ -278,21 +298,46 @@ function LanguageSettings({ onToast }: { onToast: (message: string) => void }) {
   );
 }
 
-function DataSettings({ onToast }: { onToast: (message: string) => void }) {
+interface DataSettingsProps {
+  onBackupCreate: () => void;
+  onExportCurrentNote: () => void;
+  onExportCurrentProject: () => void;
+  onImportBackup: (file: File) => void;
+}
+
+function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProject, onImportBackup }: DataSettingsProps) {
+  const importInputRef = useRef<HTMLInputElement>(null);
+
   return (
     <div>
       <div className="settings-title">Данные и экспорт</div>
       <div className="settings-subtitle">Выгрузите одну заметку, проект или всю базу.</div>
       <div className="settings-card export-card">
-        <button className="tb wide" onClick={() => onToast("Экспорт заметки появится на этапе экспорта")} type="button">
+        <button className="tb wide" onClick={onExportCurrentNote} type="button">
           Экспорт текущей заметки
         </button>
-        <button className="tb wide" onClick={() => onToast("Экспорт проекта появится на этапе экспорта")} type="button">
+        <button className="tb wide" onClick={onExportCurrentProject} type="button">
           Экспорт проекта
         </button>
-        <button className="tb wide" onClick={() => onToast("Резервная копия появится на этапе экспорта")} type="button">
+        <button className="tb wide" onClick={onBackupCreate} type="button">
           Экспорт всей базы и вложений
         </button>
+        <button className="tb wide" onClick={() => importInputRef.current?.click()} type="button">
+          Импорт резервной копии
+        </button>
+        <input
+          accept=".zip,application/zip"
+          hidden
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            if (file) {
+              onImportBackup(file);
+            }
+            event.currentTarget.value = "";
+          }}
+          ref={importInputRef}
+          type="file"
+        />
       </div>
     </div>
   );

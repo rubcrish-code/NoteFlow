@@ -55,6 +55,7 @@ export function NoteListPanel({ activeNoteId, notes, query, onQueryChange, onSel
             </button>
           );
         })}
+        {notes.length === 0 ? <div className="note-list-empty">Нет заметок по этому запросу.</div> : null}
       </div>
     </section>
   );

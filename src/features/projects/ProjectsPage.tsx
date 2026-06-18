@@ -1,31 +1,22 @@
 import { useState } from "react";
-import type { AppSection } from "../../app/types";
-import { mockProjects } from "../../data/mockData";
+import type { AppSection, ProjectCard } from "../../app/types";
 import { PageShell } from "../navigation/PageShell";
 
 interface ProjectsPageProps {
+  projects: ProjectCard[];
+  onCreateProject: (title: string, description: string) => void;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
+  onOpenProject: (projectTitle: string) => void;
   onToast: (message: string) => void;
 }
 
-export function ProjectsPage({ onNavigate, onNewNote, onToast }: ProjectsPageProps) {
-  const [projects, setProjects] = useState(mockProjects);
+export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast }: ProjectsPageProps) {
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
 
   function createProject(title: string, description: string) {
-    setProjects((currentProjects) => [
-      ...currentProjects,
-      {
-        id: `project-${Date.now()}`,
-        title,
-        description,
-        notes: 0,
-        tasks: 0,
-      },
-    ]);
+    onCreateProject(title, description);
     setIsProjectModalOpen(false);
-    onToast("Проект создан в памяти");
   }
 
   return (
@@ -34,7 +25,7 @@ export function ProjectsPage({ onNavigate, onNewNote, onToast }: ProjectsPagePro
       <div className="page-subtitle">Объединяйте заметки, задачи и материалы по направлениям работы.</div>
       <div className="project-grid">
         {projects.map((project) => (
-          <button className="project-card" key={project.id} onClick={() => onToast(`Открыт проект ${project.title}`)} type="button">
+          <button className="project-card" key={project.id} onClick={() => onOpenProject(project.title)} type="button">
             <div className="project-title">{project.title}</div>
             <div className="project-description">{project.description}</div>
             <div className="project-stats">
@@ -76,7 +67,7 @@ function NewProjectModal({ onClose, onCreate }: NewProjectModalProps) {
         }}
       >
         <h2>Новый проект</h2>
-        <p>Проект появится в текущей сессии и исчезнет после перезапуска приложения.</p>
+        <p>Проект будет сохранён в локальной базе NoteFlow.</p>
         <label>
           Название
           <input autoFocus onChange={(event) => setTitle(event.currentTarget.value)} placeholder="Например, Исследование рынка" value={title} />

@@ -39,6 +39,7 @@ interface EditorAreaProps {
   onOpenNote: (noteId: string) => void;
   onOpenSettingsModels: () => void;
   onRenameNote: (noteId: string, title: string) => void;
+  onStoreAttachment: (file: File, kind: "file" | "image") => Promise<{ attachment: { id: string }; sizeLabel: string }>;
   onToggleFavorite: (noteId: string) => void;
   onToggleFocus: () => void;
   onToast: (message: string) => void;
@@ -102,6 +103,7 @@ export function EditorArea({
   onOpenNote,
   onOpenSettingsModels,
   onRenameNote,
+  onStoreAttachment,
   onToggleFavorite,
   onToggleFocus,
   onToast,
@@ -186,9 +188,9 @@ export function EditorArea({
             <span>{note.project}</span>
           </div>
           <div className="ed-act">
-            <div className={`saved ${saveStatus === "saving" ? "saving" : ""}`}>
+            <div className={`saved ${saveStatus === "saving" ? "saving" : ""} ${saveStatus === "error" ? "error" : ""}`}>
               <Icon name="check" />
-              <span>{saveStatus === "saving" ? "Сохранение…" : "Сохранено"}</span>
+              <span>{saveStatus === "saving" ? "Сохранение…" : saveStatus === "error" ? "Ошибка сохранения" : "Сохранено"}</span>
             </div>
             <button className="ibtn ai" onClick={onOpenChat} type="button">
               <Icon name="chat" />
@@ -253,7 +255,7 @@ export function EditorArea({
         <button className="ibtn" data-tooltip="Вставить сложный блок" onClick={() => setIsBlockMenuOpen((value) => !value)} type="button">
           <Icon name="plus" />
         </button>
-        {isBlockMenuOpen ? <BlockInsertMenu editor={editor} notes={notes} onClose={() => setIsBlockMenuOpen(false)} onToast={onToast} /> : null}
+        {isBlockMenuOpen ? <BlockInsertMenu editor={editor} notes={notes} onClose={() => setIsBlockMenuOpen(false)} onStoreAttachment={onStoreAttachment} onToast={onToast} /> : null}
         <span className="words">{note.wordCount} слов</span>
       </div>
     </section>
@@ -270,7 +272,7 @@ function NewNoteHelper() {
     <div className="new-note-helper">
       <b>Новая заметка создана.</b>
       <br />
-      Начните писать здесь или вставьте Markdown. Пока заметка хранится только в памяти текущего сеанса.
+      Начните писать здесь или вставьте Markdown. Изменения сохраняются автоматически в локальной базе.
     </div>
   );
 }

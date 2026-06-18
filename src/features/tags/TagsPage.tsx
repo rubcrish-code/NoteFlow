@@ -1,14 +1,20 @@
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
-import type { AppSection, TagRow } from "../../app/types";
-import { mockTags } from "../../data/mockData";
+import type { AppSection, TagColor, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
 import { PageShell } from "../navigation/PageShell";
 import { TagColorPopover, tagColorPalette } from "./TagColorPopover";
 
 interface TagsPageProps {
+  tags: TagRow[];
+  onCreateTag: () => void;
+  onDeleteTag: (tagId: string) => void;
+  onMergeTags: (sourceTagId: string, targetTagId: string) => void;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
+  onOpenTag: (tagName: string) => void;
+  onRenameTag: (tagId: string, name: string) => void;
   onToast: (message: string) => void;
+  onUpdateTagColor: (tagId: string, color: TagColor, customColor?: string) => void;
 }
 
 interface ColorEditorState {
@@ -34,8 +40,7 @@ function getPopoverPosition(rect: DOMRect) {
   return { left, top };
 }
 
-export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
-  const [tags, setTags] = useState<TagRow[]>(mockTags);
+export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNavigate, onNewNote, onOpenTag, onRenameTag, onToast, onUpdateTagColor }: TagsPageProps) {
   const [query, setQuery] = useState("");
   const [colorEditor, setColorEditor] = useState<ColorEditorState | null>(null);
 
@@ -47,20 +52,6 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
     return tags.filter((tag) => tag.name.toLowerCase().includes(normalizedQuery));
   }, [query, tags]);
 
-  function createTag() {
-    const nextNumber = tags.length + 1;
-    setTags((currentTags) => [
-      ...currentTags,
-      {
-        id: `tag-${Date.now()}`,
-        name: `новый тег ${nextNumber}`,
-        count: 0,
-        color: "blue",
-      },
-    ]);
-    onToast("Тег создан в мок-данных");
-  }
-
   function openColorPopover(tagId: string, event: ReactMouseEvent<HTMLButtonElement>) {
     setColorEditor({ tagId, position: getPopoverPosition(event.currentTarget.getBoundingClientRect()) });
   }
@@ -71,19 +62,28 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
     }
 
     const preset = tagColorPalette.find((paletteItem) => paletteItem.hex.toUpperCase() === hex.toUpperCase());
-    setTags((currentTags) =>
-      currentTags.map((tag) =>
-        tag.id === colorEditor.tagId
-          ? {
-              ...tag,
-              color: preset?.color ?? tag.color,
-              customColor: hex,
-            }
-          : tag,
-      ),
-    );
+    onUpdateTagColor(colorEditor.tagId, preset?.color ?? "blue", hex);
     setColorEditor(null);
-    onToast("Цвет тега изменён");
+  }
+
+  function renameTag(tag: TagRow) {
+    const nextName = window.prompt("Новое название тега", tag.name)?.trim();
+    if (nextName) {
+      onRenameTag(tag.id, nextName);
+    }
+  }
+
+  function mergeTag(tag: TagRow) {
+    const targetName = window.prompt(`С каким тегом объединить «${tag.name}»?`)?.trim().toLowerCase();
+    if (!targetName) {
+      return;
+    }
+    const targetTag = tags.find((currentTag) => currentTag.name.toLowerCase() === targetName);
+    if (!targetTag) {
+      onToast("Целевой тег не найден");
+      return;
+    }
+    onMergeTags(tag.id, targetTag.id);
   }
 
   const editedTag = colorEditor ? tags.find((tag) => tag.id === colorEditor.tagId) : undefined;
@@ -95,7 +95,7 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
           <div className="page-title">Теги</div>
           <div className="page-subtitle">Создавайте, переименовывайте, объединяйте и удаляйте теги. Нажмите на тег, чтобы увидеть связанные заметки.</div>
         </div>
-        <button className="new-btn tags-new" onClick={createTag} type="button">
+        <button className="new-btn tags-new" onClick={onCreateTag} type="button">
           + Новый тег
         </button>
       </div>
@@ -115,23 +115,22 @@ export function TagsPage({ onNavigate, onNewNote, onToast }: TagsPageProps) {
             </div>
             <button
               onClick={() => {
-                onNavigate("notes");
-                onToast(`Открыты заметки с тегом «${tag.name}»`);
+                onOpenTag(tag.name);
               }}
               type="button"
             >
               Открыть
             </button>
-            <button onClick={() => onToast("Переименование тега будет подключено к базе на следующем этапе")} type="button">
+            <button onClick={() => renameTag(tag)} type="button">
               Переименовать
             </button>
             <button onClick={(event) => openColorPopover(tag.id, event)} type="button">
               Цвет
             </button>
-            <button onClick={() => onToast("Объединение тегов пока демонстрационное")} type="button">
+            <button onClick={() => mergeTag(tag)} type="button">
               Объединить
             </button>
-            <button className="danger" onClick={() => setTags((currentTags) => currentTags.filter((currentTag) => currentTag.id !== tag.id))} type="button">
+            <button className="danger" onClick={() => onDeleteTag(tag.id)} type="button">
               Удалить
             </button>
           </div>

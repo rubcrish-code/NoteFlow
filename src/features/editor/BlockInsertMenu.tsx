@@ -14,6 +14,7 @@ interface BlockInsertMenuProps {
   editor: Editor | null;
   notes: Note[];
   onClose: () => void;
+  onStoreAttachment: (file: File, kind: "file" | "image") => Promise<{ attachment: { id: string }; sizeLabel: string }>;
   onToast: (message: string) => void;
 }
 
@@ -67,7 +68,7 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
-export function BlockInsertMenu({ editor, notes, onClose, onToast }: BlockInsertMenuProps) {
+export function BlockInsertMenu({ editor, notes, onClose, onStoreAttachment, onToast }: BlockInsertMenuProps) {
   const [dateDraft, setDateDraft] = useState(getTodayIsoDate());
   const [formulaDraft, setFormulaDraft] = useState("a^2 + b^2 = c^2");
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -125,32 +126,38 @@ export function BlockInsertMenu({ editor, notes, onClose, onToast }: BlockInsert
     }
 
     try {
+      await onStoreAttachment(file, "image");
       const src = await readFileAsDataUrl(file);
       editor.chain().focus().setImage({ src, alt: file.name, title: file.name }).run();
-      onToast("Изображение добавлено в мок-документ");
+      onToast("Изображение сохранено во вложениях");
       onClose();
     } catch {
-      onToast("Не удалось прочитать изображение");
+      onToast("Не удалось сохранить изображение");
     }
   }
 
-  function insertFile(file: File | undefined) {
+  async function insertFile(file: File | undefined) {
     if (!file || !editor) {
       return;
     }
 
-    editor
-      .chain()
-      .focus()
-      .insertFileAttachment({
-        name: file.name,
-        size: formatFileSize(file.size),
-        storageId: `memory-${Date.now()}-${file.name}`,
-        type: file.type || "file",
-      })
-      .run();
-    onToast("Файл добавлен как локальное вложение в памяти");
-    onClose();
+    try {
+      const stored = await onStoreAttachment(file, "file");
+      editor
+        .chain()
+        .focus()
+        .insertFileAttachment({
+          name: file.name,
+          size: stored.sizeLabel || formatFileSize(file.size),
+          storageId: stored.attachment.id,
+          type: file.type || "file",
+        })
+        .run();
+      onToast("Файл сохранён во вложениях");
+      onClose();
+    } catch {
+      onToast("Не удалось сохранить файл");
+    }
   }
 
   function insertDate() {
@@ -274,7 +281,7 @@ export function BlockInsertMenu({ editor, notes, onClose, onToast }: BlockInsert
       </div>
 
       <input accept="image/*" hidden onChange={(event) => void insertImage(event.currentTarget.files?.[0])} ref={imageInputRef} type="file" />
-      <input hidden onChange={(event) => insertFile(event.currentTarget.files?.[0])} ref={fileInputRef} type="file" />
+      <input hidden onChange={(event) => void insertFile(event.currentTarget.files?.[0])} ref={fileInputRef} type="file" />
     </div>
   );
 }

@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AppSection, ArchiveItem } from "../../app/types";
-import { mockArchive } from "../../data/mockData";
 import { Icon } from "../../shared/Icon";
 import { PageShell } from "../navigation/PageShell";
 
 interface ArchivePageProps {
+  archiveItems: ArchiveItem[];
+  onDeleteItem: (item: ArchiveItem) => void;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
+  onRestoreItem: (item: ArchiveItem) => void;
   onToast: (message: string) => void;
 }
 
-export function ArchivePage({ onNavigate, onNewNote, onToast }: ArchivePageProps) {
-  const [archiveItems, setArchiveItems] = useState<ArchiveItem[]>(mockArchive);
+export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote, onRestoreItem, onToast }: ArchivePageProps) {
   const [query, setQuery] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ArchiveItem | null>(null);
 
@@ -41,8 +42,7 @@ export function ArchivePage({ onNavigate, onNewNote, onToast }: ArchivePageProps
   }, [pendingDelete]);
 
   function restoreItem(item: ArchiveItem) {
-    setArchiveItems((currentItems) => currentItems.filter((currentItem) => currentItem.id !== item.id));
-    onToast(item.kind === "Проект" ? "Проект восстановлен" : "Заметка восстановлена");
+    onRestoreItem(item);
   }
 
   function deletePermanently() {
@@ -50,8 +50,7 @@ export function ArchivePage({ onNavigate, onNewNote, onToast }: ArchivePageProps
       return;
     }
 
-    setArchiveItems((currentItems) => currentItems.filter((currentItem) => currentItem.id !== pendingDelete.id));
-    onToast(pendingDelete.kind === "Проект" ? "Проект удалён из мок-архива" : "Заметка удалена из мок-архива");
+    onDeleteItem(pendingDelete);
     setPendingDelete(null);
   }
 
@@ -89,7 +88,7 @@ export function ArchivePage({ onNavigate, onNewNote, onToast }: ArchivePageProps
           <div aria-labelledby="delete-archive-title" aria-modal="true" className="confirm-dialog" role="dialog">
             <h2 id="delete-archive-title">Удалить окончательно?</h2>
             <p>
-              «{pendingDelete.title}» будет {pendingDeleteVerb} из мок-архива текущего сеанса. Это демонстрационное действие без записи в базу.
+              «{pendingDelete.title}» будет {pendingDeleteVerb} из локальной базы NoteFlow.
             </p>
             <div className="new-note-actions">
               <button className="cancel" onClick={() => setPendingDelete(null)} type="button">
