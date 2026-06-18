@@ -15,6 +15,7 @@ import { createNotePreview } from "../features/notes/notePreview";
 import { ResizeHandle } from "../shared/ResizeHandle";
 import { Toast } from "../shared/Toast";
 import { TooltipPortal } from "../shared/TooltipPortal";
+import { useAppZoom } from "../shared/useAppZoom";
 import { usePersistentNumber, usePersistentString } from "../shared/usePersistentState";
 
 const themeModes = ["light", "dark", "system"] as const;
@@ -23,6 +24,10 @@ type WorkspaceStyle = CSSProperties & {
   "--sbw": string;
   "--listw": string;
   "--chatw": string;
+};
+
+type AppZoomStyle = CSSProperties & {
+  "--app-zoom": string;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -57,6 +62,7 @@ export function AppShell() {
   const [listWidth, setListWidth] = usePersistentNumber("noteflow.listWidth", 376, 260, 560);
   const [chatWidth, setChatWidth] = usePersistentNumber("noteflow.chatWidth", 380, 300, 620);
   const saveTimeoutRef = useRef<number | null>(null);
+  const appZoom = useAppZoom(showToast);
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0];
 
@@ -322,15 +328,29 @@ export function AppShell() {
     "--listw": `${isFocusMode ? 0 : listWidth}px`,
     "--chatw": `${isFocusMode || !isChatOpen ? 0 : chatWidth}px`,
   };
+  const sharedFooter = (
+    <SharedOverlays
+      isNewNoteModalOpen={isNewNoteModalOpen}
+      onCloseNewNote={() => setIsNewNoteModalOpen(false)}
+      onCreateNote={createNote}
+      toastMessage={toastMessage}
+    />
+  );
+
+  function renderAppFrame(children: ReactNode) {
+    return (
+      <AppFrame footer={sharedFooter} useCssZoomFallback={appZoom.useCssZoomFallback} zoomPercent={appZoom.zoomPercent}>
+        {children}
+      </AppFrame>
+    );
+  }
 
   if (activeSection === "projects") {
-    return <AppFrame footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}>
-      <ProjectsPage onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} />
-    </AppFrame>;
+    return renderAppFrame(<ProjectsPage onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} />);
   }
 
   if (activeSection === "rag") {
-    return <AppFrame footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}>
+    return renderAppFrame(
       <RagChatPage
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
@@ -340,32 +360,35 @@ export function AppShell() {
         onToast={showToast}
         sidebarCollapsed={isSidebarCollapsed}
         sidebarWidth={sidebarWidth}
-      />
-    </AppFrame>;
+      />,
+    );
   }
 
   if (activeSection === "tags") {
-    return <AppFrame footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}>
-      <TagsPage onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} />
-    </AppFrame>;
+    return renderAppFrame(<TagsPage onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} />);
   }
 
   if (activeSection === "archive") {
-    return <AppFrame footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}>
-      <ArchivePage onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} />
-    </AppFrame>;
+    return renderAppFrame(<ArchivePage onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} />);
   }
 
   if (activeSection === "settings") {
-    return <AppFrame footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}>
-      <SettingsPage onNavigate={navigate} onNewNote={openNewNoteModal} onThemeChange={setTheme} onToast={showToast} theme={theme} />
-    </AppFrame>;
+    return renderAppFrame(
+      <SettingsPage
+        appZoomPercent={appZoom.zoomPercent}
+        onNavigate={navigate}
+        onNewNote={openNewNoteModal}
+        onThemeChange={setTheme}
+        onToast={showToast}
+        onZoomDecrease={appZoom.decreaseZoom}
+        onZoomIncrease={appZoom.increaseZoom}
+        onZoomReset={appZoom.resetZoom}
+        theme={theme}
+      />,
+    );
   }
 
-  return (
-    <AppFrame
-      footer={<SharedOverlays isNewNoteModalOpen={isNewNoteModalOpen} onCloseNewNote={() => setIsNewNoteModalOpen(false)} onCreateNote={createNote} toastMessage={toastMessage} />}
-    >
+  return renderAppFrame(
       <div className={`workspace ${isSidebarCollapsed ? "collapse-sb" : ""} ${isFocusMode ? "focus" : ""} ${isChatOpen ? "chat-open" : ""}`} style={workspaceStyle}>
         {!isFocusMode ? (
           <>
@@ -430,21 +453,26 @@ export function AppShell() {
           />
         ) : null}
       </div>
-    </AppFrame>
   );
 }
 
 interface AppFrameProps {
   children: ReactNode;
   footer: ReactNode;
+  useCssZoomFallback: boolean;
+  zoomPercent: number;
 }
 
-function AppFrame({ children, footer }: AppFrameProps) {
+function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFrameProps) {
+  const zoomStyle: AppZoomStyle = {
+    "--app-zoom": String(zoomPercent / 100),
+  };
+
   return (
-    <>
+    <div className={`app-zoom-root ${useCssZoomFallback ? "css-zoom-fallback" : ""}`} style={zoomStyle}>
       {children}
       {footer}
-    </>
+    </div>
   );
 }
 

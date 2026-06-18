@@ -4,11 +4,24 @@
   --chatw: 0px;
   display: grid;
   grid-template-columns: var(--sbw) var(--listw) minmax(0, 1fr) var(--chatw);
-  height: 100vh;
+  height: 100%;
   min-width: 0;
   overflow: hidden;
   position: relative;
   transition: grid-template-columns 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-zoom-root {
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.app-zoom-root.css-zoom-fallback {
+  height: calc(100% / var(--app-zoom));
+  width: calc(100% / var(--app-zoom));
+  zoom: var(--app-zoom);
 }
 
 .workspace.focus {
@@ -1907,7 +1920,7 @@
   --page-sbw: 250px;
   display: grid;
   grid-template-columns: var(--page-sbw) minmax(0, 1fr);
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   position: relative;
 }
@@ -2285,7 +2298,7 @@
 .rag-page {
   display: grid;
   grid-template-columns: var(--ragcw, 280px) minmax(0, 1fr) var(--ragsw, 320px);
-  height: 100vh;
+  height: 100%;
   min-width: 0;
   position: relative;
 }
@@ -2790,6 +2803,84 @@
   background: #343943;
 }
 
+.zoom-settings-card {
+  align-items: center;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+}
+
+.zoom-settings-card .settings-section-head {
+  flex: 1;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.zoom-current {
+  align-items: center;
+  background: var(--asoft);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 750;
+  justify-content: center;
+  min-width: 58px;
+  padding: 6px 10px;
+}
+
+.zoom-settings-row {
+  align-items: center;
+  background: var(--side);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 4px;
+}
+
+.zoom-step-btn,
+.zoom-reset-btn {
+  align-items: center;
+  border: 0;
+  border-radius: 10px;
+  display: inline-flex;
+  font-weight: 750;
+  height: 34px;
+  justify-content: center;
+  min-width: 38px;
+}
+
+.zoom-step-btn {
+  background: transparent;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.zoom-reset-btn {
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+  color: var(--accent);
+  font-size: 12.5px;
+  min-width: 62px;
+  padding: 0 12px;
+}
+
+.zoom-step-btn:hover:not(:disabled),
+.zoom-reset-btn:hover {
+  background: var(--asoft);
+  color: var(--accent);
+}
+
+.zoom-step-btn:disabled {
+  color: var(--tfaint);
+  cursor: default;
+  opacity: 0.55;
+}
+
 .export-card {
   display: grid;
   gap: 10px;
@@ -3143,5 +3234,10 @@
     border-right: none;
     min-height: 0;
     padding-right: 0;
+  }
+
+  .zoom-settings-card {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

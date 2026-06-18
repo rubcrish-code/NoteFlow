@@ -1,13 +1,18 @@
 import { useState } from "react";
 import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
 import { PageShell } from "../navigation/PageShell";
+import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
 
 interface SettingsPageProps {
+  appZoomPercent: number;
   theme: ThemeMode;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
+  onZoomDecrease: () => void;
+  onZoomIncrease: () => void;
+  onZoomReset: () => void;
 }
 
 const settingsPanels: Array<{ id: SettingsPanel; label: string }> = [
@@ -27,7 +32,7 @@ const providerPresets = [
 
 type ProviderPreset = (typeof providerPresets)[number];
 
-export function SettingsPage({ theme, onNavigate, onNewNote, onThemeChange, onToast }: SettingsPageProps) {
+export function SettingsPage({ appZoomPercent, theme, onNavigate, onNewNote, onThemeChange, onToast, onZoomDecrease, onZoomIncrease, onZoomReset }: SettingsPageProps) {
   const [activePanel, setActivePanel] = useState<SettingsPanel>("models");
   const [activeProvider, setActiveProvider] = useState<ProviderPreset>(providerPresets[0]);
 
@@ -47,7 +52,17 @@ export function SettingsPage({ theme, onNavigate, onNewNote, onThemeChange, onTo
           {activePanel === "models" ? (
             <ModelsSettings activeProvider={activeProvider} onProviderChange={setActiveProvider} onToast={onToast} />
           ) : null}
-          {activePanel === "appearance" ? <AppearanceSettings theme={theme} onThemeChange={onThemeChange} onToast={onToast} /> : null}
+          {activePanel === "appearance" ? (
+            <AppearanceSettings
+              appZoomPercent={appZoomPercent}
+              onThemeChange={onThemeChange}
+              onToast={onToast}
+              onZoomDecrease={onZoomDecrease}
+              onZoomIncrease={onZoomIncrease}
+              onZoomReset={onZoomReset}
+              theme={theme}
+            />
+          ) : null}
           {activePanel === "language" ? <LanguageSettings onToast={onToast} /> : null}
           {activePanel === "data" ? <DataSettings onToast={onToast} /> : null}
           {activePanel === "shortcuts" ? <ShortcutsSettings /> : null}
@@ -178,12 +193,16 @@ function ModelsSettings({ activeProvider, onProviderChange, onToast }: ModelsSet
 }
 
 interface AppearanceSettingsProps {
+  appZoomPercent: number;
   theme: ThemeMode;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
+  onZoomDecrease: () => void;
+  onZoomIncrease: () => void;
+  onZoomReset: () => void;
 }
 
-function AppearanceSettings({ theme, onThemeChange, onToast }: AppearanceSettingsProps) {
+function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZoomDecrease, onZoomIncrease, onZoomReset }: AppearanceSettingsProps) {
   const options: Array<{ id: ThemeMode; label: string }> = [
     { id: "light", label: "Светлая" },
     { id: "dark", label: "Тёмная" },
@@ -216,6 +235,25 @@ function AppearanceSettings({ theme, onThemeChange, onToast }: AppearanceSetting
               <b>{option.label}</b>
             </button>
           ))}
+        </div>
+      </div>
+      <div className="settings-card zoom-settings-card">
+        <div className="settings-section-head">
+          <div>
+            <b>Масштаб интерфейса</b>
+          </div>
+          <span className="zoom-current">{appZoomPercent}%</span>
+        </div>
+        <div className="zoom-settings-row">
+          <button className="zoom-step-btn" data-tooltip="Уменьшить масштаб" disabled={appZoomPercent <= APP_ZOOM_MIN} onClick={onZoomDecrease} type="button">
+            −
+          </button>
+          <button className="zoom-reset-btn" data-tooltip="Сбросить масштаб" onClick={onZoomReset} type="button">
+            100%
+          </button>
+          <button className="zoom-step-btn" data-tooltip="Увеличить масштаб" disabled={appZoomPercent >= APP_ZOOM_MAX} onClick={onZoomIncrease} type="button">
+            +
+          </button>
         </div>
       </div>
     </div>
