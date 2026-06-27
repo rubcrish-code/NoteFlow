@@ -74,6 +74,7 @@ pub struct NoteTagDto {
     pub name: String,
     pub color: String,
     pub custom_color: Option<String>,
+    pub icon_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,6 +87,8 @@ pub struct AttachmentDto {
     pub storage_rel_path: String,
     pub mime_type: String,
     pub size_bytes: i64,
+    pub original_attachment_id: Option<String>,
+    pub edit_metadata: Value,
     pub created_at: String,
 }
 
@@ -102,7 +105,9 @@ pub struct NoteDto {
     pub project_id: Option<String>,
     pub project: String,
     pub is_favorite: bool,
-    pub icon: String,
+    pub is_pinned: bool,
+    pub pinned_at: Option<String>,
+    pub icon_key: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
@@ -118,6 +123,8 @@ pub struct ProjectCardDto {
     pub id: String,
     pub title: String,
     pub description: String,
+    pub color: String,
+    pub icon_key: Option<String>,
     pub notes: i64,
     pub tasks: i64,
     pub files: Option<i64>,
@@ -133,6 +140,7 @@ pub struct TagRowDto {
     pub count: i64,
     pub color: String,
     pub custom_color: Option<String>,
+    pub icon_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -250,6 +258,8 @@ pub struct StoreAttachmentRequest {
     pub kind: String,
     pub original_name: String,
     pub mime_type: String,
+    pub original_attachment_id: Option<String>,
+    pub edit_metadata: Option<Value>,
     pub bytes: Vec<u8>,
 }
 
@@ -279,7 +289,9 @@ struct NoteRow {
     project_id: Option<String>,
     project: String,
     is_favorite: bool,
-    icon: String,
+    is_pinned: bool,
+    pinned_at: Option<String>,
+    icon_key: Option<String>,
     created_at: String,
     updated_at: String,
     archived_at: Option<String>,
@@ -304,6 +316,8 @@ struct ProjectBackup {
     id: String,
     title: String,
     description: String,
+    color: Option<String>,
+    icon_key: Option<String>,
     status: String,
     created_at: String,
     updated_at: String,
@@ -316,6 +330,7 @@ struct TagBackup {
     name: String,
     color: String,
     custom_color: Option<String>,
+    icon_key: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -331,7 +346,11 @@ struct NoteBackup {
     plain_text: String,
     project_id: Option<String>,
     is_favorite: bool,
-    icon: String,
+    #[serde(default)]
+    is_pinned: bool,
+    pinned_at: Option<String>,
+    icon: Option<String>,
+    icon_key: Option<String>,
     created_at: String,
     updated_at: String,
     archived_at: Option<String>,
@@ -353,6 +372,9 @@ struct AttachmentBackup {
     storage_rel_path: String,
     mime_type: String,
     size_bytes: i64,
+    original_attachment_id: Option<String>,
+    #[serde(default)]
+    edit_metadata: Option<Value>,
     created_at: String,
 }
 
@@ -509,24 +531,24 @@ impl DataStore {
             self.query_note_rows(
                 "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
                         n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
-                        n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+                        n.is_favorite, n.is_pinned, n.pinned_at, n.icon_key, n.created_at, n.updated_at, n.archived_at, n.deleted_at
                  FROM notes n
                  LEFT JOIN projects p ON p.id = n.project_id
                  WHERE n.deleted_at IS NULL AND (?1 OR n.archived_at IS NULL)
-                 ORDER BY n.is_favorite DESC, n.updated_at DESC",
+                 ORDER BY n.is_pinned DESC, n.pinned_at DESC, n.updated_at DESC",
                 params![include_archived],
             )?
         } else if let Some(fts_query) = build_fts_query(&trimmed_query) {
             match self.query_note_rows(
                 "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
                         n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
-                        n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+                        n.is_favorite, n.is_pinned, n.pinned_at, n.icon_key, n.created_at, n.updated_at, n.archived_at, n.deleted_at
                  FROM notes n
                  LEFT JOIN projects p ON p.id = n.project_id
                  WHERE n.deleted_at IS NULL
                    AND (?1 OR n.archived_at IS NULL)
                    AND n.id IN (SELECT note_id FROM notes_fts WHERE notes_fts MATCH ?2)
-                 ORDER BY n.is_favorite DESC, n.updated_at DESC",
+                 ORDER BY n.is_pinned DESC, n.pinned_at DESC, n.updated_at DESC",
                 params![include_archived, fts_query],
             ) {
                 Ok(rows) => rows,
@@ -546,7 +568,7 @@ impl DataStore {
         self.query_note_rows(
             "SELECT DISTINCT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
                     n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
-                    n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+                    n.is_favorite, n.is_pinned, n.pinned_at, n.icon_key, n.created_at, n.updated_at, n.archived_at, n.deleted_at
              FROM notes n
              LEFT JOIN projects p ON p.id = n.project_id
              LEFT JOIN note_tags nt ON nt.note_id = n.id
@@ -559,7 +581,7 @@ impl DataStore {
                     OR lower(COALESCE(p.title, '')) LIKE ?2
                     OR lower(COALESCE(t.name, '')) LIKE ?2
                )
-             ORDER BY n.is_favorite DESC, n.updated_at DESC",
+             ORDER BY n.is_pinned DESC, n.pinned_at DESC, n.updated_at DESC",
             params![include_archived, like_query],
         )
     }
@@ -581,11 +603,13 @@ impl DataStore {
                 project_id: row.get(7)?,
                 project: row.get(8)?,
                 is_favorite: row.get::<_, i64>(9)? != 0,
-                icon: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
-                archived_at: row.get(13)?,
-                deleted_at: row.get(14)?,
+                is_pinned: row.get::<_, i64>(10)? != 0,
+                pinned_at: row.get(11)?,
+                icon_key: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+                archived_at: row.get(15)?,
+                deleted_at: row.get(16)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -609,7 +633,9 @@ impl DataStore {
             project_id: row.project_id,
             project: row.project,
             is_favorite: row.is_favorite,
-            icon: row.icon,
+            is_pinned: row.is_pinned,
+            pinned_at: row.pinned_at,
+            icon_key: row.icon_key,
             created_at: row.created_at,
             updated_at: row.updated_at,
             archived_at: row.archived_at,
@@ -624,7 +650,7 @@ impl DataStore {
         let rows = self.query_note_rows(
             "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
                     n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
-                    n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+                    n.is_favorite, n.is_pinned, n.pinned_at, n.icon_key, n.created_at, n.updated_at, n.archived_at, n.deleted_at
              FROM notes n
              LEFT JOIN projects p ON p.id = n.project_id
              WHERE n.id = ?1 AND n.deleted_at IS NULL",
@@ -639,7 +665,7 @@ impl DataStore {
 
     fn get_note_tags(&self, note_id: &str) -> DataResult<Vec<NoteTagDto>> {
         let mut statement = self.conn.prepare(
-            "SELECT t.id, t.name, t.color, t.custom_color
+            "SELECT t.id, t.name, t.color, t.custom_color, t.icon_key
              FROM tags t
              INNER JOIN note_tags nt ON nt.tag_id = t.id
              WHERE nt.note_id = ?1
@@ -651,6 +677,7 @@ impl DataStore {
                 name: row.get(1)?,
                 color: row.get(2)?,
                 custom_color: row.get(3)?,
+                icon_key: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -658,7 +685,8 @@ impl DataStore {
 
     fn get_note_attachments(&self, note_id: &str) -> DataResult<Vec<AttachmentDto>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at
+            "SELECT id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes,
+                    original_attachment_id, edit_metadata_json, created_at
              FROM attachments
              WHERE note_id = ?1
              ORDER BY created_at",
@@ -748,8 +776,8 @@ impl DataStore {
         self.conn.execute(
             "INSERT INTO notes (
                 id, title, note_date, content_json, content_markdown, content_html, plain_text,
-                project_id, is_favorite, icon, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10, ?10)",
+                project_id, is_favorite, icon, icon_key, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 'doc', ?9, ?10, ?10)",
             params![
                 new_id,
                 format!("{} - копия", source.title),
@@ -759,7 +787,7 @@ impl DataStore {
                 source.content_html,
                 source.plain_text,
                 source.project_id,
-                source.icon,
+                source.icon_key,
                 now
             ],
         )?;
@@ -775,13 +803,24 @@ impl DataStore {
         self.get_note(&new_id)
     }
 
-    fn toggle_favorite_note(&mut self, note_id: &str) -> DataResult<NoteDto> {
-        self.conn.execute(
-            "UPDATE notes
-             SET is_favorite = CASE WHEN is_favorite = 1 THEN 0 ELSE 1 END, updated_at = ?1
-             WHERE id = ?2 AND deleted_at IS NULL",
-            params![now_iso(), note_id],
-        )?;
+    fn toggle_note_pin(&mut self, note_id: &str) -> DataResult<NoteDto> {
+        let note = self.get_note(note_id)?;
+        let now = now_iso();
+        if note.is_pinned {
+            self.conn.execute(
+                "UPDATE notes
+                 SET is_pinned = 0, pinned_at = NULL, updated_at = ?1
+                 WHERE id = ?2 AND deleted_at IS NULL",
+                params![now, note_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE notes
+                 SET is_pinned = 1, pinned_at = ?1, updated_at = ?1
+                 WHERE id = ?2 AND deleted_at IS NULL",
+                params![now, note_id],
+            )?;
+        }
         self.get_note(note_id)
     }
 
@@ -841,7 +880,7 @@ impl DataStore {
 
     fn list_projects(&self, include_archived: bool) -> DataResult<Vec<ProjectCardDto>> {
         let mut statement = self.conn.prepare(
-            "SELECT p.id, p.title, p.description, p.status, p.archived_at,
+            "SELECT p.id, p.title, p.description, p.color, p.icon_key, p.status, p.archived_at,
                     COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND n.archived_at IS NULL THEN n.id END) AS note_count,
                     COUNT(DISTINCT a.id) AS file_count
              FROM projects p
@@ -852,14 +891,16 @@ impl DataStore {
              ORDER BY lower(p.title)",
         )?;
         let rows = statement.query_map(params![include_archived], |row| {
-            let files: i64 = row.get(6)?;
+            let files: i64 = row.get(8)?;
             Ok(ProjectCardDto {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 description: row.get(2)?,
-                status: row.get(3)?,
-                archived_at: row.get(4)?,
-                notes: row.get(5)?,
+                color: row.get(3)?,
+                icon_key: row.get(4)?,
+                status: row.get(5)?,
+                archived_at: row.get(6)?,
+                notes: row.get(7)?,
                 tasks: 0,
                 files: if files > 0 { Some(files) } else { None },
             })
@@ -877,8 +918,8 @@ impl DataStore {
         let project_id = Uuid::new_v4().to_string();
         let now = now_iso();
         self.conn.execute(
-            "INSERT INTO projects (id, title, description, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'active', ?4, ?4)",
+            "INSERT INTO projects (id, title, description, color, icon_key, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'blue', 'project', 'active', ?4, ?4)",
             params![project_id, title, description, now],
         )?;
         self.list_projects(false)?
@@ -891,7 +932,7 @@ impl DataStore {
         let trimmed_query = query.unwrap_or_default().trim().to_lowercase();
         let like_query = format!("%{trimmed_query}%");
         let mut statement = self.conn.prepare(
-            "SELECT t.id, t.name, t.color, t.custom_color,
+            "SELECT t.id, t.name, t.color, t.custom_color, t.icon_key,
                     COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND n.archived_at IS NULL THEN n.id END) AS note_count
              FROM tags t
              LEFT JOIN note_tags nt ON nt.tag_id = t.id
@@ -906,7 +947,8 @@ impl DataStore {
                 name: row.get(1)?,
                 color: row.get(2)?,
                 custom_color: row.get(3)?,
-                count: row.get(4)?,
+                icon_key: row.get(4)?,
+                count: row.get(5)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -989,8 +1031,8 @@ impl DataStore {
         let project_id = Uuid::new_v4().to_string();
         let now = now_iso();
         self.conn.execute(
-            "INSERT INTO projects (id, title, description, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'active', ?4, ?4)",
+            "INSERT INTO projects (id, title, description, color, icon_key, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'blue', 'project', 'active', ?4, ?4)",
             params![project_id, title, description, now],
         )?;
         Ok(project_id)
@@ -1011,9 +1053,10 @@ impl DataStore {
 
         let tag_id = Uuid::new_v4().to_string();
         let now = now_iso();
+        let icon_key = infer_tag_icon_key(name);
         self.conn.execute(
-            "INSERT INTO tags (id, name, color, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![tag_id, name, normalize_tag_color(color), now],
+            "INSERT INTO tags (id, name, color, icon_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![tag_id, name, normalize_tag_color(color), icon_key, now],
         )?;
         Ok(tag_id)
     }
@@ -1103,6 +1146,14 @@ impl DataStore {
         } else {
             "file"
         };
+        if kind == "image" && !is_supported_image_file(&request.mime_type, &request.original_name) {
+            return Err(DataError::InvalidInput(
+                "Поддерживаются только изображения PNG, JPEG и WebP".to_string(),
+            ));
+        }
+        if let Some(original_attachment_id) = &request.original_attachment_id {
+            self.ensure_original_image_attachment(&request.note_id, original_attachment_id)?;
+        }
         let folder = if kind == "image" {
             "images"
         } else {
@@ -1125,11 +1176,16 @@ impl DataStore {
             storage_rel_path: relative_path,
             mime_type: request.mime_type,
             size_bytes: i64::try_from(request.bytes.len()).unwrap_or(i64::MAX),
+            original_attachment_id: request.original_attachment_id,
+            edit_metadata: request.edit_metadata.unwrap_or_else(|| json!({})),
             created_at: now_iso(),
         };
         self.conn.execute(
-            "INSERT INTO attachments (id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO attachments (
+                id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes,
+                original_attachment_id, edit_metadata_json, created_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 attachment.id,
                 attachment.note_id,
@@ -1138,6 +1194,8 @@ impl DataStore {
                 attachment.storage_rel_path,
                 attachment.mime_type,
                 attachment.size_bytes,
+                attachment.original_attachment_id,
+                attachment.edit_metadata.to_string(),
                 attachment.created_at
             ],
         )?;
@@ -1146,6 +1204,28 @@ impl DataStore {
             size_label: format_file_size(attachment.size_bytes),
             attachment,
         })
+    }
+
+    fn ensure_original_image_attachment(
+        &self,
+        note_id: &str,
+        attachment_id: &str,
+    ) -> DataResult<()> {
+        let exists = self.conn.query_row(
+            "SELECT COUNT(*)
+                 FROM attachments
+                 WHERE id = ?1 AND note_id = ?2 AND kind = 'image'",
+            params![attachment_id, note_id],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+
+        if exists {
+            Ok(())
+        } else {
+            Err(DataError::InvalidInput(
+                "Оригинальное изображение не найдено в managed storage".to_string(),
+            ))
+        }
     }
 
     fn export_note_markdown(&self, note_id: &str) -> DataResult<ExportResultDto> {
@@ -1196,11 +1276,11 @@ impl DataStore {
         let rows = self.query_note_rows(
             "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
                     n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
-                    n.is_favorite, n.icon, n.created_at, n.updated_at, n.archived_at, n.deleted_at
+                    n.is_favorite, n.is_pinned, n.pinned_at, n.icon_key, n.created_at, n.updated_at, n.archived_at, n.deleted_at
              FROM notes n
              LEFT JOIN projects p ON p.id = n.project_id
              WHERE n.project_id = ?1 AND n.deleted_at IS NULL
-             ORDER BY n.updated_at DESC",
+             ORDER BY n.is_pinned DESC, n.pinned_at DESC, n.updated_at DESC",
             params![project_id],
         )?;
         let notes = rows
@@ -1307,12 +1387,14 @@ impl DataStore {
 
         for project in &backup_data.projects {
             transaction.execute(
-                "INSERT INTO projects (id, title, description, status, created_at, updated_at, archived_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO projects (id, title, description, color, icon_key, status, created_at, updated_at, archived_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     project.id,
                     project.title,
                     project.description,
+                    project.color.as_deref().unwrap_or("blue"),
+                    project.icon_key.as_deref(),
                     project.status,
                     project.created_at,
                     project.updated_at,
@@ -1322,13 +1404,16 @@ impl DataStore {
         }
         for tag in &backup_data.tags {
             transaction.execute(
-                "INSERT INTO tags (id, name, color, custom_color, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO tags (id, name, color, custom_color, icon_key, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     tag.id,
                     tag.name,
                     tag.color,
                     tag.custom_color,
+                    tag.icon_key
+                        .as_deref()
+                        .unwrap_or_else(|| infer_tag_icon_key(&tag.name)),
                     tag.created_at,
                     tag.updated_at
                 ],
@@ -1338,8 +1423,8 @@ impl DataStore {
             transaction.execute(
                 "INSERT INTO notes (
                     id, title, note_date, content_json, content_markdown, content_html, plain_text,
-                    project_id, is_favorite, icon, created_at, updated_at, archived_at, deleted_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    project_id, is_favorite, is_pinned, pinned_at, icon, icon_key, created_at, updated_at, archived_at, deleted_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                 params![
                     note.id,
                     note.title,
@@ -1350,7 +1435,10 @@ impl DataStore {
                     note.plain_text,
                     note.project_id,
                     note.is_favorite,
-                    note.icon,
+                    note.is_pinned,
+                    note.pinned_at,
+                    note.icon.as_deref().unwrap_or("doc"),
+                    note.icon_key.as_deref(),
                     note.created_at,
                     note.updated_at,
                     note.archived_at,
@@ -1366,8 +1454,11 @@ impl DataStore {
         }
         for attachment in &backup_data.attachments {
             transaction.execute(
-                "INSERT INTO attachments (id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO attachments (
+                    id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes,
+                    original_attachment_id, edit_metadata_json, created_at
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     attachment.id,
                     attachment.note_id,
@@ -1376,6 +1467,12 @@ impl DataStore {
                     attachment.storage_rel_path,
                     attachment.mime_type,
                     attachment.size_bytes,
+                    attachment.original_attachment_id,
+                    attachment
+                        .edit_metadata
+                        .clone()
+                        .unwrap_or_else(|| json!({}))
+                        .to_string(),
                     attachment.created_at
                 ],
             )?;
@@ -1440,16 +1537,18 @@ impl DataStore {
     fn collect_projects_backup(&self) -> DataResult<Vec<ProjectBackup>> {
         let mut statement = self
             .conn
-            .prepare("SELECT id, title, description, status, created_at, updated_at, archived_at FROM projects ORDER BY title")?;
+            .prepare("SELECT id, title, description, color, icon_key, status, created_at, updated_at, archived_at FROM projects ORDER BY title")?;
         let rows = statement.query_map([], |row| {
             Ok(ProjectBackup {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 description: row.get(2)?,
-                status: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-                archived_at: row.get(6)?,
+                color: row.get(3)?,
+                icon_key: row.get(4)?,
+                status: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+                archived_at: row.get(8)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1457,7 +1556,7 @@ impl DataStore {
 
     fn collect_tags_backup(&self) -> DataResult<Vec<TagBackup>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, name, color, custom_color, created_at, updated_at FROM tags ORDER BY name",
+            "SELECT id, name, color, custom_color, icon_key, created_at, updated_at FROM tags ORDER BY name",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(TagBackup {
@@ -1465,8 +1564,9 @@ impl DataStore {
                 name: row.get(1)?,
                 color: row.get(2)?,
                 custom_color: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                icon_key: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1475,9 +1575,9 @@ impl DataStore {
     fn collect_notes_backup(&self) -> DataResult<Vec<NoteBackup>> {
         let mut statement = self.conn.prepare(
             "SELECT id, title, note_date, content_json, content_markdown, content_html, plain_text,
-                    project_id, is_favorite, icon, created_at, updated_at, archived_at, deleted_at
+                    project_id, is_favorite, is_pinned, pinned_at, icon, icon_key, created_at, updated_at, archived_at, deleted_at
              FROM notes
-             ORDER BY updated_at DESC",
+             ORDER BY is_pinned DESC, pinned_at DESC, updated_at DESC",
         )?;
         let rows = statement.query_map([], |row| {
             let content_json: String = row.get(3)?;
@@ -1492,11 +1592,14 @@ impl DataStore {
                 plain_text: row.get(6)?,
                 project_id: row.get(7)?,
                 is_favorite: row.get::<_, i64>(8)? != 0,
-                icon: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
-                archived_at: row.get(12)?,
-                deleted_at: row.get(13)?,
+                is_pinned: row.get::<_, i64>(9)? != 0,
+                pinned_at: row.get(10)?,
+                icon: row.get(11)?,
+                icon_key: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+                archived_at: row.get(15)?,
+                deleted_at: row.get(16)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1517,7 +1620,8 @@ impl DataStore {
 
     fn collect_attachments_backup(&self) -> DataResult<Vec<AttachmentBackup>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes, created_at
+            "SELECT id, note_id, kind, original_name, storage_rel_path, mime_type, size_bytes,
+                    original_attachment_id, edit_metadata_json, created_at
              FROM attachments
              ORDER BY created_at",
         )?;
@@ -1530,7 +1634,9 @@ impl DataStore {
                 storage_rel_path: row.get(4)?,
                 mime_type: row.get(5)?,
                 size_bytes: row.get(6)?,
-                created_at: row.get(7)?,
+                original_attachment_id: row.get(7)?,
+                edit_metadata: serde_json::from_str::<Value>(&row.get::<_, String>(8)?).ok(),
+                created_at: row.get(9)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1735,6 +1841,66 @@ fn migrations() -> Vec<Migration> {
                 CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
             ",
         },
+        Migration {
+            version: 3,
+            name: "icon_keys",
+            sql: "
+                ALTER TABLE projects ADD COLUMN icon_key TEXT;
+                ALTER TABLE projects ADD COLUMN color TEXT NOT NULL DEFAULT 'blue';
+                ALTER TABLE tags ADD COLUMN icon_key TEXT;
+                ALTER TABLE notes ADD COLUMN icon_key TEXT;
+
+                UPDATE projects
+                SET icon_key = 'project'
+                WHERE icon_key IS NULL;
+
+                UPDATE projects
+                SET color = CASE id
+                    WHEN 'project-noteflow' THEN 'blue'
+                    WHEN 'project-market' THEN 'purple'
+                    WHEN 'project-personal' THEN 'green'
+                    ELSE color
+                END;
+
+                UPDATE tags
+                SET icon_key = CASE
+                    WHEN lower(id) LIKE '%docs%' OR lower(name) LIKE '%док%' THEN 'document'
+                    WHEN lower(id) LIKE '%planning%' OR lower(name) LIKE '%план%' THEN 'task'
+                    WHEN lower(id) LIKE '%ideas%' OR lower(name) LIKE '%иде%' THEN 'idea'
+                    WHEN lower(id) LIKE '%research%' OR lower(id) LIKE '%personal%' OR lower(name) LIKE '%исслед%' OR lower(name) LIKE '%лич%' THEN 'person'
+                    WHEN lower(id) LIKE '%project%' OR lower(id) LIKE '%architecture%' OR lower(name) LIKE '%проект%' OR lower(name) LIKE '%архитект%' THEN 'project'
+                    WHEN lower(id) LIKE '%code%' OR lower(name) LIKE '%код%' OR lower(name) LIKE '%api%' THEN 'code'
+                    ELSE 'tag'
+                END
+                WHERE icon_key IS NULL;
+            ",
+        },
+        Migration {
+            version: 4,
+            name: "pinned_notes",
+            sql: "
+                ALTER TABLE notes ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE notes ADD COLUMN pinned_at TEXT;
+
+                UPDATE notes
+                SET is_pinned = CASE WHEN is_favorite = 1 THEN 1 ELSE 0 END,
+                    pinned_at = CASE WHEN is_favorite = 1 THEN updated_at ELSE NULL END
+                WHERE is_pinned = 0;
+
+                CREATE INDEX IF NOT EXISTS idx_notes_pinned_at ON notes(is_pinned, pinned_at);
+            ",
+        },
+        Migration {
+            version: 5,
+            name: "image_edit_metadata",
+            sql: "
+                ALTER TABLE attachments ADD COLUMN original_attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL;
+                ALTER TABLE attachments ADD COLUMN edit_metadata_json TEXT NOT NULL DEFAULT '{}';
+
+                CREATE INDEX IF NOT EXISTS idx_attachments_original_attachment_id
+                    ON attachments(original_attachment_id);
+            ",
+        },
     ]
 }
 
@@ -1745,6 +1911,8 @@ fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
             "project-noteflow",
             "NoteFlow",
             "Приложение для заметок и базы знаний",
+            "blue",
+            "project",
             "active",
             None,
         ),
@@ -1752,6 +1920,8 @@ fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
             "project-market",
             "Исследование рынка",
             "Конкуренты, пользователи и идеи развития",
+            "purple",
+            "project",
             "active",
             None,
         ),
@@ -1759,6 +1929,8 @@ fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
             "project-personal",
             "Личные заметки",
             "Идеи, обучение и личные планы",
+            "green",
+            "project",
             "active",
             None,
         ),
@@ -1766,16 +1938,18 @@ fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
             "project-old-redesign",
             "Старый проект редизайна",
             "Архивное направление",
+            "blue",
+            "project",
             "archived",
             Some(now.clone()),
         ),
     ];
 
-    for (id, title, description, status, archived_at) in projects {
+    for (id, title, description, color, icon_key, status, archived_at) in projects {
         transaction.execute(
-            "INSERT OR IGNORE INTO projects (id, title, description, status, created_at, updated_at, archived_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
-            params![id, title, description, status, now, archived_at],
+            "INSERT OR IGNORE INTO projects (id, title, description, color, icon_key, status, created_at, updated_at, archived_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)",
+            params![id, title, description, color, icon_key, status, now, archived_at],
         )?;
     }
     Ok(())
@@ -1784,19 +1958,19 @@ fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
 fn seed_tags(transaction: &Transaction<'_>) -> DataResult<()> {
     let now = now_iso();
     let tags = [
-        ("tag-project", "проект", "blue"),
-        ("tag-architecture", "архитектура", "purple"),
-        ("tag-docs", "документация", "green"),
-        ("tag-ideas", "идеи", "amber"),
-        ("tag-personal", "личное", "pink"),
-        ("tag-planning", "планирование", "green"),
-        ("tag-research", "исследования", "purple"),
+        ("tag-project", "проект", "blue", "project"),
+        ("tag-architecture", "архитектура", "purple", "project"),
+        ("tag-docs", "документация", "green", "document"),
+        ("tag-ideas", "идеи", "amber", "idea"),
+        ("tag-personal", "личное", "pink", "person"),
+        ("tag-planning", "планирование", "green", "task"),
+        ("tag-research", "исследования", "purple", "person"),
     ];
 
-    for (id, name, color) in tags {
+    for (id, name, color, icon_key) in tags {
         transaction.execute(
-            "INSERT OR IGNORE INTO tags (id, name, color, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![id, name, color, now],
+            "INSERT OR IGNORE INTO tags (id, name, color, icon_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![id, name, color, icon_key, now],
         )?;
     }
     Ok(())
@@ -1810,7 +1984,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "Архитектура проекта",
             note_date: "2026-06-14",
             project_id: "project-noteflow",
-            icon: "doc",
             is_favorite: true,
             tags: &["tag-project", "tag-architecture", "tag-docs"],
             archived: false,
@@ -1821,7 +1994,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "Планирование спринта",
             note_date: "2026-06-13",
             project_id: "project-noteflow",
-            icon: "check",
             is_favorite: false,
             tags: &["tag-planning"],
             archived: false,
@@ -1832,7 +2004,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "Исследование пользователей",
             note_date: "2026-05-22",
             project_id: "project-market",
-            icon: "person",
             is_favorite: false,
             tags: &["tag-research"],
             archived: false,
@@ -1843,7 +2014,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "Идеи для улучшения",
             note_date: "2026-05-20",
             project_id: "project-market",
-            icon: "bulb",
             is_favorite: false,
             tags: &["tag-ideas"],
             archived: false,
@@ -1854,7 +2024,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "Документация API",
             note_date: "2026-05-18",
             project_id: "project-noteflow",
-            icon: "code",
             is_favorite: false,
             tags: &["tag-docs"],
             archived: false,
@@ -1865,7 +2034,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "Заметки по саду",
             note_date: "2026-05-12",
             project_id: "project-personal",
-            icon: "bulb",
             is_favorite: false,
             tags: &["tag-personal"],
             archived: false,
@@ -1876,7 +2044,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "План запуска версии 2.0",
             note_date: "2026-05-25",
             project_id: "project-noteflow",
-            icon: "doc",
             is_favorite: false,
             tags: &["tag-planning"],
             archived: true,
@@ -1887,7 +2054,6 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
             title: "Исследование рынка Q1",
             note_date: "2026-05-18",
             project_id: "project-market",
-            icon: "person",
             is_favorite: false,
             tags: &["tag-research"],
             archived: true,
@@ -1904,11 +2070,16 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
         } else {
             None
         };
+        let pinned_at = if note.is_favorite {
+            Some(now.clone())
+        } else {
+            None
+        };
         transaction.execute(
             "INSERT OR IGNORE INTO notes (
                 id, title, note_date, content_json, content_markdown, content_html, plain_text,
-                project_id, is_favorite, icon, created_at, updated_at, archived_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)",
+                project_id, is_favorite, is_pinned, pinned_at, icon, created_at, updated_at, archived_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'doc', ?12, ?12, ?13)",
             params![
                 note.id,
                 note.title,
@@ -1919,7 +2090,8 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
                 plain_text,
                 note.project_id,
                 note.is_favorite,
-                note.icon,
+                note.is_favorite,
+                pinned_at,
                 now,
                 archived_at
             ],
@@ -1940,7 +2112,6 @@ struct SeedNote {
     title: &'static str,
     note_date: &'static str,
     project_id: &'static str,
-    icon: &'static str,
     is_favorite: bool,
     tags: &'static [&'static str],
     archived: bool,
@@ -1958,6 +2129,7 @@ fn set_setting_tx(transaction: &Transaction<'_>, key: &str, value: Value) -> Dat
 }
 
 fn attachment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentDto> {
+    let edit_metadata_json: String = row.get(8)?;
     Ok(AttachmentDto {
         id: row.get(0)?,
         note_id: row.get(1)?,
@@ -1966,7 +2138,9 @@ fn attachment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentDt
         storage_rel_path: row.get(4)?,
         mime_type: row.get(5)?,
         size_bytes: row.get(6)?,
-        created_at: row.get(7)?,
+        original_attachment_id: row.get(7)?,
+        edit_metadata: serde_json::from_str(&edit_metadata_json).unwrap_or_else(|_| json!({})),
+        created_at: row.get(9)?,
     })
 }
 
@@ -1997,6 +2171,23 @@ fn ensure_safe_relative_path(relative_path: &str) -> DataResult<()> {
         }
     }
     Ok(())
+}
+
+fn is_supported_image_file(mime_type: &str, file_name: &str) -> bool {
+    let normalized_mime = mime_type.trim().to_lowercase();
+    if matches!(
+        normalized_mime.as_str(),
+        "image/png" | "image/jpeg" | "image/jpg" | "image/webp"
+    ) {
+        return true;
+    }
+
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp")
 }
 
 fn sanitize_file_name(value: &str) -> String {
@@ -2032,6 +2223,39 @@ fn normalize_tag_color(color: &str) -> String {
     match color {
         "blue" | "green" | "purple" | "amber" | "pink" => color.to_string(),
         _ => "blue".to_string(),
+    }
+}
+
+fn infer_tag_icon_key(name: &str) -> &'static str {
+    let normalized = name.to_lowercase();
+    if normalized.contains("код") || normalized.contains("api") || normalized.contains("dev") {
+        "code"
+    } else if normalized.contains("зада")
+        || normalized.contains("план")
+        || normalized.contains("todo")
+        || normalized.contains("task")
+    {
+        "task"
+    } else if normalized.contains("иде") || normalized.contains("idea") {
+        "idea"
+    } else if normalized.contains("исслед")
+        || normalized.contains("польз")
+        || normalized.contains("лич")
+        || normalized.contains("research")
+        || normalized.contains("user")
+        || normalized.contains("personal")
+    {
+        "person"
+    } else if normalized.contains("проект")
+        || normalized.contains("архитект")
+        || normalized.contains("project")
+        || normalized.contains("architecture")
+    {
+        "project"
+    } else if normalized.contains("док") || normalized.contains("doc") {
+        "document"
+    } else {
+        "tag"
     }
 }
 
@@ -2083,10 +2307,7 @@ fn markdown_to_plain_text(markdown: &str) -> String {
             !trimmed.starts_with('|') && !trimmed.starts_with("```")
         })
         .map(|line| {
-            line.replace('#', "")
-                .replace("**", "")
-                .replace('*', "")
-                .replace('`', "")
+            line.replace(['#', '*', '`'], "")
                 .replace("- [x]", "")
                 .replace("- [ ]", "")
                 .replace("- ", "")
@@ -2147,12 +2368,8 @@ fn export_result(path: PathBuf, relative_path: String, message: &str) -> ExportR
 
 fn build_fts_query(query: &str) -> Option<String> {
     let terms = query
-        .split_whitespace()
-        .map(|term| {
-            term.chars()
-                .filter(|character| character.is_alphanumeric())
-                .collect::<String>()
-        })
+        .split(|character: char| !character.is_alphanumeric())
+        .map(str::trim)
         .filter(|term| !term.is_empty())
         .map(|term| format!("{term}*"))
         .collect::<Vec<_>>();
@@ -2223,12 +2440,9 @@ pub fn duplicate_note(note_id: String, state: State<'_, AppState>) -> Result<Not
 }
 
 #[tauri::command]
-pub fn toggle_favorite_note(
-    note_id: String,
-    state: State<'_, AppState>,
-) -> Result<NoteDto, String> {
+pub fn toggle_note_pin(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, String> {
     state
-        .with_store(|store| store.toggle_favorite_note(&note_id))
+        .with_store(|store| store.toggle_note_pin(&note_id))
         .map_err(command_error)
 }
 
@@ -2505,6 +2719,102 @@ mod tests {
     }
 
     #[test]
+    fn note_pinning_crud_and_sorting_work() {
+        let mut store = temp_store();
+        let pinned_columns: Vec<String> = store
+            .conn
+            .prepare("PRAGMA table_info(notes)")
+            .expect("prepare notes schema")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("read notes schema")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect notes schema");
+        assert!(pinned_columns.iter().any(|column| column == "is_pinned"));
+        assert!(pinned_columns.iter().any(|column| column == "pinned_at"));
+
+        let ordinary = store
+            .create_note(CreateNoteRequest {
+                title: "pin-test ordinary".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create ordinary note");
+        let selected = store
+            .create_note(CreateNoteRequest {
+                title: "pin-test selected".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create selected note");
+
+        let pinned = store
+            .toggle_note_pin(&ordinary.id)
+            .expect("pin ordinary note");
+        let filtered = store
+            .list_notes(Some("pin-test".to_string()), false)
+            .expect("list filtered notes");
+
+        assert!(pinned.is_pinned);
+        assert!(pinned.pinned_at.is_some());
+        let persisted_pin_state = store
+            .conn
+            .query_row(
+                "SELECT is_pinned, pinned_at FROM notes WHERE id = ?1",
+                params![ordinary.id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .expect("read persisted pin state");
+        assert_eq!(persisted_pin_state.0, 1);
+        assert!(persisted_pin_state.1.is_some());
+        assert_eq!(
+            filtered.first().map(|note| note.id.as_str()),
+            Some(ordinary.id.as_str())
+        );
+        assert!(filtered.iter().any(|note| note.id == selected.id));
+
+        let unpinned = store
+            .toggle_note_pin(&ordinary.id)
+            .expect("unpin ordinary note");
+        assert!(!unpinned.is_pinned);
+        assert!(unpinned.pinned_at.is_none());
+        let persisted_unpin_state = store
+            .conn
+            .query_row(
+                "SELECT is_pinned, pinned_at FROM notes WHERE id = ?1",
+                params![ordinary.id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .expect("read persisted unpin state");
+        assert_eq!(persisted_unpin_state, (0, None));
+    }
+
+    #[test]
+    fn note_pinning_persists_after_reopen() {
+        let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));
+        let note_id = {
+            let mut store = DataStore::open(dir.clone()).expect("store opens");
+            let note = store
+                .create_note(CreateNoteRequest {
+                    title: "pin-test persisted".to_string(),
+                    note_date: "2026-06-18".to_string(),
+                })
+                .expect("create note");
+            store.toggle_note_pin(&note.id).expect("pin note");
+            note.id
+        };
+
+        let reopened_store = DataStore::open(dir).expect("store reopens");
+        let notes = reopened_store
+            .list_notes(Some("pin-test persisted".to_string()), false)
+            .expect("list persisted note");
+        let persisted_note = notes
+            .into_iter()
+            .find(|note| note.id == note_id)
+            .expect("persisted note exists");
+
+        assert!(persisted_note.is_pinned);
+        assert!(persisted_note.pinned_at.is_some());
+    }
+
+    #[test]
     fn search_uses_persisted_content() {
         let mut store = temp_store();
         let note = store
@@ -2545,6 +2855,8 @@ mod tests {
                 kind: "file".to_string(),
                 original_name: "../unsafe.txt".to_string(),
                 mime_type: "text/plain".to_string(),
+                original_attachment_id: None,
+                edit_metadata: None,
                 bytes: b"hello".to_vec(),
             })
             .expect("store attachment");
@@ -2558,7 +2870,16 @@ mod tests {
 
     #[test]
     fn backup_can_be_imported_into_fresh_store() {
-        let store = temp_store();
+        let mut store = temp_store();
+        let pinned_note = store
+            .create_note(CreateNoteRequest {
+                title: "backup pinned note".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create pinned note");
+        store
+            .toggle_note_pin(&pinned_note.id)
+            .expect("pin note for backup");
         let backup = store.create_backup().expect("create backup");
         let bytes = fs::read(backup.path).expect("read backup");
         let mut imported_store = temp_store();
@@ -2572,5 +2893,9 @@ mod tests {
         assert!(!snapshot.notes.is_empty());
         assert!(!snapshot.projects.is_empty());
         assert!(!snapshot.tags.is_empty());
+        assert!(snapshot
+            .notes
+            .iter()
+            .any(|note| note.title == "backup pinned note" && note.is_pinned));
     }
 }

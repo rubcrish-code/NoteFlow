@@ -20,6 +20,7 @@ import { useAppZoom } from "../shared/useAppZoom";
 import { usePersistentNumber, usePersistentString } from "../shared/usePersistentState";
 
 const themeModes = ["light", "dark", "system"] as const;
+const closeFlushTimeoutMs = 3500;
 
 type WorkspaceStyle = CSSProperties & {
   "--sbw": string;
@@ -52,6 +53,28 @@ function isTextInputTarget(target: EventTarget | null) {
   return target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 }
 
+function noteSortTimestamp(value: string | undefined) {
+  if (!value) {
+    return 0;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function sortNotesForDisplay(notes: Note[]) {
+  return [...notes].sort((firstNote, secondNote) => {
+    const firstPinned = firstNote.pinned ? 1 : 0;
+    const secondPinned = secondNote.pinned ? 1 : 0;
+    if (firstPinned !== secondPinned) {
+      return secondPinned - firstPinned;
+    }
+
+    const firstTimestamp = firstNote.pinned ? noteSortTimestamp(firstNote.pinnedAt ?? firstNote.updatedAt) : noteSortTimestamp(firstNote.updatedAt);
+    const secondTimestamp = secondNote.pinned ? noteSortTimestamp(secondNote.pinnedAt ?? secondNote.updatedAt) : noteSortTimestamp(secondNote.updatedAt);
+    return secondTimestamp - firstTimestamp;
+  });
+}
+
 export function AppShell() {
   const [activeSection, setActiveSection] = useState<AppSection>("notes");
   const [notes, setNotes] = useState<Note[]>([]);
@@ -73,6 +96,7 @@ export function AppShell() {
   const [chatWidth, setChatWidth] = usePersistentNumber("noteflow.chatWidth", 380, 300, 620);
   const saveTimeoutRef = useRef<number | null>(null);
   const pendingSaveRef = useRef<PendingNoteSave | null>(null);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
   const isClosingRef = useRef(false);
   const appZoom = useAppZoom(showToast);
 
@@ -173,19 +197,23 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    const appWindow = getCurrentWindow();
+    let appWindow: ReturnType<typeof getCurrentWindow>;
+    try {
+      appWindow = getCurrentWindow();
+    } catch {
+      return undefined;
+    }
+
     let detachCloseListener: (() => void) | undefined;
 
     void appWindow
       .onCloseRequested(async (event) => {
-        if (isClosingRef.current || pendingSaveRef.current === null) {
+        if (isClosingRef.current) {
           return;
         }
 
         event.preventDefault();
-        await flushPendingSave();
-        isClosingRef.current = true;
-        await appWindow.close();
+        void closeWindowAfterSafeFlush(appWindow);
       })
       .then((unlisten) => {
         detachCloseListener = unlisten;
@@ -261,7 +289,7 @@ export function AppShell() {
   }
 
   function replaceNote(updatedNote: Note) {
-    setNotes((currentNotes) => currentNotes.map((note) => (note.id === updatedNote.id ? updatedNote : note)));
+    setNotes((currentNotes) => sortNotesForDisplay(currentNotes.map((note) => (note.id === updatedNote.id ? updatedNote : note))));
   }
 
   async function refreshSecondaryData() {
@@ -277,6 +305,10 @@ export function AppShell() {
       saveTimeoutRef.current = null;
     }
 
+    if (saveInFlightRef.current) {
+      await saveInFlightRef.current;
+    }
+
     const pendingSave = pendingSaveRef.current;
     if (!pendingSave) {
       return;
@@ -284,21 +316,75 @@ export function AppShell() {
 
     pendingSaveRef.current = null;
     setSaveStatus("saving");
-    try {
-      const savedNote = await dataService.updateNoteContent({
+    let savePromise: Promise<void>;
+    savePromise = dataService
+      .updateNoteContent({
         contentHtml: pendingSave.contentHtml,
         contentMarkdown: pendingSave.contentMarkdown,
         editorDocument: pendingSave.editorDocument,
         id: pendingSave.noteId,
         plainText: pendingSave.plainText,
+      })
+      .then((savedNote) => {
+        replaceNote(savedNote);
+        setSaveStatus("saved");
+      })
+      .catch((error) => {
+        pendingSaveRef.current = pendingSave;
+        setSaveStatus("error");
+        showToast(`Ошибка сохранения: ${String(error)}`);
+      })
+      .finally(() => {
+        if (saveInFlightRef.current === savePromise) {
+          saveInFlightRef.current = null;
+        }
       });
-      replaceNote(savedNote);
-      setSaveStatus("saved");
-    } catch (error) {
-      pendingSaveRef.current = pendingSave;
-      setSaveStatus("error");
-      showToast(`Ошибка сохранения: ${String(error)}`);
+    saveInFlightRef.current = savePromise;
+    await savePromise;
+  }
+
+  async function closeWindowAfterSafeFlush(appWindow: ReturnType<typeof getCurrentWindow>) {
+    if (isClosingRef.current) {
+      return;
     }
+
+    isClosingRef.current = true;
+    const flushResult = await waitForCloseFlush();
+    if (flushResult === "timeout") {
+      setSaveStatus("error");
+    }
+
+    requestNativeAppQuit(appWindow);
+  }
+
+  function requestNativeAppQuit(appWindow: ReturnType<typeof getCurrentWindow>) {
+    const fallbackTimeoutId = window.setTimeout(() => closeWindowFallback(appWindow), 1200);
+    void dataService.quitApp().catch(() => {
+      window.clearTimeout(fallbackTimeoutId);
+      closeWindowFallback(appWindow);
+    });
+  }
+
+  function closeWindowFallback(appWindow: ReturnType<typeof getCurrentWindow>) {
+    void appWindow.destroy().catch(() => {
+      void appWindow.close().catch(() => undefined);
+    });
+  }
+
+  function waitForCloseFlush(): Promise<"completed" | "timeout"> {
+    return new Promise((resolve) => {
+      const timeoutId = window.setTimeout(() => resolve("timeout"), closeFlushTimeoutMs);
+      void flushPendingSave().then(
+        () => {
+          window.clearTimeout(timeoutId);
+          resolve("completed");
+        },
+        () => {
+          window.clearTimeout(timeoutId);
+          resolve("completed");
+        },
+      );
+    });
   }
 
   function updateNoteEditor(noteId: string, editorDocument: EditorDocument, contentHtml: string, contentMarkdown: string, plainText: string, wordCount: number) {
@@ -363,7 +449,7 @@ export function AppShell() {
     try {
       await flushPendingSave();
       const newNote = await dataService.createNote(title, noteDate);
-      setNotes((currentNotes) => [newNote, ...currentNotes.filter((note) => note.id !== newNote.id)]);
+      setNotes((currentNotes) => sortNotesForDisplay([newNote, ...currentNotes.filter((note) => note.id !== newNote.id)]));
       setActiveNoteId(newNote.id);
       setQuery("");
       setIsNewNoteModalOpen(false);
@@ -408,21 +494,21 @@ export function AppShell() {
     void flushPendingSave()
       .then(() => dataService.duplicateNote(noteId))
       .then((duplicatedNote) => {
-        setNotes((currentNotes) => [duplicatedNote, ...currentNotes.filter((note) => note.id !== duplicatedNote.id)]);
+        setNotes((currentNotes) => sortNotesForDisplay([duplicatedNote, ...currentNotes.filter((note) => note.id !== duplicatedNote.id)]));
         setActiveNoteId(duplicatedNote.id);
         showToast("Заметка дублирована");
       })
       .catch((error) => showToast(`Не удалось дублировать заметку: ${String(error)}`));
   }
 
-  function toggleFavoriteNote(noteId: string) {
+  function toggleNotePin(noteId: string) {
     void dataService
-      .toggleFavoriteNote(noteId)
+      .toggleNotePin(noteId)
       .then((updatedNote) => {
         replaceNote(updatedNote);
-        showToast("Избранное обновлено");
+        showToast(updatedNote.pinned ? "Заметка закреплена" : "Заметка откреплена");
       })
-      .catch((error) => showToast(`Не удалось обновить избранное: ${String(error)}`));
+      .catch((error) => showToast(`Не удалось обновить закрепление: ${String(error)}`));
   }
 
   function moveNote(noteId: string, project: string) {
@@ -458,11 +544,11 @@ export function AppShell() {
       .catch((error) => showToast(`Не удалось экспортировать Markdown: ${String(error)}`));
   }
 
-  function storeAttachment(file: File, kind: "file" | "image") {
+  function storeAttachment(file: File, kind: "file" | "image", options: dataService.StoreAttachmentOptions = {}) {
     if (!activeNote) {
       return Promise.reject(new Error("Нет активной заметки"));
     }
-    return dataService.storeAttachment(activeNote.id, file, kind).then(async (result) => {
+    return dataService.storeAttachment(activeNote.id, file, kind, options).then(async (result) => {
       setNotes((currentNotes) =>
         currentNotes.map((note) => (note.id === activeNote.id ? { ...note, attachments: [...note.attachments, result.attachment] } : note)),
       );
@@ -727,7 +813,15 @@ export function AppShell() {
                 onResize={(deltaX) => setSidebarWidth((currentWidth) => clamp(currentWidth + deltaX, 190, 360))}
               />
             ) : null}
-            <NoteListPanel activeNoteId={activeNote?.id ?? ""} notes={notes} onQueryChange={setQuery} onSelectNote={(noteId) => void openNote(noteId)} query={query} />
+            <NoteListPanel
+              activeNoteId={activeNote?.id ?? ""}
+              notes={notes}
+              onQueryChange={setQuery}
+              onSelectNote={(noteId) => void openNote(noteId)}
+              onTogglePin={toggleNotePin}
+              projects={projects}
+              query={query}
+            />
             <ResizeHandle
               className="resize-list"
               label="Изменить ширину списка заметок"
@@ -758,7 +852,7 @@ export function AppShell() {
             }}
             onRenameNote={renameNote}
             onStoreAttachment={storeAttachment}
-            onToggleFavorite={toggleFavoriteNote}
+            onTogglePin={toggleNotePin}
             onToast={showToast}
             onToggleFocus={toggleFocusMode}
             projectOptions={projectOptions}

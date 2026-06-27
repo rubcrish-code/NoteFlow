@@ -34,6 +34,7 @@ export type IconName =
   | "noteLink"
   | "ol"
   | "person"
+  | "pin"
   | "plus"
   | "quote"
   | "redo"
@@ -269,6 +270,12 @@ export function Icon({ name, ...props }: IconProps) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
           <circle cx="12" cy="8" r="3.2" />
           <path d="M5.5 19a6.5 6.5 0 0 1 13 0" strokeLinecap="round" />
+        </svg>
+      );
+    case "pin":
+      return (
+        <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+          <path d="M9 4h6l-1 6 3 3v2h-4v5l-1 1-1-1v-5H6v-2l3-3z" />
         </svg>
       );
     case "plus":

@@ -1,11 +1,68 @@
 mod data;
 
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
 use tauri::Manager;
+
+const CLOSE_REQUEST_FALLBACK_TIMEOUT: Duration = Duration::from_secs(7);
+
+#[derive(Clone)]
+struct CloseRequestGuard {
+    is_active: Arc<AtomicBool>,
+}
+
+impl CloseRequestGuard {
+    fn new() -> Self {
+        Self {
+            is_active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn schedule_fallback(&self) {
+        if self.is_active.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        thread::spawn(move || {
+            thread::sleep(CLOSE_REQUEST_FALLBACK_TIMEOUT);
+            // Last resort: the frontend close flow has already had time to flush and quit.
+            std::process::exit(0);
+        });
+    }
+}
+
+fn exit_process(app_handle: &tauri::AppHandle) -> ! {
+    app_handle.cleanup_before_exit();
+    std::process::exit(0);
+}
+
+#[tauri::command]
+fn quit_app(app_handle: tauri::AppHandle) {
+    exit_process(&app_handle);
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let close_guard = CloseRequestGuard::new();
+
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .on_window_event({
+            let close_guard = close_guard.clone();
+            move |window, event| {
+                if window.label() == "main"
+                    && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+                {
+                    close_guard.schedule_fallback();
+                }
+            }
+        })
         .setup(|app| {
             let state = data::init_state(app)?;
             app.manage(state);
@@ -38,10 +95,24 @@ pub fn run() {
             data::restore_archive_item,
             data::restore_note,
             data::store_attachment,
-            data::toggle_favorite_note,
+            data::toggle_note_pin,
+            quit_app,
             data::update_note_content,
             data::update_tag_color
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Destroyed,
+            ..
+        } = event
+        {
+            if label == "main" {
+                exit_process(app_handle);
+            }
+        }
+    });
 }

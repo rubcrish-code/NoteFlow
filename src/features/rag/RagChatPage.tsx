@@ -3,7 +3,7 @@ import type { AppSection } from "../../app/types";
 import { ragHistory } from "../../data/mockData";
 import { Icon } from "../../shared/Icon";
 import { ResizeHandle } from "../../shared/ResizeHandle";
-import { usePersistentNumber } from "../../shared/usePersistentState";
+import { usePersistentNumber, usePersistentString } from "../../shared/usePersistentState";
 import { PageShell } from "../navigation/PageShell";
 
 interface RagChatPageProps {
@@ -21,6 +21,9 @@ type RagPageStyle = CSSProperties & {
   "--ragcw": string;
   "--ragsw": string;
 };
+
+const ragSourcesCollapsedValues = ["true", "false"] as const;
+const ragSourceCount = 2;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -40,6 +43,10 @@ export function RagChatPage({
   const [activeDialogIndex, setActiveDialogIndex] = useState(0);
   const [conversationWidth, setConversationWidth] = usePersistentNumber("noteflow.ragConversationWidth", 280, 220, 380);
   const [sourcesWidth, setSourcesWidth] = usePersistentNumber("noteflow.ragSourcesWidth", 320, 260, 460);
+  const defaultSourcesCollapsed: (typeof ragSourcesCollapsedValues)[number] = typeof window !== "undefined" && window.innerWidth <= 1200 ? "true" : "false";
+  const [sourcesCollapsed, setSourcesCollapsed] = usePersistentString("noteflow.ragSourcesPanelCollapsed", defaultSourcesCollapsed, ragSourcesCollapsedValues);
+  const isSourcesCollapsed = sourcesCollapsed === "true";
+  const hasSources = ragSourceCount > 0;
 
   const ragPageStyle: RagPageStyle = {
     "--ragcw": `${conversationWidth}px`,
@@ -68,7 +75,7 @@ export function RagChatPage({
       sidebarCollapsed={sidebarCollapsed}
       sidebarWidth={sidebarWidth}
     >
-      <div className="rag-page" style={ragPageStyle}>
+      <div className={`rag-page ${isSourcesCollapsed ? "sources-collapsed" : ""}`} style={ragPageStyle}>
         <aside className="rag-conversations" aria-label="История диалогов">
           <button className="new-btn rag-new-chat" onClick={() => onToast("Новый чат по базе создан в памяти")} type="button">
             <Icon name="plus" />
@@ -105,10 +112,24 @@ export function RagChatPage({
               <Icon name="chat" />
               <span className="crumb-strong">ИИ-чат по базе</span>
             </div>
-            <button className="ibtn ai" onClick={() => onNavigate("notes")} type="button">
-              <Icon name="doc" />
-              <span>К заметкам</span>
-            </button>
+            <div className="rag-top-actions">
+              {isSourcesCollapsed ? (
+                <button
+                  className="ibtn ai rag-sources-open"
+                  disabled={!hasSources}
+                  onClick={() => setSourcesCollapsed("false")}
+                  title={hasSources ? "Показать источники" : "Источников пока нет"}
+                  type="button"
+                >
+                  <Icon name="doc" />
+                  <span>{hasSources ? "Источники" : "Источников пока нет"}</span>
+                </button>
+              ) : null}
+              <button className="ibtn ai" onClick={() => onNavigate("notes")} type="button">
+                <Icon name="doc" />
+                <span>К заметкам</span>
+              </button>
+            </div>
           </div>
 
           <div className="rag-chat-scroll">
@@ -157,35 +178,44 @@ export function RagChatPage({
             </div>
           </div>
         </section>
-        <ResizeHandle
-          className="rag-sources-resize"
-          label="Изменить ширину источников RAG"
-          onReset={() => setSourcesWidth(320)}
-          onResize={(deltaX) => setSourcesWidth((currentWidth) => clamp(currentWidth - deltaX, 260, 460))}
-        />
-        <aside className="rag-sources-panel" aria-label="Источники ответа">
-          <div className="rag-sources-panel-head">
-            <b>Источники</b>
-            <span>мок-выдача</span>
-          </div>
-          <button className="rag-source-card" onClick={() => onNavigate("notes")} type="button">
-            <Icon name="doc" />
-            <span>
-              <b>Идеи для RAG-вкладки</b>
-              <small>Фрагмент про vector search и rerank</small>
-            </span>
-          </button>
-          <button className="rag-source-card" onClick={() => onNavigate("notes")} type="button">
-            <Icon name="doc" />
-            <span>
-              <b>Архитектура проекта</b>
-              <small>Модульная структура и локальное хранение</small>
-            </span>
-          </button>
-          <div className="rag-source-meta">
-            Источники пока статические. На этапе RAG здесь появятся реальные ссылки на заметки и цитаты из индекса.
-          </div>
-        </aside>
+        {!isSourcesCollapsed ? (
+          <>
+            <ResizeHandle
+              className="rag-sources-resize"
+              label="Изменить ширину источников RAG"
+              onReset={() => setSourcesWidth(320)}
+              onResize={(deltaX) => setSourcesWidth((currentWidth) => clamp(currentWidth - deltaX, 260, 460))}
+            />
+            <aside className="rag-sources-panel" aria-label="Источники ответа">
+              <div className="rag-sources-panel-head">
+                <span className="rag-sources-panel-title">
+                  <b>Источники</b>
+                  <span>мок-выдача</span>
+                </span>
+                <button aria-label="Скрыть источники" className="rag-sources-close" onClick={() => setSourcesCollapsed("true")} type="button">
+                  <Icon name="x" />
+                </button>
+              </div>
+              <button className="rag-source-card" onClick={() => onNavigate("notes")} type="button">
+                <Icon name="doc" />
+                <span>
+                  <b>Идеи для RAG-вкладки</b>
+                  <small>Фрагмент про vector search и rerank</small>
+                </span>
+              </button>
+              <button className="rag-source-card" onClick={() => onNavigate("notes")} type="button">
+                <Icon name="doc" />
+                <span>
+                  <b>Архитектура проекта</b>
+                  <small>Модульная структура и локальное хранение</small>
+                </span>
+              </button>
+              <div className="rag-source-meta">
+                Источники пока статические. На этапе RAG здесь появятся реальные ссылки на заметки и цитаты из индекса.
+              </div>
+            </aside>
+          </>
+        ) : null}
       </div>
     </PageShell>
   );

@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Color } from "@tiptap/extension-color";
 import Highlight from "@tiptap/extension-highlight";
-import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
@@ -16,8 +15,11 @@ import { TextStyle } from "@tiptap/extension-text-style";
 import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import type { EditorDocument, Note, SaveStatus } from "../../app/types";
+import type { EditorDocument, Note, NoteAttachment, SaveStatus } from "../../app/types";
 import { Icon } from "../../shared/Icon";
+import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNodeView";
+import { ImageEditorModal } from "../imageEditor/ImageEditorModal";
+import { createEditedImageFileName, dataUrlToFile, type ImageEditMode, type ImageEditMetadata } from "../imageEditor/imageEditService";
 import { BlockInsertMenu } from "./BlockInsertMenu";
 import { FormattingToolbar } from "./FormattingToolbar";
 import { NoteMenuPopover } from "./NoteMenuPopover";
@@ -39,54 +41,62 @@ interface EditorAreaProps {
   onOpenNote: (noteId: string) => void;
   onOpenSettingsModels: () => void;
   onRenameNote: (noteId: string, title: string) => void;
-  onStoreAttachment: (file: File, kind: "file" | "image") => Promise<{ attachment: { id: string }; sizeLabel: string }>;
-  onToggleFavorite: (noteId: string) => void;
+  onStoreAttachment: (
+    file: File,
+    kind: "file" | "image",
+    options?: { editMetadata?: Record<string, unknown>; originalAttachmentId?: string },
+  ) => Promise<{ attachment: NoteAttachment; sizeLabel: string }>;
+  onTogglePin: (noteId: string) => void;
   onToggleFocus: () => void;
   onToast: (message: string) => void;
   projectOptions: string[];
   saveStatus: SaveStatus;
 }
 
-const editorExtensions = [
-  StarterKit.configure({
-    heading: {
-      levels: [1, 2, 3],
-    },
-  }),
-  Underline,
-  TextStyle,
-  FontFormat,
-  Color,
-  Highlight.configure({ multicolor: true }),
-  Superscript,
-  Subscript,
-  TaskList,
-  TaskItem.configure({ nested: true }),
-  Table.configure({ resizable: true }),
-  TableRow,
-  TableHeader,
-  TableCell,
-  TextAlign.configure({
-    types: ["heading", "paragraph"],
-  }),
-  Link.configure({
-    autolink: true,
-    linkOnPaste: true,
-    openOnClick: false,
-  }),
-  Image.configure({
-    inline: false,
-  }),
-  Callout,
-  DetailsBlock,
-  DetailsSummary,
-  DetailsContent,
-  FileAttachment,
-  NoteMention,
-  InlineDate,
-  FormulaInline,
-  FormulaBlock,
-];
+function createEditorExtensions(options: { onEditImage: (target: EditableImageTarget) => void; onToast: (message: string) => void }) {
+  return [
+    StarterKit.configure({
+      heading: {
+        levels: [1, 2, 3],
+      },
+    }),
+    Underline,
+    TextStyle,
+    FontFormat,
+    Color,
+    Highlight.configure({ multicolor: true }),
+    Superscript,
+    Subscript,
+    TaskList,
+    TaskItem.configure({ nested: true }),
+    Table.configure({ resizable: true }),
+    TableRow,
+    TableHeader,
+    TableCell,
+    TextAlign.configure({
+      types: ["heading", "paragraph"],
+    }),
+    Link.configure({
+      autolink: true,
+      linkOnPaste: true,
+      openOnClick: false,
+    }),
+    EditableImage.configure({
+      inline: false,
+      onEditImage: options.onEditImage,
+      onToast: options.onToast,
+    }),
+    Callout,
+    DetailsBlock,
+    DetailsSummary,
+    DetailsContent,
+    FileAttachment,
+    NoteMention,
+    InlineDate,
+    FormulaInline,
+    FormulaBlock,
+  ];
+}
 
 export function EditorArea({
   isFocusMode,
@@ -104,7 +114,7 @@ export function EditorArea({
   onOpenSettingsModels,
   onRenameNote,
   onStoreAttachment,
-  onToggleFavorite,
+  onTogglePin,
   onToggleFocus,
   onToast,
   projectOptions,
@@ -112,10 +122,12 @@ export function EditorArea({
 }: EditorAreaProps) {
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
   const [isNoteMenuOpen, setIsNoteMenuOpen] = useState(false);
+  const [imageEditTarget, setImageEditTarget] = useState<EditableImageTarget | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const loadedNoteIdRef = useRef<string | null>(null);
   const noteIdRef = useRef(note.id);
   const onOpenNoteRef = useRef(onOpenNote);
+  const editorExtensions = useMemo(() => createEditorExtensions({ onEditImage: setImageEditTarget, onToast }), [onToast]);
 
   const editor = useEditor({
     content: note.editorDocument,
@@ -177,6 +189,40 @@ export function EditorArea({
 
   const isEmptyNote = note.contentMarkdown.trim().length === 0;
 
+  async function applyImageEdit(dataUrl: string, mode: ImageEditMode) {
+    const target = imageEditTarget;
+    if (!target) {
+      return;
+    }
+
+    const metadata: ImageEditMetadata = {
+      appliedAt: new Date().toISOString(),
+      mode,
+    };
+    const originalAttachmentId = target.attrs.originalAttachmentId ?? target.attrs.attachmentId ?? undefined;
+    const fileName = createEditedImageFileName(mode, target.attrs.title ?? target.attrs.alt ?? "image");
+
+    try {
+      const editedFile = await dataUrlToFile(dataUrl, fileName);
+      const stored = await onStoreAttachment(editedFile, "image", {
+        editMetadata: metadata,
+        originalAttachmentId,
+      });
+      target.updateAttributes({
+        attachmentId: stored.attachment.id,
+        editedAttachmentId: stored.attachment.id,
+        editMetadata: metadata,
+        originalAttachmentId: originalAttachmentId ?? target.attrs.originalAttachmentId ?? null,
+        originalSrc: target.attrs.originalSrc ?? target.attrs.src,
+        src: dataUrl,
+      });
+      setImageEditTarget(null);
+      onToast(mode === "crop" ? "Изображение обрезано" : "Аннотации применены");
+    } catch (error) {
+      onToast(`Не удалось сохранить изображение: ${String(error)}`);
+    }
+  }
+
   return (
     <section className="editor-col">
       {!isFocusMode ? (
@@ -212,7 +258,7 @@ export function EditorArea({
                 onExportMarkdown={onExportMarkdown}
                 onMove={onMoveNote}
                 onRename={onRenameNote}
-                onToggleFavorite={onToggleFavorite}
+                onTogglePin={onTogglePin}
                 projectOptions={projectOptions}
               />
             ) : null}
@@ -250,6 +296,16 @@ export function EditorArea({
           </div>
         </div>
       </div>
+
+      {imageEditTarget ? (
+        <ImageEditorModal
+          mode={imageEditTarget.mode}
+          onApply={(dataUrl, mode) => void applyImageEdit(dataUrl, mode)}
+          onClose={() => setImageEditTarget(null)}
+          src={imageEditTarget.attrs.src}
+          title={imageEditTarget.attrs.title ?? imageEditTarget.attrs.alt ?? "Изображение"}
+        />
+      ) : null}
 
       <div className="ed-bottom">
         <button className="ibtn" data-tooltip="Вставить сложный блок" onClick={() => setIsBlockMenuOpen((value) => !value)} type="button">

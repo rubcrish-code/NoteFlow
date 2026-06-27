@@ -1,6 +1,7 @@
 import { useEditorState, type Editor } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shared/Icon";
+import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
 import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
 import { FontFormatPopover, type FontFormatDraft } from "./FontFormatPopover";
 import { findFontFamilyValue, formatFontSize, normalizeFontSizeValue } from "./fontFormatOptions";
@@ -78,6 +79,21 @@ const toolbarTools: ToolbarTool[] = [
 
 const deferredTools = new Set<ToolId>();
 
+const aiActionGroups = [
+  {
+    id: "rewrite",
+    items: ["Улучшить текст", "Исправить ошибки", "Сократить", "Развернуть подробнее"],
+  },
+  {
+    id: "transform",
+    items: ["Изменить тон", "Сделать список задач", "Перевести", "Объяснить простыми словами"],
+  },
+  {
+    id: "knowledge",
+    items: ["Найти связанные заметки", "Спросить по этому тексту"],
+  },
+] as const;
+
 interface ToolbarRuntimeState {
   active: Partial<Record<ToolId, boolean>>;
   canRedo: boolean;
@@ -99,9 +115,17 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
   const [fontDraft, setFontDraft] = useState<FontFormatDraft>({ fontFamily: "", fontSize: "" });
   const [popoverMode, setPopoverMode] = useState<EditorCommandPopoverMode | null>(null);
+  const aiButtonRef = useRef<HTMLButtonElement>(null);
   const aiMenuRef = useRef<HTMLDivElement>(null);
   const fontMenuRef = useRef<HTMLSpanElement>(null);
   const mouseCommandRef = useRef(false);
+  const aiMenuStyle = useFloatingPopoverPosition({
+    anchorRef: aiButtonRef,
+    isOpen: isAiMenuOpen,
+    maxHeight: 560,
+    popoverRef: aiMenuRef,
+    preferredWidth: 348,
+  });
   const toolbarState =
     useEditorState({
       editor,
@@ -118,7 +142,13 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
 
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
-      if (target instanceof Node && isAiMenuOpen && aiMenuRef.current && !aiMenuRef.current.contains(target)) {
+      if (
+        target instanceof Node &&
+        isAiMenuOpen &&
+        aiMenuRef.current &&
+        !aiMenuRef.current.contains(target) &&
+        !aiButtonRef.current?.contains(target)
+      ) {
         setIsAiMenuOpen(false);
       }
       if (target instanceof Node && isFontMenuOpen && fontMenuRef.current && !fontMenuRef.current.contains(target)) {
@@ -333,6 +363,7 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
                 className={`tb ${toolbarState.active[tool.id] ? "active" : ""} ${tool.id === "ai" ? "ai" : ""}`}
                 data-tooltip={tool.tip}
                 disabled={disabled}
+                ref={tool.id === "ai" ? aiButtonRef : undefined}
                 onClick={() => {
                   if (mouseCommandRef.current) {
                     mouseCommandRef.current = false;
@@ -401,7 +432,7 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
       </div>
 
       {isAiMenuOpen ? (
-        <div className="editor-ai-menu" ref={aiMenuRef} role="menu">
+        <div className="editor-ai-menu" ref={aiMenuRef} role="menu" style={aiMenuStyle ?? { visibility: "hidden" }}>
           <div className="editor-command-head">
             <b>ИИ-помощник</b>
             <button aria-label="Закрыть" className="editor-popover-close" onClick={() => setIsAiMenuOpen(false)} type="button">
@@ -411,6 +442,23 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
           <div className="ai-disconnected-state">
             <b>ИИ-модель не подключена</b>
             <span>Подключите локальную или OpenAI-совместимую модель, чтобы использовать действия для выделения и текущей заметки.</span>
+          </div>
+          <div className="ai-menu-groups">
+            {aiActionGroups.map((group) => (
+              <div className="ai-menu-group" key={group.id}>
+                {group.items.map((item) => (
+                  <button
+                    className="ai-action-item"
+                    key={item}
+                    onClick={() => onToast("ИИ-действия будут доступны после подключения модели")}
+                    role="menuitem"
+                    type="button"
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            ))}
           </div>
           <button
             className="ai-settings-link"

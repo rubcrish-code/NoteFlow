@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
-import type { Note } from "../../app/types";
+import type { Note, NoteAttachment } from "../../app/types";
 import { Icon, type IconName } from "../../shared/Icon";
 import type { CalloutVariant } from "./customExtensions";
 
@@ -14,7 +14,11 @@ interface BlockInsertMenuProps {
   editor: Editor | null;
   notes: Note[];
   onClose: () => void;
-  onStoreAttachment: (file: File, kind: "file" | "image") => Promise<{ attachment: { id: string }; sizeLabel: string }>;
+  onStoreAttachment: (
+    file: File,
+    kind: "file" | "image",
+    options?: { editMetadata?: Record<string, unknown>; originalAttachmentId?: string },
+  ) => Promise<{ attachment: NoteAttachment; sizeLabel: string }>;
   onToast: (message: string) => void;
 }
 
@@ -126,9 +130,21 @@ export function BlockInsertMenu({ editor, notes, onClose, onStoreAttachment, onT
     }
 
     try {
-      await onStoreAttachment(file, "image");
+      const stored = await onStoreAttachment(file, "image");
       const src = await readFileAsDataUrl(file);
-      editor.chain().focus().setImage({ src, alt: file.name, title: file.name }).run();
+      const imageAttrs = {
+        alt: file.name,
+        attachmentId: stored.attachment.id,
+        originalAttachmentId: stored.attachment.id,
+        originalSrc: src,
+        src,
+        title: file.name,
+      };
+      editor
+        .chain()
+        .focus()
+        .setImage(imageAttrs)
+        .run();
       onToast("Изображение сохранено во вложениях");
       onClose();
     } catch {

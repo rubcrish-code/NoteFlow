@@ -11,7 +11,7 @@ interface NoteMenuPopoverProps {
   onExportMarkdown: (noteId: string) => void;
   onMove: (noteId: string, project: string) => void;
   onRename: (noteId: string, title: string) => void;
-  onToggleFavorite: (noteId: string) => void;
+  onTogglePin: (noteId: string) => void;
   projectOptions: string[];
 }
 
@@ -26,7 +26,7 @@ export function NoteMenuPopover({
   onExportMarkdown,
   onMove,
   onRename,
-  onToggleFavorite,
+  onTogglePin,
   projectOptions,
 }: NoteMenuPopoverProps) {
   const [mode, setMode] = useState<NoteMenuMode>("actions");
@@ -132,12 +132,12 @@ export function NoteMenuPopover({
           </button>
           <button
             onClick={() => {
-              onToggleFavorite(note.id);
+              onTogglePin(note.id);
               onClose();
             }}
             type="button"
           >
-            {note.pinned ? "Убрать из избранного" : "Добавить в избранное"}
+            {note.pinned ? "Открепить заметку" : "Закрепить заметку"}
           </button>
           <button onClick={() => setMode("move")} type="button">
             Переместить

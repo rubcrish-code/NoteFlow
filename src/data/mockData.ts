@@ -57,7 +57,6 @@ export const mockNotes: Note[] = [
     noteDate: "2026-06-14",
     project: "NoteFlow",
     pinned: true,
-    icon: "doc",
     tags: [
       { id: "tag-project", name: "проект", color: "blue" },
       { id: "tag-architecture", name: "архитектура", color: "purple" },
@@ -76,7 +75,6 @@ export const mockNotes: Note[] = [
     dateLabel: "Вчера",
     noteDate: "2026-06-13",
     project: "NoteFlow",
-    icon: "check",
     tags: [{ id: "tag-planning", name: "планирование", color: "green" }],
     updatedAt: "2026-06-13T12:00:00.000Z",
     wordCount: 84,
@@ -91,7 +89,6 @@ export const mockNotes: Note[] = [
     dateLabel: "22 мая",
     noteDate: "2026-05-22",
     project: "Исследование рынка",
-    icon: "person",
     tags: [{ id: "tag-research", name: "исследования", color: "purple" }],
     updatedAt: "2026-05-22T12:00:00.000Z",
     wordCount: 142,
@@ -106,7 +103,6 @@ export const mockNotes: Note[] = [
     dateLabel: "20 мая",
     noteDate: "2026-05-20",
     project: "Исследование рынка",
-    icon: "bulb",
     tags: [{ id: "tag-ideas", name: "идеи", color: "amber" }],
     updatedAt: "2026-05-20T12:00:00.000Z",
     wordCount: 73,
@@ -121,7 +117,6 @@ export const mockNotes: Note[] = [
     dateLabel: "18 мая",
     noteDate: "2026-05-18",
     project: "NoteFlow",
-    icon: "code",
     tags: [{ id: "tag-docs", name: "документация", color: "blue" }],
     updatedAt: "2026-05-18T12:00:00.000Z",
     wordCount: 211,
@@ -136,7 +131,6 @@ export const mockNotes: Note[] = [
     dateLabel: "15 мая",
     noteDate: "2026-05-15",
     project: "NoteFlow",
-    icon: "person",
     tags: [{ id: "tag-retro", name: "ретроспектива", color: "pink" }],
     updatedAt: "2026-05-15T12:00:00.000Z",
     wordCount: 95,
@@ -151,7 +145,6 @@ export const mockNotes: Note[] = [
     dateLabel: "12 мая",
     noteDate: "2026-05-12",
     project: "Личные заметки",
-    icon: "bulb",
     tags: [{ id: "tag-personal", name: "личное", color: "green" }],
     updatedAt: "2026-05-12T12:00:00.000Z",
     wordCount: 67,
@@ -161,6 +154,8 @@ export const mockNotes: Note[] = [
 export const mockProjects: ProjectCard[] = [
   {
     id: "noteflow",
+    color: "blue",
+    iconKey: "project",
     title: "NoteFlow",
     description: "Приложение для заметок и базы знаний",
     notes: 24,
@@ -169,6 +164,8 @@ export const mockProjects: ProjectCard[] = [
   },
   {
     id: "market",
+    color: "purple",
+    iconKey: "project",
     title: "Исследование рынка",
     description: "Конкуренты, пользователи и идеи развития",
     notes: 11,
@@ -177,6 +174,8 @@ export const mockProjects: ProjectCard[] = [
   },
   {
     id: "personal",
+    color: "green",
+    iconKey: "project",
     title: "Личные заметки",
     description: "Идеи, обучение и личные планы",
     notes: 18,
@@ -185,11 +184,11 @@ export const mockProjects: ProjectCard[] = [
 ];
 
 export const mockTags: TagRow[] = [
-  { id: "project", name: "проект", count: 28, color: "blue" },
-  { id: "architecture", name: "архитектура", count: 14, color: "purple" },
-  { id: "docs", name: "документация", count: 19, color: "green" },
-  { id: "ideas", name: "идеи", count: 11, color: "amber" },
-  { id: "personal", name: "личное", count: 7, color: "pink" },
+  { id: "project", name: "проект", count: 28, color: "blue", iconKey: "project" },
+  { id: "architecture", name: "архитектура", count: 14, color: "purple", iconKey: "project" },
+  { id: "docs", name: "документация", count: 19, color: "green", iconKey: "document" },
+  { id: "ideas", name: "идеи", count: 11, color: "amber", iconKey: "idea" },
+  { id: "personal", name: "личное", count: 7, color: "pink", iconKey: "person" },
 ];
 
 export const mockArchive: ArchiveItem[] = [

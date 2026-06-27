@@ -7,6 +7,13 @@ const formattingToolbarSource = readFileSync("src/features/editor/FormattingTool
 const fontFormatPopoverSource = readFileSync("src/features/editor/FontFormatPopover.tsx", "utf8");
 const fontFormatOptionsSource = readFileSync("src/features/editor/fontFormatOptions.ts", "utf8");
 const customExtensionsSource = readFileSync("src/features/editor/customExtensions.ts", "utf8");
+const dataServiceSource = readFileSync("src/services/dataService.ts", "utf8");
+const imageCropToolSource = readFileSync("src/features/imageEditor/ImageCropTool.tsx", "utf8");
+const imageGeometrySource = readFileSync("src/features/imageEditor/imageGeometry.ts", "utf8");
+const imageNodeViewSource = readFileSync("src/features/imageEditor/ImageNodeView.tsx", "utf8");
+const imageEditorModalSource = readFileSync("src/features/imageEditor/ImageEditorModal.tsx", "utf8");
+const noteListPanelSource = readFileSync("src/features/notes/NoteListPanel.tsx", "utf8");
+const noteMenuPopoverSource = readFileSync("src/features/editor/NoteMenuPopover.tsx", "utf8");
 const pageShellSource = readFileSync("src/features/navigation/PageShell.tsx", "utf8");
 const ragChatPageSource = readFileSync("src/features/rag/RagChatPage.tsx", "utf8");
 const appShellSource = readFileSync("src/app/AppShell.tsx", "utf8");
@@ -62,5 +69,43 @@ describe("toolbar and block insert menu contract", () => {
     assert.match(ragChatPageSource, /sidebarCollapsed/);
     assert.match(appShellSource, /noteflow\.sidebarWidth/);
     assert.match(appShellSource, /<RagChatPage[\s\S]*sidebarWidth=\{sidebarWidth\}/);
+  });
+
+  it("exposes note pinning explicitly", () => {
+    assert.match(noteMenuPopoverSource, /Закрепить заметку/);
+    assert.match(noteMenuPopoverSource, /Открепить заметку/);
+    assert.match(noteListPanelSource, /pin-action/);
+    assert.match(noteListPanelSource, /onTogglePin/);
+    assert.match(dataServiceSource, /toggle_note_pin/);
+  });
+
+  it("keeps image editing in a dedicated feature module", () => {
+    assert.match(imageNodeViewSource, /Изменить размер/);
+    assert.match(imageNodeViewSource, /Обрезать/);
+    assert.match(imageNodeViewSource, /Рисовать/);
+    assert.match(imageEditorModalSource, /ImageCropTool/);
+    assert.match(imageEditorModalSource, /ImageAnnotationCanvas/);
+  });
+
+  it("uses production image resize handles instead of caret buttons", () => {
+    for (const handle of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
+      assert.match(imageGeometrySource, new RegExp(`"${handle}"`));
+      assert.match(imageNodeViewSource, new RegExp(`image-resize-handle-\\$\\{handle\\}`));
+    }
+    assert.match(imageNodeViewSource, /setPointerCapture/);
+    assert.match(imageNodeViewSource, /resizeImageBox/);
+    assert.doesNotMatch(imageNodeViewSource, /Icon name="caret"/);
+    assert.doesNotMatch(imageNodeViewSource, /className="image-resize-handle left"/);
+  });
+
+  it("keeps crop interactions precise and handle based", () => {
+    assert.match(imageCropToolSource, /image-crop-canvas/);
+    assert.match(imageCropToolSource, /image-crop-layer/);
+    assert.match(imageCropToolSource, /moveRectWithinBounds/);
+    assert.match(imageCropToolSource, /resizeRectWithinBounds/);
+    assert.match(imageCropToolSource, /createRectFromPoints/);
+    assert.match(imageCropToolSource, /setPointerCapture/);
+    assert.match(imageCropToolSource, /image-crop-handle-/);
+    assert.doesNotMatch(imageCropToolSource, /image-crop-overlay/);
   });
 });

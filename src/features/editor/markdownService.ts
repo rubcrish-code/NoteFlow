@@ -496,7 +496,18 @@ export function tiptapJsonToMarkdown(document: EditorDocument): string {
         return tableToMarkdown(node);
       }
       if (node.type === "image") {
-        return `![${String(node.attrs?.alt ?? "")}](${String(node.attrs?.src ?? "")})`;
+        const alt = String(node.attrs?.alt ?? "");
+        const src = String(node.attrs?.src ?? "");
+        const title = String(node.attrs?.title ?? "");
+        const height = typeof node.attrs?.height === "number" ? node.attrs.height : null;
+        const width = typeof node.attrs?.width === "number" ? node.attrs.width : null;
+        if (width || height || title) {
+          const titleAttribute = title ? ` title="${escapeHtmlAttribute(title)}"` : "";
+          const heightAttribute = height ? ` height="${height}"` : "";
+          const widthAttribute = width ? ` width="${width}"` : "";
+          return `<img src="${escapeHtmlAttribute(src)}" alt="${escapeHtmlAttribute(alt)}"${titleAttribute}${widthAttribute}${heightAttribute}>`;
+        }
+        return `![${alt}](${src})`;
       }
       if (node.type === "noteMention") {
         return `@[[${String(node.attrs?.label ?? "Заметка")}]]`;
@@ -655,7 +666,21 @@ function nodeToHtml(node: EditorNode): string {
     return `<td>${(node.content ?? []).map(nodeToHtml).join("")}</td>`;
   }
   if (node.type === "image") {
-    return `<img src="${escapeHtml(String(node.attrs?.src ?? ""))}" alt="${escapeHtml(String(node.attrs?.alt ?? ""))}">`;
+    const height = typeof node.attrs?.height === "number" ? node.attrs.height : null;
+    const width = typeof node.attrs?.width === "number" ? node.attrs.width : null;
+    const title = String(node.attrs?.title ?? "");
+    const titleAttribute = title ? ` title="${escapeHtmlAttribute(title)}"` : "";
+    const dataWidthAttribute = width ? ` data-image-width="${width}"` : "";
+    const dataHeightAttribute = height ? ` data-image-height="${height}"` : "";
+    const style = [
+      width ? `width: ${width}px` : null,
+      height ? `height: ${height}px` : null,
+      height ? "object-fit: fill" : null,
+      "max-width: 100%",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    return `<img src="${escapeHtmlAttribute(String(node.attrs?.src ?? ""))}" alt="${escapeHtmlAttribute(String(node.attrs?.alt ?? ""))}"${titleAttribute}${dataWidthAttribute}${dataHeightAttribute} style="${style}">`;
   }
   if (node.type === "callout") {
     const variant = escapeHtml(String(node.attrs?.variant ?? "info"));

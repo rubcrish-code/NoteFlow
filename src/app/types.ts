@@ -12,13 +12,14 @@ export type SaveStatus = "error" | "saved" | "saving";
 
 export type TagColor = "blue" | "green" | "purple" | "amber" | "pink";
 
-export type NoteIcon = "doc" | "check" | "person" | "bulb" | "code";
+export type NoteIconKey = "code" | "document" | "idea" | "person" | "project" | "tag" | "task";
 
 export interface NoteTag {
   customColor?: string;
   id: string;
   name: string;
   color: TagColor;
+  iconKey?: NoteIconKey;
 }
 
 export interface NoteAttachment {
@@ -28,6 +29,8 @@ export interface NoteAttachment {
   mimeType: string;
   noteId: string;
   originalName: string;
+  originalAttachmentId?: string;
+  editMetadata?: Record<string, unknown>;
   sizeBytes: number;
   storageRelPath: string;
 }
@@ -48,7 +51,8 @@ export interface Note {
   projectId?: string;
   project: string;
   pinned?: boolean;
-  icon: NoteIcon;
+  pinnedAt?: string;
+  iconKey?: NoteIconKey;
   tags: NoteTag[];
   wordCount: number;
   isNew?: boolean;
@@ -59,6 +63,8 @@ export interface ProjectCard {
   id: string;
   title: string;
   description: string;
+  color: TagColor;
+  iconKey?: NoteIconKey;
   notes: number;
   status?: string;
   tasks: number;
@@ -71,6 +77,7 @@ export interface TagRow {
   count: number;
   color: TagColor;
   customColor?: string;
+  iconKey?: NoteIconKey;
 }
 
 export interface ArchiveItem {

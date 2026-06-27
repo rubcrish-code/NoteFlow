@@ -1,15 +1,28 @@
-import type { Note } from "../../app/types";
+import { useMemo, type CSSProperties } from "react";
+import type { Note, ProjectCard } from "../../app/types";
 import { Icon } from "../../shared/Icon";
+import { resolveNoteIcon, type ResolvedNoteIcon } from "../../shared/noteIconRegistry";
 
 interface NoteListPanelProps {
   activeNoteId: string;
   notes: Note[];
+  projects: ProjectCard[];
   query: string;
   onQueryChange: (query: string) => void;
   onSelectNote: (noteId: string) => void;
+  onTogglePin: (noteId: string) => void;
 }
 
-export function NoteListPanel({ activeNoteId, notes, query, onQueryChange, onSelectNote }: NoteListPanelProps) {
+export function NoteListPanel({ activeNoteId, notes, projects, query, onQueryChange, onSelectNote, onTogglePin }: NoteListPanelProps) {
+  const projectByKey = useMemo(() => {
+    const nextProjectByKey = new Map<string, ProjectCard>();
+    projects.forEach((project) => {
+      nextProjectByKey.set(project.id, project);
+      nextProjectByKey.set(project.title, project);
+    });
+    return nextProjectByKey;
+  }, [projects]);
+
   return (
     <section className="list">
       <div className="list-top">
@@ -32,31 +45,50 @@ export function NoteListPanel({ activeNoteId, notes, query, onQueryChange, onSel
       <div className="cards">
         {notes.map((note) => {
           const primaryTag = note.tags[0];
+          const project = (note.projectId ? projectByKey.get(note.projectId) : undefined) ?? projectByKey.get(note.project);
+          const resolvedIcon = resolveNoteIcon(note, project);
           return (
-            <button className={`card ${activeNoteId === note.id ? "on" : ""}`} key={note.id} onClick={() => onSelectNote(note.id)} type="button">
-              {note.pinned ? (
-                <span className="pin" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M9 4h6l-1 6 3 3v2h-4v5l-1 1-1-1v-5H6v-2l3-3z" />
-                  </svg>
+            <div className={`card ${activeNoteId === note.id ? "on" : ""} ${note.pinned ? "pinned" : ""}`} key={note.id}>
+              <button className="card-hit" onClick={() => onSelectNote(note.id)} type="button">
+                <span className={`ic tag-bg-${resolvedIcon.color}`} style={getCustomIconStyle(resolvedIcon)}>
+                  <Icon name={resolvedIcon.iconName} />
                 </span>
-              ) : null}
-              <span className={`ic tag-bg-${primaryTag.color}`}>
-                <Icon name={note.icon} />
-              </span>
-              <span className="body">
-                <span className="ct">{note.title}</span>
-                <span className="cs">{note.summary}</span>
-                <span className="cf">
-                  <span className={`tag tag-${primaryTag.color}`}>{primaryTag.name}</span>
-                  <span className="date">{note.dateLabel}</span>
+                <span className="body">
+                  <span className="card-main-row">
+                    <span className="ct">{note.title}</span>
+                    <span className="date">{note.dateLabel}</span>
+                  </span>
+                  <span className="cs">{note.summary}</span>
+                  <span className="cf">
+                    <span className={`tag tag-${primaryTag.color}`}>{primaryTag.name}</span>
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+              <button
+                aria-label={note.pinned ? "Открепить заметку" : "Закрепить заметку"}
+                className="pin-action"
+                data-tooltip={note.pinned ? "Открепить заметку" : "Закрепить заметку"}
+                onClick={() => onTogglePin(note.id)}
+                type="button"
+              >
+                <Icon name="pin" />
+              </button>
+            </div>
           );
         })}
         {notes.length === 0 ? <div className="note-list-empty">Нет заметок по этому запросу.</div> : null}
       </div>
     </section>
   );
+}
+
+function getCustomIconStyle(resolvedIcon: ResolvedNoteIcon): CSSProperties | undefined {
+  if (!resolvedIcon.customColor) {
+    return undefined;
+  }
+
+  return {
+    backgroundColor: resolvedIcon.customColor,
+    color: "#fff",
+  };
 }

@@ -58,18 +58,22 @@ export function useAppZoom(onZoomChange: (message: string) => void) {
     document.documentElement.style.setProperty("--app-zoom-percent", `${zoomPercent}%`);
 
     let isCancelled = false;
-    void getCurrentWebview()
-      .setZoom(zoomFactor)
-      .then(() => {
-        if (!isCancelled) {
-          setUseCssZoomFallback(false);
-        }
-      })
-      .catch(() => {
-        if (!isCancelled) {
-          setUseCssZoomFallback(true);
-        }
-      });
+    try {
+      void getCurrentWebview()
+        .setZoom(zoomFactor)
+        .then(() => {
+          if (!isCancelled) {
+            setUseCssZoomFallback(false);
+          }
+        })
+        .catch(() => {
+          if (!isCancelled) {
+            setUseCssZoomFallback(true);
+          }
+        });
+    } catch {
+      setUseCssZoomFallback(true);
+    }
 
     return () => {
       isCancelled = true;

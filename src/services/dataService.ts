@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ArchiveItem, EditorDocument, Note, NoteAttachment, NoteIcon, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
+import type { ArchiveItem, EditorDocument, Note, NoteAttachment, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
 import { createNotePreview } from "../features/notes/notePreview";
+import { normalizeNoteIconKey } from "../shared/noteIconRegistry";
 
 export interface DataLocation {
   dataDir: string;
@@ -31,6 +32,7 @@ interface NoteTagDto {
   id: string;
   name: string;
   color: string;
+  iconKey?: string | null;
 }
 
 interface AttachmentDto {
@@ -40,6 +42,8 @@ interface AttachmentDto {
   mimeType: string;
   noteId: string;
   originalName: string;
+  originalAttachmentId?: string | null;
+  editMetadata?: Record<string, unknown> | null;
   sizeBytes: number;
   storageRelPath: string;
 }
@@ -52,10 +56,12 @@ interface NoteDto {
   contentMarkdown: string;
   createdAt: string;
   deletedAt?: string | null;
-  icon: string;
+  iconKey?: string | null;
   id: string;
   isFavorite: boolean;
+  isPinned: boolean;
   noteDate: string;
+  pinnedAt?: string | null;
   plainText: string;
   project: string;
   projectId?: string | null;
@@ -67,9 +73,11 @@ interface NoteDto {
 
 interface ProjectDto {
   archivedAt?: string | null;
+  color: string;
   description: string;
   files?: number | null;
   id: string;
+  iconKey?: string | null;
   notes: number;
   status: string;
   tasks: number;
@@ -81,6 +89,7 @@ interface TagDto {
   count: number;
   customColor?: string | null;
   id: string;
+  iconKey?: string | null;
   name: string;
 }
 
@@ -111,14 +120,9 @@ interface AttachmentStoreResultDto {
 }
 
 const tagColors: readonly TagColor[] = ["blue", "green", "purple", "amber", "pink"];
-const noteIcons: readonly NoteIcon[] = ["doc", "check", "person", "bulb", "code"];
 
 function toTagColor(color: string): TagColor {
   return tagColors.includes(color as TagColor) ? (color as TagColor) : "blue";
-}
-
-function toNoteIcon(icon: string): NoteIcon {
-  return noteIcons.includes(icon as NoteIcon) ? (icon as NoteIcon) : "doc";
 }
 
 function toAttachmentKind(kind: string): "file" | "image" {
@@ -130,6 +134,7 @@ function mapTag(tag: NoteTagDto): NoteTag {
     color: toTagColor(tag.color),
     customColor: tag.customColor ?? undefined,
     id: tag.id,
+    iconKey: normalizeNoteIconKey(tag.iconKey),
     name: tag.name,
   };
 }
@@ -142,6 +147,8 @@ function mapAttachment(attachment: AttachmentDto): NoteAttachment {
     mimeType: attachment.mimeType,
     noteId: attachment.noteId,
     originalName: attachment.originalName,
+    originalAttachmentId: attachment.originalAttachmentId ?? undefined,
+    editMetadata: attachment.editMetadata ?? undefined,
     sizeBytes: attachment.sizeBytes,
     storageRelPath: attachment.storageRelPath,
   };
@@ -150,6 +157,7 @@ function mapAttachment(attachment: AttachmentDto): NoteAttachment {
 function getFallbackTag(): NoteTag {
   return {
     color: "blue",
+    iconKey: "tag",
     id: "tag-untagged",
     name: "без тега",
   };
@@ -184,10 +192,11 @@ function mapNote(note: NoteDto): Note {
     createdAt: note.createdAt,
     dateLabel: formatDateLabel(note.updatedAt, note.noteDate),
     editorDocument: note.contentJson,
-    icon: toNoteIcon(note.icon),
+    iconKey: normalizeNoteIconKey(note.iconKey),
     id: note.id,
     noteDate: note.noteDate,
-    pinned: note.isFavorite,
+    pinned: note.isPinned,
+    pinnedAt: note.pinnedAt ?? undefined,
     plainText: note.plainText,
     project: note.project,
     projectId: note.projectId ?? undefined,
@@ -202,9 +211,11 @@ function mapNote(note: NoteDto): Note {
 function mapProject(project: ProjectDto): ProjectCard {
   return {
     archivedAt: project.archivedAt ?? undefined,
+    color: toTagColor(project.color),
     description: project.description,
     files: project.files ?? undefined,
     id: project.id,
+    iconKey: normalizeNoteIconKey(project.iconKey),
     notes: project.notes,
     status: project.status,
     tasks: project.tasks,
@@ -218,6 +229,7 @@ function mapTagRow(tag: TagDto): TagRow {
     count: tag.count,
     customColor: tag.customColor ?? undefined,
     id: tag.id,
+    iconKey: normalizeNoteIconKey(tag.iconKey),
     name: tag.name,
   };
 }
@@ -298,8 +310,8 @@ export async function duplicateNote(noteId: string) {
   return mapNote(await invoke<NoteDto>("duplicate_note", { noteId }));
 }
 
-export async function toggleFavoriteNote(noteId: string) {
-  return mapNote(await invoke<NoteDto>("toggle_favorite_note", { noteId }));
+export async function toggleNotePin(noteId: string) {
+  return mapNote(await invoke<NoteDto>("toggle_note_pin", { noteId }));
 }
 
 export async function moveNoteToProject(noteId: string, projectTitle: string) {
@@ -375,14 +387,21 @@ export async function deleteArchiveItem(item: ArchiveItem) {
   await invoke<void>("delete_archive_item", { itemId: item.id, kind: item.kind });
 }
 
-export async function storeAttachment(noteId: string, file: File, kind: "file" | "image") {
+export interface StoreAttachmentOptions {
+  editMetadata?: Record<string, unknown>;
+  originalAttachmentId?: string;
+}
+
+export async function storeAttachment(noteId: string, file: File, kind: "file" | "image", options: StoreAttachmentOptions = {}) {
   return mapAttachmentStoreResult(
     await invoke<AttachmentStoreResultDto>("store_attachment", {
       request: {
         bytes: await fileToBytes(file),
+        editMetadata: options.editMetadata ?? null,
         kind,
         mimeType: file.type || "application/octet-stream",
         noteId,
+        originalAttachmentId: options.originalAttachmentId ?? null,
         originalName: file.name,
       },
     }),
@@ -414,4 +433,8 @@ export async function importBackup(file: File) {
       },
     }),
   );
+}
+
+export async function quitApp() {
+  await invoke<void>("quit_app");
 }
