@@ -28,11 +28,27 @@ describe("production data layer contract", () => {
 
   it("routes data access through typed Tauri invoke services", () => {
     const source = readFileSync("src/services/dataService.ts", "utf8");
+    const uiSettingsSource = readFileSync("src/services/uiSettingsService.ts", "utf8");
 
     assert.match(source, /from "@tauri-apps\/api\/core"/);
     assert.match(source, /invoke<WorkspaceSnapshotDto>\("load_workspace"/);
     assert.match(source, /invoke<NoteDto>\("update_note_content"/);
     assert.match(source, /invoke<ExportResultDto>\("create_backup"/);
     assert.doesNotMatch(source, /localStorage/);
+
+    assert.match(uiSettingsSource, /from "@tauri-apps\/api\/core"/);
+    assert.match(uiSettingsSource, /invoke<UiSettingsDto>\("get_ui_settings"/);
+    assert.match(uiSettingsSource, /invoke<UiSettingsDto>\("update_ui_settings"/);
+    assert.doesNotMatch(uiSettingsSource, /localStorage/);
+  });
+
+  it("limits localStorage to one-time UI settings migration", () => {
+    const allowedPath = join("src", "services", "legacyUiSettingsMigration.ts");
+    const offenders = sourceFiles("src")
+      .map((path) => [path, readFileSync(path, "utf8")] as const)
+      .filter(([path, source]) => path !== allowedPath && /localStorage/.test(source))
+      .map(([path]) => path);
+
+    assert.deepEqual(offenders, []);
   });
 });

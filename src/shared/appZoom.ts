@@ -1,15 +1,9 @@
-export const APP_ZOOM_STORAGE_KEY = "noteflow.appZoom";
 export const APP_ZOOM_DEFAULT = 100;
 export const APP_ZOOM_MIN = 80;
 export const APP_ZOOM_MAX = 160;
 export const APP_ZOOM_STEP = 5;
 
 export type AppZoomAction = "increase" | "decrease" | "reset";
-
-interface AppZoomStorage {
-  getItem: (key: string) => string | null;
-  setItem: (key: string, value: string) => void;
-}
 
 export interface AppZoomKeyEventLike {
   altKey?: boolean;
@@ -69,23 +63,6 @@ export function getZoomActionFromKey(event: AppZoomKeyEventLike): AppZoomAction 
   }
 
   return null;
-}
-
-export function readStoredAppZoom(storage: Pick<AppZoomStorage, "getItem"> | null | undefined) {
-  if (!storage) {
-    return APP_ZOOM_DEFAULT;
-  }
-
-  const storedValue = storage.getItem(APP_ZOOM_STORAGE_KEY);
-  if (storedValue === null) {
-    return APP_ZOOM_DEFAULT;
-  }
-
-  return normalizeAppZoom(Number(storedValue));
-}
-
-export function writeStoredAppZoom(storage: Pick<AppZoomStorage, "setItem"> | null | undefined, zoomPercent: number) {
-  storage?.setItem(APP_ZOOM_STORAGE_KEY, String(normalizeAppZoom(zoomPercent)));
 }
 
 export function formatAppZoomToast(zoomPercent: number) {

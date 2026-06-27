@@ -3,15 +3,22 @@ import type { AppSection } from "../../app/types";
 import { ragHistory } from "../../data/mockData";
 import { Icon } from "../../shared/Icon";
 import { ResizeHandle } from "../../shared/ResizeHandle";
-import { usePersistentNumber, usePersistentString } from "../../shared/usePersistentState";
 import { PageShell } from "../navigation/PageShell";
 
 interface RagChatPageProps {
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
+  onRagConversationReset: () => void;
+  onRagConversationResize: (deltaX: number) => void;
+  onRagSourcesCollapsedChange: (collapsed: boolean) => void;
+  onRagSourcesReset: () => void;
+  onRagSourcesResize: (deltaX: number) => void;
   onSidebarReset: () => void;
   onSidebarResize: (deltaX: number) => void;
   onToggleSidebarCollapse: () => void;
+  ragConversationWidth: number;
+  ragSourcesCollapsed: boolean;
+  ragSourcesWidth: number;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   onToast: (message: string) => void;
@@ -22,35 +29,34 @@ type RagPageStyle = CSSProperties & {
   "--ragsw": string;
 };
 
-const ragSourcesCollapsedValues = ["true", "false"] as const;
 const ragSourceCount = 2;
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 export function RagChatPage({
   onNavigate,
   onNewNote,
+  onRagConversationReset,
+  onRagConversationResize,
+  onRagSourcesCollapsedChange,
+  onRagSourcesReset,
+  onRagSourcesResize,
   onSidebarReset,
   onSidebarResize,
   onToggleSidebarCollapse,
   onToast,
+  ragConversationWidth,
+  ragSourcesCollapsed,
+  ragSourcesWidth,
   sidebarCollapsed,
   sidebarWidth,
 }: RagChatPageProps) {
   const [draft, setDraft] = useState("");
   const [activeDialogIndex, setActiveDialogIndex] = useState(0);
-  const [conversationWidth, setConversationWidth] = usePersistentNumber("noteflow.ragConversationWidth", 280, 220, 380);
-  const [sourcesWidth, setSourcesWidth] = usePersistentNumber("noteflow.ragSourcesWidth", 320, 260, 460);
-  const defaultSourcesCollapsed: (typeof ragSourcesCollapsedValues)[number] = typeof window !== "undefined" && window.innerWidth <= 1200 ? "true" : "false";
-  const [sourcesCollapsed, setSourcesCollapsed] = usePersistentString("noteflow.ragSourcesPanelCollapsed", defaultSourcesCollapsed, ragSourcesCollapsedValues);
-  const isSourcesCollapsed = sourcesCollapsed === "true";
+  const isSourcesCollapsed = ragSourcesCollapsed;
   const hasSources = ragSourceCount > 0;
 
   const ragPageStyle: RagPageStyle = {
-    "--ragcw": `${conversationWidth}px`,
-    "--ragsw": `${sourcesWidth}px`,
+    "--ragcw": `${ragConversationWidth}px`,
+    "--ragsw": `${ragSourcesWidth}px`,
   };
 
   function sendRagQuestion() {
@@ -102,8 +108,8 @@ export function RagChatPage({
         <ResizeHandle
           className="rag-conversation-resize"
           label="Изменить ширину истории диалогов"
-          onReset={() => setConversationWidth(280)}
-          onResize={(deltaX) => setConversationWidth((currentWidth) => clamp(currentWidth + deltaX, 220, 380))}
+          onReset={onRagConversationReset}
+          onResize={onRagConversationResize}
         />
 
         <section className="rag-main-chat">
@@ -117,7 +123,7 @@ export function RagChatPage({
                 <button
                   className="ibtn ai rag-sources-open"
                   disabled={!hasSources}
-                  onClick={() => setSourcesCollapsed("false")}
+                  onClick={() => onRagSourcesCollapsedChange(false)}
                   title={hasSources ? "Показать источники" : "Источников пока нет"}
                   type="button"
                 >
@@ -183,8 +189,8 @@ export function RagChatPage({
             <ResizeHandle
               className="rag-sources-resize"
               label="Изменить ширину источников RAG"
-              onReset={() => setSourcesWidth(320)}
-              onResize={(deltaX) => setSourcesWidth((currentWidth) => clamp(currentWidth - deltaX, 260, 460))}
+              onReset={onRagSourcesReset}
+              onResize={onRagSourcesResize}
             />
             <aside className="rag-sources-panel" aria-label="Источники ответа">
               <div className="rag-sources-panel-head">
@@ -192,7 +198,7 @@ export function RagChatPage({
                   <b>Источники</b>
                   <span>мок-выдача</span>
                 </span>
-                <button aria-label="Скрыть источники" className="rag-sources-close" onClick={() => setSourcesCollapsed("true")} type="button">
+                <button aria-label="Скрыть источники" className="rag-sources-close" onClick={() => onRagSourcesCollapsedChange(true)} type="button">
                   <Icon name="x" />
                 </button>
               </div>

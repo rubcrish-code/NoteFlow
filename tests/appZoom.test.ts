@@ -4,26 +4,11 @@ import {
   APP_ZOOM_DEFAULT,
   APP_ZOOM_MAX,
   APP_ZOOM_MIN,
-  APP_ZOOM_STORAGE_KEY,
   getNextAppZoom,
   getZoomActionFromKey,
   getZoomActionFromWheel,
   normalizeAppZoom,
-  readStoredAppZoom,
-  writeStoredAppZoom,
 } from "../src/shared/appZoom";
-
-class MemoryStorage {
-  private readonly values = new Map<string, string>();
-
-  getItem(key: string) {
-    return this.values.get(key) ?? null;
-  }
-
-  setItem(key: string, value: string) {
-    this.values.set(key, value);
-  }
-}
 
 describe("app zoom", () => {
   it("uses 5 percent steps and clamps min/max", () => {
@@ -36,14 +21,6 @@ describe("app zoom", () => {
 
   it("resets zoom to 100 percent", () => {
     assert.equal(getNextAppZoom(145, "reset"), APP_ZOOM_DEFAULT);
-  });
-
-  it("persists normalized zoom", () => {
-    const storage = new MemoryStorage();
-    writeStoredAppZoom(storage, 127);
-
-    assert.equal(storage.getItem(APP_ZOOM_STORAGE_KEY), "125");
-    assert.equal(readStoredAppZoom(storage), 125);
   });
 
   it("ignores wheel without Ctrl", () => {

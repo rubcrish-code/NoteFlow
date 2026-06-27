@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppSection, ArchiveItem, EditorDocument, Note, ProjectCard, SaveStatus, TagColor, TagRow, ThemeMode } from "./types";
+import type { AppSection, ArchiveItem, EditorDocument, Note, ProjectCard, SaveStatus, TagColor, TagRow } from "./types";
 import * as dataService from "../services/dataService";
 import { ArchivePage } from "../features/archive/ArchivePage";
 import { EditorArea } from "../features/editor/EditorArea";
@@ -17,9 +17,9 @@ import { ResizeHandle } from "../shared/ResizeHandle";
 import { Toast } from "../shared/Toast";
 import { TooltipPortal } from "../shared/TooltipPortal";
 import { useAppZoom } from "../shared/useAppZoom";
-import { usePersistentNumber, usePersistentString } from "../shared/usePersistentState";
+import { clearLegacyUiSettings, migrateLegacyUiSettings } from "../services/legacyUiSettingsMigration";
+import { DEFAULT_UI_SETTINGS, getUiSettings, normalizeUiSettings, updateUiSettings as persistUiSettings, type UiSettings } from "../services/uiSettingsService";
 
-const themeModes = ["light", "dark", "system"] as const;
 const closeFlushTimeoutMs = 3500;
 
 type WorkspaceStyle = CSSProperties & {
@@ -84,21 +84,30 @@ export function AppShell() {
   const [activeNoteId, setActiveNoteId] = useState("");
   const [query, setQuery] = useState("");
   const [isDataLoading, setIsDataLoading] = useState(true);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isNewNoteModalOpen, setIsNewNoteModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [theme, setTheme] = usePersistentString<ThemeMode>("noteflow.theme", "light", themeModes);
-  const [sidebarWidth, setSidebarWidth] = usePersistentNumber("noteflow.sidebarWidth", 250, 190, 360);
-  const [listWidth, setListWidth] = usePersistentNumber("noteflow.listWidth", 376, 260, 560);
-  const [chatWidth, setChatWidth] = usePersistentNumber("noteflow.chatWidth", 380, 300, 620);
+  const [uiSettings, setUiSettings] = useState<UiSettings>(DEFAULT_UI_SETTINGS);
   const saveTimeoutRef = useRef<number | null>(null);
   const pendingSaveRef = useRef<PendingNoteSave | null>(null);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   const isClosingRef = useRef(false);
-  const appZoom = useAppZoom(showToast);
+  const settingsHydratedRef = useRef(false);
+  const settingsSaveTimeoutRef = useRef<number | null>(null);
+  const settingsSaveInFlightRef = useRef<Promise<void> | null>(null);
+  const uiSettingsRef = useRef<UiSettings>(DEFAULT_UI_SETTINGS);
+  const appZoom = useAppZoom({
+    onZoomChange: showToast,
+    onZoomPercentChange: (appZoomPercent) => updateUiSettings({ appZoomPercent }),
+    zoomPercent: uiSettings.appZoomPercent,
+  });
+  const theme = uiSettings.theme;
+  const sidebarWidth = uiSettings.sidebarWidth;
+  const listWidth = uiSettings.listWidth;
+  const chatWidth = uiSettings.chatWidth;
+  const isSidebarCollapsed = uiSettings.sidebarCollapsed;
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0] ?? null;
 
@@ -108,6 +117,50 @@ export function AppShell() {
     projectNames.add("Входящие");
     return Array.from(projectNames);
   }, [notes, projects]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadUiSettings() {
+      try {
+        const storedSettings = await getUiSettings();
+        const migration = migrateLegacyUiSettings(storedSettings);
+        if (isCancelled) {
+          return;
+        }
+
+        const nextSettings = normalizeUiSettings(migration.settings);
+        settingsHydratedRef.current = true;
+        uiSettingsRef.current = nextSettings;
+        setUiSettings(nextSettings);
+        setActiveSection(nextSettings.lastSection);
+
+        if (migration.migrated) {
+          await persistUiSettings(nextSettings);
+          clearLegacyUiSettings();
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          settingsHydratedRef.current = true;
+          showToast(`Не удалось открыть настройки интерфейса: ${String(error)}`);
+        }
+      }
+    }
+
+    void loadUiSettings();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    uiSettingsRef.current = uiSettings;
+    if (!settingsHydratedRef.current) {
+      return;
+    }
+
+    scheduleUiSettingsSave(uiSettings);
+  }, [uiSettings]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -193,6 +246,9 @@ export function AppShell() {
       if (saveTimeoutRef.current !== null) {
         window.clearTimeout(saveTimeoutRef.current);
       }
+      if (settingsSaveTimeoutRef.current !== null) {
+        window.clearTimeout(settingsSaveTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -257,13 +313,15 @@ export function AppShell() {
 
       if (key === "k" || key === "л") {
         event.preventDefault();
-        setActiveSection("notes");
+        activateSection("notes");
         window.setTimeout(() => document.getElementById("note-search")?.focus(), 0);
       }
 
       if ((key === "b" || key === "и") && !isTextInputTarget(event.target)) {
         event.preventDefault();
-        setIsSidebarCollapsed((value) => !value);
+        updateUiSettings((currentSettings) => ({
+          sidebarCollapsed: !currentSettings.sidebarCollapsed,
+        }));
       }
 
       if (event.key === "\\") {
@@ -278,6 +336,70 @@ export function AppShell() {
 
   function showToast(message: string) {
     setToastMessage(message);
+  }
+
+  function updateUiSettings(patch: Partial<UiSettings> | ((currentSettings: UiSettings) => Partial<UiSettings>)) {
+    setUiSettings((currentSettings) => {
+      const nextPatch = typeof patch === "function" ? patch(currentSettings) : patch;
+      const nextSettings = normalizeUiSettings({
+        ...currentSettings,
+        ...nextPatch,
+      });
+      uiSettingsRef.current = nextSettings;
+      return nextSettings;
+    });
+  }
+
+  function activateSection(section: AppSection) {
+    setActiveSection(section);
+    updateUiSettings({ lastSection: section });
+  }
+
+  function scheduleUiSettingsSave(settings: UiSettings) {
+    if (settingsSaveTimeoutRef.current !== null) {
+      window.clearTimeout(settingsSaveTimeoutRef.current);
+    }
+
+    settingsSaveTimeoutRef.current = window.setTimeout(() => {
+      settingsSaveTimeoutRef.current = null;
+      void saveUiSettingsNow(settings);
+    }, 250);
+  }
+
+  async function saveUiSettingsNow(settings: UiSettings) {
+    const normalizedSettings = normalizeUiSettings(settings);
+    const savePromise = persistUiSettings(normalizedSettings)
+      .then((savedSettings) => {
+        uiSettingsRef.current = savedSettings;
+      })
+      .catch((error) => {
+        showToast(`Не удалось сохранить настройки интерфейса: ${String(error)}`);
+      })
+      .finally(() => {
+        if (settingsSaveInFlightRef.current === savePromise) {
+          settingsSaveInFlightRef.current = null;
+        }
+      });
+
+    settingsSaveInFlightRef.current = savePromise;
+    await savePromise;
+  }
+
+  async function flushUiSettings() {
+    if (!settingsHydratedRef.current) {
+      return;
+    }
+
+    if (settingsSaveTimeoutRef.current !== null) {
+      window.clearTimeout(settingsSaveTimeoutRef.current);
+      settingsSaveTimeoutRef.current = null;
+    }
+
+    if (settingsSaveInFlightRef.current) {
+      await settingsSaveInFlightRef.current;
+    }
+
+    await saveUiSettingsNow(uiSettingsRef.current);
   }
 
   function applyWorkspaceSnapshot(snapshot: dataService.WorkspaceSnapshot) {
@@ -374,7 +496,7 @@ export function AppShell() {
   function waitForCloseFlush(): Promise<"completed" | "timeout"> {
     return new Promise((resolve) => {
       const timeoutId = window.setTimeout(() => resolve("timeout"), closeFlushTimeoutMs);
-      void flushPendingSave().then(
+      void Promise.all([flushPendingSave(), flushUiSettings()]).then(
         () => {
           window.clearTimeout(timeoutId);
           resolve("completed");
@@ -427,7 +549,7 @@ export function AppShell() {
   function navigate(section: AppSection) {
     void (async () => {
       await flushPendingSave();
-      setActiveSection(section);
+      activateSection(section);
       if (section !== "notes") {
         setIsFocusMode(false);
         setIsChatOpen(false);
@@ -438,7 +560,7 @@ export function AppShell() {
   function openNewNoteModal() {
     void (async () => {
       await flushPendingSave();
-      setActiveSection("notes");
+      activateSection("notes");
       setIsFocusMode(false);
       setIsChatOpen(false);
       setIsNewNoteModalOpen(true);
@@ -475,7 +597,7 @@ export function AppShell() {
         return;
       }
     }
-    setActiveSection("notes");
+    activateSection("notes");
     setActiveNoteId(noteId);
     setIsFocusMode(false);
   }
@@ -613,7 +735,7 @@ export function AppShell() {
   function openTagNotes(tagName: string) {
     void (async () => {
       await flushPendingSave();
-      setActiveSection("notes");
+      activateSection("notes");
       setQuery(tagName);
       showToast(`Открыты заметки с тегом «${tagName}»`);
     })();
@@ -622,7 +744,7 @@ export function AppShell() {
   function openProjectNotes(projectTitle: string) {
     void (async () => {
       await flushPendingSave();
-      setActiveSection("notes");
+      activateSection("notes");
       setQuery(projectTitle);
       showToast(`Открыт проект «${projectTitle}»`);
     })();
@@ -733,10 +855,34 @@ export function AppShell() {
       <RagChatPage
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
-        onSidebarReset={() => setSidebarWidth(250)}
-        onSidebarResize={(deltaX) => setSidebarWidth((currentWidth) => clamp(currentWidth + deltaX, 190, 360))}
-        onToggleSidebarCollapse={() => setIsSidebarCollapsed((value) => !value)}
+        onRagConversationReset={() => updateUiSettings({ ragConversationWidth: 280 })}
+        onRagConversationResize={(deltaX) =>
+          updateUiSettings((currentSettings) => ({
+            ragConversationWidth: clamp(currentSettings.ragConversationWidth + deltaX, 220, 380),
+          }))
+        }
+        onRagSourcesCollapsedChange={(ragSourcesCollapsed) => updateUiSettings({ ragSourcesCollapsed })}
+        onRagSourcesReset={() => updateUiSettings({ ragSourcesWidth: 320 })}
+        onRagSourcesResize={(deltaX) =>
+          updateUiSettings((currentSettings) => ({
+            ragSourcesWidth: clamp(currentSettings.ragSourcesWidth - deltaX, 260, 460),
+          }))
+        }
+        onSidebarReset={() => updateUiSettings({ sidebarWidth: 250 })}
+        onSidebarResize={(deltaX) =>
+          updateUiSettings((currentSettings) => ({
+            sidebarWidth: clamp(currentSettings.sidebarWidth + deltaX, 190, 360),
+          }))
+        }
+        onToggleSidebarCollapse={() =>
+          updateUiSettings((currentSettings) => ({
+            sidebarCollapsed: !currentSettings.sidebarCollapsed,
+          }))
+        }
         onToast={showToast}
+        ragConversationWidth={uiSettings.ragConversationWidth}
+        ragSourcesCollapsed={uiSettings.ragSourcesCollapsed}
+        ragSourcesWidth={uiSettings.ragSourcesWidth}
         sidebarCollapsed={isSidebarCollapsed}
         sidebarWidth={sidebarWidth}
       />,
@@ -783,7 +929,9 @@ export function AppShell() {
         onExportCurrentNote={exportCurrentNoteZip}
         onExportCurrentProject={exportCurrentProjectZip}
         onImportBackup={importBackup}
-        onThemeChange={setTheme}
+        language={uiSettings.language}
+        onLanguageChange={(language) => updateUiSettings({ language })}
+        onThemeChange={(nextTheme) => updateUiSettings({ theme: nextTheme })}
         onToast={showToast}
         onZoomDecrease={appZoom.decreaseZoom}
         onZoomIncrease={appZoom.increaseZoom}
@@ -803,14 +951,22 @@ export function AppShell() {
               onNavigate={navigate}
               onNewNote={openNewNoteModal}
               onToast={showToast}
-              onToggleCollapse={() => setIsSidebarCollapsed((value) => !value)}
+              onToggleCollapse={() =>
+                updateUiSettings((currentSettings) => ({
+                  sidebarCollapsed: !currentSettings.sidebarCollapsed,
+                }))
+              }
             />
             {!isSidebarCollapsed ? (
               <ResizeHandle
                 className="resize-sb"
                 label="Изменить ширину сайдбара"
-                onReset={() => setSidebarWidth(250)}
-                onResize={(deltaX) => setSidebarWidth((currentWidth) => clamp(currentWidth + deltaX, 190, 360))}
+                onReset={() => updateUiSettings({ sidebarWidth: 250 })}
+                onResize={(deltaX) =>
+                  updateUiSettings((currentSettings) => ({
+                    sidebarWidth: clamp(currentSettings.sidebarWidth + deltaX, 190, 360),
+                  }))
+                }
               />
             ) : null}
             <NoteListPanel
@@ -825,8 +981,12 @@ export function AppShell() {
             <ResizeHandle
               className="resize-list"
               label="Изменить ширину списка заметок"
-              onReset={() => setListWidth(376)}
-              onResize={(deltaX) => setListWidth((currentWidth) => clamp(currentWidth + deltaX, 260, 560))}
+              onReset={() => updateUiSettings({ listWidth: 376 })}
+              onResize={(deltaX) =>
+                updateUiSettings((currentSettings) => ({
+                  listWidth: clamp(currentSettings.listWidth + deltaX, 260, 560),
+                }))
+              }
             />
           </>
         ) : null}
@@ -848,7 +1008,7 @@ export function AppShell() {
             onOpenSettingsModels={() => {
               setIsFocusMode(false);
               setIsChatOpen(false);
-              setActiveSection("settings");
+              activateSection("settings");
             }}
             onRenameNote={renameNote}
             onStoreAttachment={storeAttachment}
@@ -871,8 +1031,12 @@ export function AppShell() {
           <NoteChatPanel
             note={activeNote}
             onClose={() => setIsChatOpen(false)}
-            onResetWidth={() => setChatWidth(380)}
-            onResize={(deltaX) => setChatWidth((currentWidth) => clamp(currentWidth + deltaX, 300, 620))}
+            onResetWidth={() => updateUiSettings({ chatWidth: 380 })}
+            onResize={(deltaX) =>
+              updateUiSettings((currentSettings) => ({
+                chatWidth: clamp(currentSettings.chatWidth + deltaX, 300, 620),
+              }))
+            }
           />
         ) : null}
       </div>

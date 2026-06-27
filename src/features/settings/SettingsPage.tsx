@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
-import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
+import type { AppLanguage, AppSection, SettingsPanel, ThemeMode } from "../../app/types";
 import { PageShell } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
 
 interface SettingsPageProps {
   appZoomPercent: number;
+  language: AppLanguage;
   theme: ThemeMode;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
@@ -12,6 +13,7 @@ interface SettingsPageProps {
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
   onImportBackup: (file: File) => void;
+  onLanguageChange: (language: AppLanguage) => void;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
   onZoomDecrease: () => void;
@@ -38,11 +40,13 @@ type ProviderPreset = (typeof providerPresets)[number];
 
 export function SettingsPage({
   appZoomPercent,
+  language,
   theme,
   onBackupCreate,
   onExportCurrentNote,
   onExportCurrentProject,
   onImportBackup,
+  onLanguageChange,
   onNavigate,
   onNewNote,
   onThemeChange,
@@ -81,7 +85,7 @@ export function SettingsPage({
               theme={theme}
             />
           ) : null}
-          {activePanel === "language" ? <LanguageSettings onToast={onToast} /> : null}
+          {activePanel === "language" ? <LanguageSettings language={language} onLanguageChange={onLanguageChange} onToast={onToast} /> : null}
           {activePanel === "data" ? (
             <DataSettings onBackupCreate={onBackupCreate} onExportCurrentNote={onExportCurrentNote} onExportCurrentProject={onExportCurrentProject} onImportBackup={onImportBackup} />
           ) : null}
@@ -280,7 +284,13 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
   );
 }
 
-function LanguageSettings({ onToast }: { onToast: (message: string) => void }) {
+interface LanguageSettingsProps {
+  language: AppLanguage;
+  onLanguageChange: (language: AppLanguage) => void;
+  onToast: (message: string) => void;
+}
+
+function LanguageSettings({ language, onLanguageChange, onToast }: LanguageSettingsProps) {
   return (
     <div>
       <div className="settings-title">Язык</div>
@@ -288,7 +298,13 @@ function LanguageSettings({ onToast }: { onToast: (message: string) => void }) {
       <div className="settings-card">
         <label className="field">
           Язык интерфейса
-          <select onChange={() => onToast("Смена языка пока демонстрационная")} defaultValue="ru">
+          <select
+            onChange={(event) => {
+              onLanguageChange(event.currentTarget.value === "en" ? "en" : "ru");
+              onToast("Смена языка пока демонстрационная");
+            }}
+            value={language}
+          >
             <option value="ru">Русский</option>
             <option value="en">English</option>
           </select>

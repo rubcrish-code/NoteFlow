@@ -8,6 +8,8 @@ export type SettingsPanel = "models" | "appearance" | "language" | "data" | "sho
 
 export type ThemeMode = "light" | "dark" | "system";
 
+export type AppLanguage = "ru" | "en";
+
 export type SaveStatus = "error" | "saved" | "saving";
 
 export type TagColor = "blue" | "green" | "purple" | "amber" | "pink";

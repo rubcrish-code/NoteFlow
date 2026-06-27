@@ -82,6 +82,7 @@ pub fn run() {
             data::export_note_markdown,
             data::export_note_zip,
             data::export_project_zip,
+            data::get_ui_settings,
             data::import_backup,
             data::list_archive,
             data::list_notes,
@@ -98,6 +99,7 @@ pub fn run() {
             data::toggle_note_pin,
             quit_app,
             data::update_note_content,
+            data::update_ui_settings,
             data::update_tag_color
         ])
         .build(tauri::generate_context!())

@@ -7,31 +7,31 @@ import {
   getZoomActionFromKey,
   getZoomActionFromWheel,
   normalizeAppZoom,
-  readStoredAppZoom,
-  writeStoredAppZoom,
   type AppZoomAction,
 } from "./appZoom";
 
-function getZoomStorage() {
-  return typeof window === "undefined" ? null : window.localStorage;
+interface UseAppZoomOptions {
+  onZoomChange: (message: string) => void;
+  onZoomPercentChange: (zoomPercent: number) => void;
+  zoomPercent: number;
 }
 
-export function useAppZoom(onZoomChange: (message: string) => void) {
-  const [zoomPercent, setZoomPercent] = useState(() => readStoredAppZoom(getZoomStorage()));
+export function useAppZoom({ onZoomChange, onZoomPercentChange, zoomPercent }: UseAppZoomOptions) {
+  const normalizedZoomPercent = normalizeAppZoom(zoomPercent);
   const [useCssZoomFallback, setUseCssZoomFallback] = useState(false);
-  const zoomRef = useRef(zoomPercent);
+  const zoomRef = useRef(normalizedZoomPercent);
 
   const applyZoom = useCallback(
     (action: AppZoomAction) => {
       const nextZoom = getNextAppZoom(zoomRef.current, action);
       const shouldNotify = nextZoom !== zoomRef.current || action === "reset";
       zoomRef.current = nextZoom;
-      setZoomPercent(nextZoom);
+      onZoomPercentChange(nextZoom);
       if (shouldNotify) {
         onZoomChange(formatAppZoomToast(nextZoom));
       }
     },
-    [onZoomChange],
+    [onZoomChange, onZoomPercentChange],
   );
 
   const setZoom = useCallback(
@@ -39,23 +39,22 @@ export function useAppZoom(onZoomChange: (message: string) => void) {
       const normalizedZoom = normalizeAppZoom(nextZoom);
       const shouldNotify = normalizedZoom !== zoomRef.current;
       zoomRef.current = normalizedZoom;
-      setZoomPercent(normalizedZoom);
+      onZoomPercentChange(normalizedZoom);
       if (shouldNotify) {
         onZoomChange(formatAppZoomToast(normalizedZoom));
       }
     },
-    [onZoomChange],
+    [onZoomChange, onZoomPercentChange],
   );
 
   useEffect(() => {
-    zoomRef.current = zoomPercent;
-    writeStoredAppZoom(getZoomStorage(), zoomPercent);
-  }, [zoomPercent]);
+    zoomRef.current = normalizedZoomPercent;
+  }, [normalizedZoomPercent]);
 
   useEffect(() => {
-    const zoomFactor = zoomPercent / APP_ZOOM_DEFAULT;
+    const zoomFactor = normalizedZoomPercent / APP_ZOOM_DEFAULT;
     document.documentElement.style.setProperty("--app-zoom", String(zoomFactor));
-    document.documentElement.style.setProperty("--app-zoom-percent", `${zoomPercent}%`);
+    document.documentElement.style.setProperty("--app-zoom-percent", `${normalizedZoomPercent}%`);
 
     let isCancelled = false;
     try {
@@ -78,7 +77,7 @@ export function useAppZoom(onZoomChange: (message: string) => void) {
     return () => {
       isCancelled = true;
     };
-  }, [zoomPercent]);
+  }, [normalizedZoomPercent]);
 
   useEffect(() => {
     function handleWheel(event: WheelEvent) {
@@ -119,6 +118,6 @@ export function useAppZoom(onZoomChange: (message: string) => void) {
     resetZoom: () => applyZoom("reset"),
     setZoom,
     useCssZoomFallback,
-    zoomPercent,
+    zoomPercent: normalizedZoomPercent,
   };
 }

@@ -17,6 +17,7 @@ type DataResult<T> = Result<T, DataError>;
 
 const DATABASE_FILE: &str = "database.sqlite";
 const CURRENT_BACKUP_VERSION: u32 = 1;
+const UI_SETTINGS_KEY: &str = "ui.settings.v1";
 
 #[derive(Debug)]
 pub enum DataError {
@@ -182,6 +183,59 @@ pub struct WorkspaceSnapshotDto {
     pub tags: Vec<TagRowDto>,
     pub archive_items: Vec<ArchiveItemDto>,
     pub data_location: DataLocationDto,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+pub struct UiSettingsDto {
+    pub theme: String,
+    pub app_zoom_percent: i64,
+    pub sidebar_width: i64,
+    pub list_width: i64,
+    pub chat_width: i64,
+    pub sidebar_collapsed: bool,
+    pub rag_conversation_width: i64,
+    pub rag_sources_width: i64,
+    pub rag_sources_collapsed: bool,
+    pub last_section: String,
+    pub language: String,
+}
+
+impl Default for UiSettingsDto {
+    fn default() -> Self {
+        Self {
+            theme: "light".to_string(),
+            app_zoom_percent: 100,
+            sidebar_width: 250,
+            list_width: 376,
+            chat_width: 380,
+            sidebar_collapsed: false,
+            rag_conversation_width: 280,
+            rag_sources_width: 320,
+            rag_sources_collapsed: false,
+            last_section: "notes".to_string(),
+            language: "ru".to_string(),
+        }
+    }
+}
+
+impl UiSettingsDto {
+    fn normalized(self) -> Self {
+        Self {
+            theme: normalize_ui_theme(&self.theme),
+            app_zoom_percent: normalize_app_zoom(self.app_zoom_percent),
+            sidebar_width: clamp_i64(self.sidebar_width, 190, 360),
+            list_width: clamp_i64(self.list_width, 260, 560),
+            chat_width: clamp_i64(self.chat_width, 300, 620),
+            sidebar_collapsed: self.sidebar_collapsed,
+            rag_conversation_width: clamp_i64(self.rag_conversation_width, 220, 380),
+            rag_sources_width: clamp_i64(self.rag_sources_width, 260, 460),
+            rag_sources_collapsed: self.rag_sources_collapsed,
+            last_section: normalize_app_section(&self.last_section),
+            language: normalize_app_language(&self.language),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -498,6 +552,28 @@ impl DataStore {
             .optional()?
             .map(|value| serde_json::from_str(&value).map_err(DataError::from))
             .transpose()
+    }
+
+    fn get_ui_settings(&self) -> DataResult<UiSettingsDto> {
+        let settings = self
+            .get_setting(UI_SETTINGS_KEY)?
+            .map(serde_json::from_value::<UiSettingsDto>)
+            .transpose()?
+            .unwrap_or_default()
+            .normalized();
+        Ok(settings)
+    }
+
+    fn update_ui_settings(&mut self, request: UiSettingsDto) -> DataResult<UiSettingsDto> {
+        let settings = request.normalized();
+        let transaction = self.conn.transaction()?;
+        set_setting_tx(
+            &transaction,
+            UI_SETTINGS_KEY,
+            serde_json::to_value(&settings)?,
+        )?;
+        transaction.commit()?;
+        Ok(settings)
     }
 
     fn load_workspace(&mut self) -> DataResult<WorkspaceSnapshotDto> {
@@ -2226,6 +2302,36 @@ fn normalize_tag_color(color: &str) -> String {
     }
 }
 
+fn clamp_i64(value: i64, min: i64, max: i64) -> i64 {
+    value.max(min).min(max)
+}
+
+fn normalize_app_zoom(value: i64) -> i64 {
+    let stepped_value = ((value as f64) / 5.0).round() as i64 * 5;
+    clamp_i64(stepped_value, 80, 160)
+}
+
+fn normalize_ui_theme(value: &str) -> String {
+    match value {
+        "dark" | "system" => value.to_string(),
+        _ => "light".to_string(),
+    }
+}
+
+fn normalize_app_section(value: &str) -> String {
+    match value {
+        "projects" | "rag" | "tags" | "archive" | "settings" => value.to_string(),
+        _ => "notes".to_string(),
+    }
+}
+
+fn normalize_app_language(value: &str) -> String {
+    match value {
+        "en" => "en".to_string(),
+        _ => "ru".to_string(),
+    }
+}
+
 fn infer_tag_icon_key(name: &str) -> &'static str {
     let normalized = name.to_lowercase();
     if normalized.contains("код") || normalized.contains("api") || normalized.contains("dev") {
@@ -2388,6 +2494,23 @@ fn command_error(error: DataError) -> String {
 pub fn load_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapshotDto, String> {
     state
         .with_store(|store| store.load_workspace())
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_ui_settings(state: State<'_, AppState>) -> Result<UiSettingsDto, String> {
+    state
+        .with_store(|store| store.get_ui_settings())
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn update_ui_settings(
+    request: UiSettingsDto,
+    state: State<'_, AppState>,
+) -> Result<UiSettingsDto, String> {
+    state
+        .with_store(|store| store.update_ui_settings(request))
         .map_err(command_error)
 }
 
@@ -2674,6 +2797,54 @@ mod tests {
 
         assert_eq!(first_count, second_count);
         assert!(first_count > 0);
+    }
+
+    #[test]
+    fn ui_settings_are_stored_in_app_settings_and_persist() {
+        let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));
+        {
+            let mut store = DataStore::open(dir.clone()).expect("store opens");
+            let saved = store
+                .update_ui_settings(UiSettingsDto {
+                    theme: "dark".to_string(),
+                    app_zoom_percent: 127,
+                    sidebar_width: 999,
+                    list_width: 120,
+                    chat_width: 481,
+                    sidebar_collapsed: true,
+                    rag_conversation_width: 301,
+                    rag_sources_width: 1000,
+                    rag_sources_collapsed: true,
+                    last_section: "rag".to_string(),
+                    language: "en".to_string(),
+                })
+                .expect("save ui settings");
+
+            assert_eq!(saved.theme, "dark");
+            assert_eq!(saved.app_zoom_percent, 125);
+            assert_eq!(saved.sidebar_width, 360);
+            assert_eq!(saved.list_width, 260);
+            assert_eq!(saved.rag_sources_width, 460);
+
+            let persisted_key: String = store
+                .conn
+                .query_row(
+                    "SELECT key FROM app_settings WHERE key = ?1",
+                    params![UI_SETTINGS_KEY],
+                    |row| row.get(0),
+                )
+                .expect("ui settings key exists");
+            assert_eq!(persisted_key, UI_SETTINGS_KEY);
+        }
+
+        let reopened_store = DataStore::open(dir).expect("store reopens");
+        let settings = reopened_store.get_ui_settings().expect("load ui settings");
+        assert_eq!(settings.theme, "dark");
+        assert_eq!(settings.app_zoom_percent, 125);
+        assert!(settings.sidebar_collapsed);
+        assert!(settings.rag_sources_collapsed);
+        assert_eq!(settings.last_section, "rag");
+        assert_eq!(settings.language, "en");
     }
 
     #[test]
