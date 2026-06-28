@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppLanguage, AppSection, ThemeMode } from "../app/types";
 import { normalizeAppZoom } from "../shared/appZoom";
+import { EDITOR_CONTENT_DEFAULT_OFFSET, EDITOR_CONTENT_DEFAULT_WIDTH, clampEditorContentOffset, clampEditorContentWidth } from "../shared/editorPageLayout";
 
 export interface UiSettings {
   appZoomPercent: number;
   chatWidth: number;
+  editorContentOffset: number;
+  editorContentWidth: number;
   language: AppLanguage;
   lastSection: AppSection;
   listWidth: number;
@@ -25,6 +28,8 @@ const appLanguages: readonly AppLanguage[] = ["ru", "en"];
 export const DEFAULT_UI_SETTINGS: UiSettings = {
   appZoomPercent: 100,
   chatWidth: 380,
+  editorContentOffset: EDITOR_CONTENT_DEFAULT_OFFSET,
+  editorContentWidth: EDITOR_CONTENT_DEFAULT_WIDTH,
   language: "ru",
   lastSection: "notes",
   listWidth: 376,
@@ -48,6 +53,8 @@ export function normalizeUiSettings(settings: UiSettings): UiSettings {
   return {
     appZoomPercent: normalizeAppZoom(settings.appZoomPercent),
     chatWidth: clamp(settings.chatWidth, 300, 620),
+    editorContentOffset: clampEditorContentOffset(settings.editorContentOffset),
+    editorContentWidth: clampEditorContentWidth(settings.editorContentWidth),
     language: normalizeChoice(settings.language, appLanguages, DEFAULT_UI_SETTINGS.language),
     lastSection: normalizeChoice(settings.lastSection, appSections, DEFAULT_UI_SETTINGS.lastSection),
     listWidth: clamp(settings.listWidth, 260, 560),

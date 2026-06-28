@@ -1352,19 +1352,88 @@
 }
 
 .ed-scroll {
+  --editor-page-gutter: clamp(20px, 4vw, 56px);
   flex: 1;
+  justify-content: center;
+  display: flex;
   overflow-y: auto;
-  padding: 30px 56px 80px;
+  padding: 30px var(--editor-page-gutter) 80px;
 }
 
 .chat-open .ed-scroll {
-  padding-left: 34px;
-  padding-right: 34px;
+  --editor-page-gutter: clamp(18px, 3vw, 40px);
+}
+
+.ed-page-frame {
+  flex: 0 1 var(--editor-page-width, 840px);
+  max-width: 100%;
+  min-width: 0;
+  position: relative;
+  transform: translateX(var(--editor-page-offset, 0px));
+  transition: transform 0.12s ease;
+  width: var(--editor-page-width, 840px);
+}
+
+.ed-page-frame.resizing {
+  transition: none;
 }
 
 .ed-inner {
-  margin: 0 auto;
-  max-width: 760px;
+  margin: 0;
+  max-width: none;
+  min-width: 0;
+  width: 100%;
+}
+
+.editor-page-resize {
+  background: transparent;
+  border: 0;
+  bottom: 0;
+  cursor: ew-resize;
+  padding: 0;
+  position: absolute;
+  top: 0;
+  touch-action: none;
+  width: 22px;
+  z-index: 12;
+}
+
+.editor-page-resize-left {
+  left: -22px;
+}
+
+.editor-page-resize-right {
+  right: -22px;
+}
+
+.editor-page-resize::before {
+  background: color-mix(in srgb, var(--accent) 48%, transparent);
+  border-radius: 999px;
+  bottom: 2px;
+  content: "";
+  left: 50%;
+  opacity: 0;
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%) scaleY(0.96);
+  transition: opacity 0.14s ease, background 0.14s ease, transform 0.14s ease;
+  width: 2px;
+}
+
+.ed-page-frame:hover .editor-page-resize::before,
+.editor-page-resize:hover::before,
+.editor-page-resize:focus-visible::before,
+.editor-page-resize.dragging::before {
+  opacity: 1;
+  transform: translateX(-50%) scaleY(1);
+}
+
+.editor-page-resize.dragging::before {
+  background: var(--accent);
+}
+
+.ed-page-frame.resizing .ed-inner {
+  user-select: none;
 }
 
 .ed-title {
@@ -1409,6 +1478,7 @@
   font-size: 16px;
   line-height: 1.75;
   outline: none;
+  overflow-wrap: anywhere;
 }
 
 .ed-body .ProseMirror {
@@ -2287,7 +2357,8 @@
 }
 
 .focus .ed-scroll {
-  padding: 30px 10vw 100px;
+  --editor-page-gutter: clamp(20px, 4vw, 80px);
+  padding: 30px var(--editor-page-gutter) 100px;
 }
 
 .focus-strip {
@@ -4009,8 +4080,7 @@
   }
 
   .ed-scroll {
-    padding-left: 34px;
-    padding-right: 34px;
+    --editor-page-gutter: clamp(18px, 3vw, 40px);
   }
 }
 

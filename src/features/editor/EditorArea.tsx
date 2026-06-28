@@ -25,8 +25,12 @@ import { FormattingToolbar } from "./FormattingToolbar";
 import { NoteMenuPopover } from "./NoteMenuPopover";
 import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FileAttachment, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
 import { isMarkdownLike, markdownToTiptapDoc, tiptapJsonToMarkdown } from "./markdownService";
+import { useEditorPageLayout } from "./useEditorPageLayout";
+import type { EditorPageLayoutSettings } from "../../shared/editorPageLayout";
 
 interface EditorAreaProps {
+  editorContentOffset: number;
+  editorContentWidth: number;
   isFocusMode: boolean;
   note: Note;
   notes: Note[];
@@ -34,6 +38,8 @@ interface EditorAreaProps {
   onArchiveNote: (noteId: string) => void;
   onDeleteNote: (noteId: string) => void;
   onDuplicateNote: (noteId: string) => void;
+  onEditorPageLayoutChange: (layout: EditorPageLayoutSettings) => void;
+  onEditorPageLayoutReset: () => void;
   onExitFocus: () => void;
   onExportMarkdown: (noteId: string) => void;
   onMoveNote: (noteId: string, project: string) => void;
@@ -99,6 +105,8 @@ function createEditorExtensions(options: { onEditImage: (target: EditableImageTa
 }
 
 export function EditorArea({
+  editorContentOffset,
+  editorContentWidth,
   isFocusMode,
   note,
   notes,
@@ -106,6 +114,8 @@ export function EditorArea({
   onDeleteNote,
   onDuplicateNote,
   onEditorChange,
+  onEditorPageLayoutChange,
+  onEditorPageLayoutReset,
   onExitFocus,
   onExportMarkdown,
   onMoveNote,
@@ -128,6 +138,12 @@ export function EditorArea({
   const noteIdRef = useRef(note.id);
   const onOpenNoteRef = useRef(onOpenNote);
   const editorExtensions = useMemo(() => createEditorExtensions({ onEditImage: setImageEditTarget, onToast }), [onToast]);
+  const editorPageLayout = useEditorPageLayout({
+    editorContentOffset,
+    editorContentWidth,
+    onLayoutChange: onEditorPageLayoutChange,
+    onReset: onEditorPageLayoutReset,
+  });
 
   const editor = useEditor({
     content: note.editorDocument,
@@ -276,24 +292,28 @@ export function EditorArea({
 
       <FormattingToolbar editor={editor} onOpenAiSettings={onOpenSettingsModels} onToast={onToast} />
 
-      <div className="ed-scroll">
-        <div className="ed-inner">
-          <h1 className="ed-title">{note.title}</h1>
-          <div className="ed-tags">
-            {note.tags.map((tag) => (
-              <span className={`tag tag-${tag.color}`} key={tag.name}>
-                {tag.name}
-              </span>
-            ))}
-            {note.isNew ? <span className="note-date-chip">{note.noteDate}</span> : null}
-            <button className="add" data-tooltip="Добавить тег" onClick={() => onToast("Добавление тегов появится на следующем этапе данных")} type="button">
-              +
-            </button>
+      <div className="ed-scroll" ref={editorPageLayout.viewportRef}>
+        <div className={`ed-page-frame ${editorPageLayout.isResizing ? "resizing" : ""}`} ref={editorPageLayout.pageRef} style={editorPageLayout.pageStyle}>
+          <button {...editorPageLayout.leftHandleProps} />
+          <div className="ed-inner">
+            <h1 className="ed-title">{note.title}</h1>
+            <div className="ed-tags">
+              {note.tags.map((tag) => (
+                <span className={`tag tag-${tag.color}`} key={tag.name}>
+                  {tag.name}
+                </span>
+              ))}
+              {note.isNew ? <span className="note-date-chip">{note.noteDate}</span> : null}
+              <button className="add" data-tooltip="Добавить тег" onClick={() => onToast("Добавление тегов появится на следующем этапе данных")} type="button">
+                +
+              </button>
+            </div>
+            <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
+              <EditorContent editor={editor} />
+              {isEmptyNote ? <NewNoteHelper /> : null}
+            </div>
           </div>
-          <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
-            <EditorContent editor={editor} />
-            {isEmptyNote ? <NewNoteHelper /> : null}
-          </div>
+          <button {...editorPageLayout.rightHandleProps} />
         </div>
       </div>
 

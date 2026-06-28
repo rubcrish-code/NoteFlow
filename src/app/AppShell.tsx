@@ -1000,8 +1000,17 @@ export function AppShell() {
             onDeleteNote={(noteId) => removeNote(noteId, "delete")}
             onDuplicateNote={duplicateNote}
             onEditorChange={updateNoteEditor}
+            editorContentOffset={uiSettings.editorContentOffset}
+            editorContentWidth={uiSettings.editorContentWidth}
             onExitFocus={() => setIsFocusMode(false)}
             onExportMarkdown={exportNoteMarkdown}
+            onEditorPageLayoutChange={(layout) => updateUiSettings(layout)}
+            onEditorPageLayoutReset={() =>
+              updateUiSettings({
+                editorContentOffset: DEFAULT_UI_SETTINGS.editorContentOffset,
+                editorContentWidth: DEFAULT_UI_SETTINGS.editorContentWidth,
+              })
+            }
             onMoveNote={moveNote}
             onOpenChat={() => setIsChatOpen(true)}
             onOpenNote={(noteId) => void openNote(noteId)}

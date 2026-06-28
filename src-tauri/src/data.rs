@@ -189,17 +189,32 @@ pub struct WorkspaceSnapshotDto {
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
 pub struct UiSettingsDto {
+    #[serde(default = "default_ui_theme")]
     pub theme: String,
+    #[serde(default = "default_ui_app_zoom_percent")]
     pub app_zoom_percent: i64,
+    #[serde(default = "default_ui_sidebar_width")]
     pub sidebar_width: i64,
+    #[serde(default = "default_ui_list_width")]
     pub list_width: i64,
+    #[serde(default = "default_ui_chat_width")]
     pub chat_width: i64,
+    #[serde(default)]
     pub sidebar_collapsed: bool,
+    #[serde(default = "default_ui_rag_conversation_width")]
     pub rag_conversation_width: i64,
+    #[serde(default = "default_ui_rag_sources_width")]
     pub rag_sources_width: i64,
+    #[serde(default)]
     pub rag_sources_collapsed: bool,
+    #[serde(default = "default_ui_last_section")]
     pub last_section: String,
+    #[serde(default = "default_ui_language")]
     pub language: String,
+    #[serde(default = "default_ui_editor_content_width")]
+    pub editor_content_width: i64,
+    #[serde(default)]
+    pub editor_content_offset: i64,
 }
 
 impl Default for UiSettingsDto {
@@ -216,6 +231,8 @@ impl Default for UiSettingsDto {
             rag_sources_collapsed: false,
             last_section: "notes".to_string(),
             language: "ru".to_string(),
+            editor_content_width: 840,
+            editor_content_offset: 0,
         }
     }
 }
@@ -234,6 +251,8 @@ impl UiSettingsDto {
             rag_sources_collapsed: self.rag_sources_collapsed,
             last_section: normalize_app_section(&self.last_section),
             language: normalize_app_language(&self.language),
+            editor_content_width: clamp_i64(self.editor_content_width, 560, 1440),
+            editor_content_offset: clamp_i64(self.editor_content_offset, -720, 720),
         }
     }
 }
@@ -2302,6 +2321,46 @@ fn normalize_tag_color(color: &str) -> String {
     }
 }
 
+fn default_ui_theme() -> String {
+    "light".to_string()
+}
+
+fn default_ui_app_zoom_percent() -> i64 {
+    100
+}
+
+fn default_ui_sidebar_width() -> i64 {
+    250
+}
+
+fn default_ui_list_width() -> i64 {
+    376
+}
+
+fn default_ui_chat_width() -> i64 {
+    380
+}
+
+fn default_ui_rag_conversation_width() -> i64 {
+    280
+}
+
+fn default_ui_rag_sources_width() -> i64 {
+    320
+}
+
+fn default_ui_last_section() -> String {
+    "notes".to_string()
+}
+
+fn default_ui_language() -> String {
+    "ru".to_string()
+}
+
+fn default_ui_editor_content_width() -> i64 {
+    840
+}
+
 fn clamp_i64(value: i64, min: i64, max: i64) -> i64 {
     value.max(min).min(max)
 }
@@ -2817,6 +2876,8 @@ mod tests {
                     rag_sources_collapsed: true,
                     last_section: "rag".to_string(),
                     language: "en".to_string(),
+                    editor_content_width: 2000,
+                    editor_content_offset: -900,
                 })
                 .expect("save ui settings");
 
@@ -2825,6 +2886,8 @@ mod tests {
             assert_eq!(saved.sidebar_width, 360);
             assert_eq!(saved.list_width, 260);
             assert_eq!(saved.rag_sources_width, 460);
+            assert_eq!(saved.editor_content_width, 1440);
+            assert_eq!(saved.editor_content_offset, -720);
 
             let persisted_key: String = store
                 .conn
@@ -2845,6 +2908,8 @@ mod tests {
         assert!(settings.rag_sources_collapsed);
         assert_eq!(settings.last_section, "rag");
         assert_eq!(settings.language, "en");
+        assert_eq!(settings.editor_content_width, 1440);
+        assert_eq!(settings.editor_content_offset, -720);
     }
 
     #[test]
