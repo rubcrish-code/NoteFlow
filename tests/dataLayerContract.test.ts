@@ -29,6 +29,7 @@ describe("production data layer contract", () => {
   it("routes data access through typed Tauri invoke services", () => {
     const source = readFileSync("src/services/dataService.ts", "utf8");
     const uiSettingsSource = readFileSync("src/services/uiSettingsService.ts", "utf8");
+    const llmProviderSource = readFileSync("src/services/llmProviderService.ts", "utf8");
 
     assert.match(source, /from "@tauri-apps\/api\/core"/);
     assert.match(source, /invoke<WorkspaceSnapshotDto>\("load_workspace"/);
@@ -40,6 +41,11 @@ describe("production data layer contract", () => {
     assert.match(uiSettingsSource, /invoke<UiSettingsDto>\("get_ui_settings"/);
     assert.match(uiSettingsSource, /invoke<UiSettingsDto>\("update_ui_settings"/);
     assert.doesNotMatch(uiSettingsSource, /localStorage/);
+
+    assert.match(llmProviderSource, /from "@tauri-apps\/api\/core"/);
+    assert.match(llmProviderSource, /invoke<LlmProviderDto\[]>\("list_llm_providers"/);
+    assert.match(llmProviderSource, /invoke<LlmProviderDto>\("save_llm_provider"/);
+    assert.doesNotMatch(llmProviderSource, /localStorage/);
   });
 
   it("limits localStorage to one-time UI settings migration", () => {

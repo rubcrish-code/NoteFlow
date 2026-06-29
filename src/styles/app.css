@@ -3085,6 +3085,77 @@
   white-space: nowrap;
 }
 
+.status-pill.ok {
+  background: var(--tag-green);
+  color: var(--tag-green-t);
+}
+
+.status-pill.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.llm-provider-list-card .settings-section-head {
+  align-items: center;
+}
+
+.llm-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-empty-state {
+  background: var(--asoft2);
+  border: 1px dashed color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 12px;
+  color: var(--tsoft);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 14px;
+}
+
+.llm-provider-row {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.llm-provider-row:hover {
+  background: var(--field-bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--field-border));
+}
+
+.llm-provider-row.active {
+  background: var(--asoft);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.llm-provider-row small {
+  color: var(--tsoft);
+  display: block;
+  font-size: 11.5px;
+  margin-top: 3px;
+}
+
+.llm-default-badge {
+  background: var(--asoft2);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
 .provider-presets {
   display: grid;
   gap: 10px;
@@ -3189,20 +3260,82 @@
 .secret-wrap button,
 .input-action button,
 .secondary-btn,
-.primary-btn {
+.primary-btn,
+.danger-btn {
+  align-items: center;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
+  display: inline-flex;
   font-weight: 600;
+  gap: 8px;
+  justify-content: center;
   padding: 0 13px;
   white-space: nowrap;
 }
 
-.secret-wrap button:hover,
-.input-action button:hover,
-.secondary-btn:hover {
+.secret-wrap button:not(:disabled):hover,
+.input-action button:not(:disabled):hover,
+.secondary-btn:not(:disabled):hover {
   background: var(--bsoft);
+}
+
+.primary-btn,
+.secondary-btn,
+.danger-btn {
+  transition: background 0.14s, border-color 0.14s, box-shadow 0.14s, color 0.14s, transform 0.1s;
+}
+
+.primary-btn:focus-visible,
+.secondary-btn:focus-visible,
+.danger-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--field-ring);
+}
+
+.primary-btn:active,
+.secondary-btn:active,
+.danger-btn:active {
+  transform: translateY(1px);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.danger-btn:disabled,
+.secret-wrap button:disabled,
+.input-action button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+  transform: none;
+}
+
+.loading-inline {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.button-spinner {
+  animation: noteflow-spin 0.72s linear infinite;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 999px;
+  border-top-color: currentColor;
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.primary-btn .button-spinner {
+  border-color: color-mix(in srgb, var(--on-accent) 34%, transparent);
+  border-top-color: var(--on-accent);
+}
+
+@keyframes noteflow-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .switch-field {
@@ -3238,16 +3371,16 @@
   font-weight: 650;
 }
 
-.connection-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-  margin-top: 18px;
+.secondary-btn,
+.primary-btn,
+.danger-btn {
+  height: 40px;
 }
 
-.secondary-btn,
-.primary-btn {
-  height: 40px;
+.secondary-btn.compact,
+.danger-outline.compact {
+  height: 34px;
+  padding: 0 12px;
 }
 
 .primary-btn {
@@ -3256,9 +3389,59 @@
   color: var(--on-accent);
 }
 
-.primary-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
+.primary-btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+  border-color: color-mix(in srgb, var(--accent) 88%, #000);
+}
+
+.danger-btn {
+  background: color-mix(in srgb, var(--danger-soft) 76%, var(--panel));
+  border-color: color-mix(in srgb, var(--danger) 14%, var(--border));
+  color: var(--danger);
+}
+
+.danger-btn:not(:disabled):hover {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 24%, var(--border));
+}
+
+.llm-action-bar {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding-top: 18px;
+}
+
+.llm-main-actions,
+.llm-danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.llm-main-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.llm-danger-actions {
+  justify-content: flex-start;
+}
+
+.llm-main-actions .secondary-btn {
+  min-width: 148px;
+}
+
+.llm-main-actions .primary-btn {
+  min-width: 190px;
+}
+
+.llm-danger-actions .danger-btn {
+  min-width: 170px;
 }
 
 .connection-note {
@@ -3269,6 +3452,23 @@
   line-height: 1.5;
   margin-top: 14px;
   padding: 12px 14px;
+}
+
+.connection-note.pending {
+  color: var(--text);
+}
+
+.connection-note.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.key-state.ok {
+  color: var(--tag-green-t);
+}
+
+.key-state.warn {
+  color: var(--tsoft);
 }
 
 .theme-options {
@@ -4137,6 +4337,36 @@
     border-right: none;
     min-height: 0;
     padding-right: 0;
+  }
+
+  .llm-action-bar {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .llm-main-actions,
+  .llm-danger-actions {
+    justify-content: stretch;
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .llm-main-actions .primary-btn,
+  .llm-main-actions .secondary-btn,
+  .llm-danger-actions .danger-btn {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .llm-provider-row {
+    align-items: flex-start;
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .llm-default-badge,
+  .llm-provider-row .status-pill {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .zoom-settings-card {

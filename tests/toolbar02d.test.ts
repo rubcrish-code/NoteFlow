@@ -17,6 +17,7 @@ const noteMenuPopoverSource = readFileSync("src/features/editor/NoteMenuPopover.
 const pageShellSource = readFileSync("src/features/navigation/PageShell.tsx", "utf8");
 const ragChatPageSource = readFileSync("src/features/rag/RagChatPage.tsx", "utf8");
 const appShellSource = readFileSync("src/app/AppShell.tsx", "utf8");
+const legacyUiSettingsMigrationSource = readFileSync("src/services/legacyUiSettingsMigration.ts", "utf8");
 
 function sourceBetween(source: string, start: string, end: string) {
   const startIndex = source.indexOf(start);
@@ -67,7 +68,8 @@ describe("toolbar and block insert menu contract", () => {
     assert.match(pageShellSource, /page-resize-sb/);
     assert.match(ragChatPageSource, /onSidebarResize/);
     assert.match(ragChatPageSource, /sidebarCollapsed/);
-    assert.match(appShellSource, /noteflow\.sidebarWidth/);
+    assert.match(legacyUiSettingsMigrationSource, /noteflow\.sidebarWidth/);
+    assert.doesNotMatch(appShellSource, /localStorage/);
     assert.match(appShellSource, /<RagChatPage[\s\S]*sidebarWidth=\{sidebarWidth\}/);
   });
 

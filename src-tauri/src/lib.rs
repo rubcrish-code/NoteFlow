@@ -1,4 +1,5 @@
 mod data;
+mod llm;
 
 use std::{
     sync::{
@@ -75,6 +76,8 @@ pub fn run() {
             data::create_project,
             data::create_tag,
             data::delete_archive_item,
+            data::delete_llm_provider,
+            data::delete_llm_provider_key,
             data::delete_note,
             data::delete_note_permanently,
             data::delete_tag,
@@ -85,6 +88,8 @@ pub fn run() {
             data::get_ui_settings,
             data::import_backup,
             data::list_archive,
+            data::list_llm_models,
+            data::list_llm_providers,
             data::list_notes,
             data::list_projects,
             data::list_tags,
@@ -95,8 +100,12 @@ pub fn run() {
             data::rename_tag,
             data::restore_archive_item,
             data::restore_note,
+            data::save_llm_provider,
+            data::set_default_llm_provider,
             data::store_attachment,
+            data::test_llm_provider,
             data::toggle_note_pin,
+            data::check_llm_provider_key,
             quit_app,
             data::update_note_content,
             data::update_ui_settings,

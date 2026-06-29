@@ -1,3 +1,4 @@
+use crate::llm;
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -13,10 +14,10 @@ use tauri::{App, Manager, State};
 use uuid::Uuid;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
-type DataResult<T> = Result<T, DataError>;
+pub(crate) type DataResult<T> = Result<T, DataError>;
 
 const DATABASE_FILE: &str = "database.sqlite";
-const CURRENT_BACKUP_VERSION: u32 = 1;
+const CURRENT_BACKUP_VERSION: u32 = 2;
 const UI_SETTINGS_KEY: &str = "ui.settings.v1";
 
 #[derive(Debug)]
@@ -381,6 +382,8 @@ struct BackupData {
     notes: Vec<NoteBackup>,
     note_tags: Vec<NoteTagBackup>,
     attachments: Vec<AttachmentBackup>,
+    #[serde(default)]
+    llm_providers: Vec<llm::LlmProviderBackup>,
     app_settings: Vec<SettingBackup>,
 }
 
@@ -593,6 +596,65 @@ impl DataStore {
         )?;
         transaction.commit()?;
         Ok(settings)
+    }
+
+    fn list_llm_providers<S: llm::SecretStorage>(
+        &self,
+        storage: &S,
+    ) -> DataResult<Vec<llm::LlmProviderDto>> {
+        llm::list_providers(&self.conn, storage)
+    }
+
+    fn save_llm_provider<S: llm::SecretStorage>(
+        &mut self,
+        storage: &S,
+        request: llm::SaveLlmProviderRequest,
+    ) -> DataResult<llm::LlmProviderDto> {
+        llm::save_provider(&mut self.conn, storage, request)
+    }
+
+    fn delete_llm_provider<S: llm::SecretStorage>(
+        &mut self,
+        storage: &S,
+        provider_id: &str,
+    ) -> DataResult<()> {
+        llm::delete_provider(&mut self.conn, storage, provider_id)
+    }
+
+    fn set_default_llm_provider<S: llm::SecretStorage>(
+        &mut self,
+        storage: &S,
+        provider_id: &str,
+    ) -> DataResult<llm::LlmProviderDto> {
+        llm::set_default_provider(&mut self.conn, storage, provider_id)
+    }
+
+    fn delete_llm_provider_key<S: llm::SecretStorage>(
+        &mut self,
+        storage: &S,
+        provider_id: &str,
+    ) -> DataResult<llm::LlmProviderDto> {
+        llm::delete_provider_key(&mut self.conn, storage, provider_id)
+    }
+
+    fn check_llm_provider_key<S: llm::SecretStorage>(
+        &self,
+        storage: &S,
+        provider_id: &str,
+    ) -> DataResult<llm::LlmKeyStatusDto> {
+        llm::key_status(&self.conn, storage, provider_id)
+    }
+
+    fn get_llm_provider_record(&self, provider_id: &str) -> DataResult<llm::LlmProviderRecord> {
+        llm::get_provider_record(&self.conn, provider_id)
+    }
+
+    fn update_llm_provider_status(
+        &mut self,
+        provider_id: &str,
+        result: &llm::LlmConnectionTestResultDto,
+    ) -> DataResult<()> {
+        llm::update_provider_status(&mut self.conn, provider_id, result)
     }
 
     fn load_workspace(&mut self) -> DataResult<WorkspaceSnapshotDto> {
@@ -1475,6 +1537,7 @@ impl DataStore {
         transaction.execute("DELETE FROM note_revisions", [])?;
         transaction.execute("DELETE FROM ai_messages", [])?;
         transaction.execute("DELETE FROM ai_chats", [])?;
+        transaction.execute("DELETE FROM llm_providers", [])?;
         transaction.execute("DELETE FROM notes", [])?;
         transaction.execute("DELETE FROM tags", [])?;
         transaction.execute("DELETE FROM projects", [])?;
@@ -1581,6 +1644,7 @@ impl DataStore {
             }
             set_setting_tx(&transaction, &setting.key, setting.value_json.clone())?;
         }
+        llm::import_provider_backups(&transaction, &backup_data.llm_providers)?;
         transaction.commit()?;
 
         for attachment in &backup_data.attachments {
@@ -1625,6 +1689,7 @@ impl DataStore {
             notes: self.collect_notes_backup()?,
             note_tags: self.collect_note_tags_backup()?,
             attachments: self.collect_attachments_backup()?,
+            llm_providers: llm::collect_provider_backups(&self.conn)?,
             app_settings: self.collect_settings_backup()?,
         })
     }
@@ -1995,6 +2060,11 @@ fn migrations() -> Vec<Migration> {
                 CREATE INDEX IF NOT EXISTS idx_attachments_original_attachment_id
                     ON attachments(original_attachment_id);
             ",
+        },
+        Migration {
+            version: 6,
+            name: "llm_providers",
+            sql: llm::LLM_PROVIDER_SCHEMA_SQL,
         },
     ]
 }
@@ -2574,6 +2644,110 @@ pub fn update_ui_settings(
 }
 
 #[tauri::command]
+pub fn list_llm_providers(state: State<'_, AppState>) -> Result<Vec<llm::LlmProviderDto>, String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| store.list_llm_providers(&storage))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn save_llm_provider(
+    request: llm::SaveLlmProviderRequest,
+    state: State<'_, AppState>,
+) -> Result<llm::LlmProviderDto, String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| store.save_llm_provider(&storage, request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn delete_llm_provider(provider_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| store.delete_llm_provider(&storage, &provider_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn set_default_llm_provider(
+    provider_id: String,
+    state: State<'_, AppState>,
+) -> Result<llm::LlmProviderDto, String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| store.set_default_llm_provider(&storage, &provider_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn delete_llm_provider_key(
+    provider_id: String,
+    state: State<'_, AppState>,
+) -> Result<llm::LlmProviderDto, String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| store.delete_llm_provider_key(&storage, &provider_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn check_llm_provider_key(
+    provider_id: String,
+    state: State<'_, AppState>,
+) -> Result<llm::LlmKeyStatusDto, String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| store.check_llm_provider_key(&storage, &provider_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn list_llm_models(
+    provider_id: String,
+    state: State<'_, AppState>,
+) -> Result<llm::LlmModelsResultDto, String> {
+    let provider = state
+        .with_store(|store| store.get_llm_provider_record(&provider_id))
+        .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let storage = llm::SystemSecretStorage;
+        let http = llm::CurlHttpClient;
+        match llm::list_models_for_provider(&provider, &storage, &http) {
+            Ok(result) => result,
+            Err(error) => llm::models_error_result(error),
+        }
+    })
+    .await
+    .map_err(|error| format!("Получение списка моделей было прервано: {error}"))
+}
+
+#[tauri::command]
+pub async fn test_llm_provider(
+    provider_id: String,
+    state: State<'_, AppState>,
+) -> Result<llm::LlmConnectionTestResultDto, String> {
+    let provider = state
+        .with_store(|store| store.get_llm_provider_record(&provider_id))
+        .map_err(command_error)?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let storage = llm::SystemSecretStorage;
+        let http = llm::CurlHttpClient;
+        match llm::test_provider_connection(&provider, &storage, &http) {
+            Ok(result) => result,
+            Err(error) => llm::connection_error_result(&provider, error),
+        }
+    })
+    .await
+    .map_err(|error| format!("Проверка подключения была прервана: {error}"))?;
+    state
+        .with_store(|store| store.update_llm_provider_status(&provider_id, &result))
+        .map_err(command_error)?;
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn list_notes(
     query: Option<String>,
     include_archived: bool,
@@ -2835,6 +3009,7 @@ pub fn import_backup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::SecretStorage;
 
     fn temp_store() -> DataStore {
         let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));
@@ -2910,6 +3085,149 @@ mod tests {
         assert_eq!(settings.language, "en");
         assert_eq!(settings.editor_content_width, 1440);
         assert_eq!(settings.editor_content_offset, -720);
+    }
+
+    fn llm_provider_request(
+        id: Option<String>,
+        name: &str,
+        api_key: Option<&str>,
+    ) -> llm::SaveLlmProviderRequest {
+        llm::SaveLlmProviderRequest {
+            id,
+            name: name.to_string(),
+            provider_type: "openai".to_string(),
+            base_url: "https://api.example.com/v1".to_string(),
+            api_key: api_key.map(str::to_string),
+            delete_api_key: false,
+            chat_model: "gpt-test".to_string(),
+            embedding_model: "embed-test".to_string(),
+            models_endpoint: "/models".to_string(),
+            chat_endpoint: "/chat/completions".to_string(),
+            embeddings_endpoint: "/embeddings".to_string(),
+            timeout_ms: 120000,
+            context_size: 16384,
+            temperature: 0.3,
+            streaming_enabled: true,
+            custom_headers_json: "{}".to_string(),
+            is_default: true,
+        }
+    }
+
+    #[test]
+    fn llm_provider_crud_default_and_key_storage_work() {
+        let mut store = temp_store();
+        let storage = llm::MemorySecretStorage::default();
+        let saved = store
+            .save_llm_provider(
+                &storage,
+                llm_provider_request(None, "Рабочий OpenAI-compatible", Some("sk-test-secret")),
+            )
+            .expect("save provider");
+
+        assert!(saved.has_api_key);
+        assert!(saved.is_default);
+
+        let persisted_secret_ref: Option<String> = store
+            .conn
+            .query_row(
+                "SELECT api_key_ref FROM llm_providers WHERE id = ?1",
+                params![saved.id],
+                |row| row.get(0),
+            )
+            .expect("read secret ref");
+        assert!(persisted_secret_ref
+            .as_deref()
+            .is_some_and(|secret_ref| secret_ref.starts_with("noteflow.llm.")));
+        assert_ne!(persisted_secret_ref.as_deref(), Some("sk-test-secret"));
+        assert_eq!(
+            storage
+                .get_secret(persisted_secret_ref.as_deref().unwrap())
+                .expect("secret from storage")
+                .as_deref(),
+            Some("sk-test-secret")
+        );
+
+        let second = store
+            .save_llm_provider(
+                &storage,
+                llm::SaveLlmProviderRequest {
+                    provider_type: "ollama".to_string(),
+                    base_url: "http://localhost:11434".to_string(),
+                    api_key: None,
+                    chat_model: "qwen3:8b".to_string(),
+                    embedding_model: String::new(),
+                    models_endpoint: "/api/tags".to_string(),
+                    chat_endpoint: "/api/generate".to_string(),
+                    embeddings_endpoint: "/api/embeddings".to_string(),
+                    is_default: true,
+                    ..llm_provider_request(None, "Ollama локально", None)
+                },
+            )
+            .expect("save second provider");
+        let first_after_default = store
+            .list_llm_providers(&storage)
+            .expect("list providers")
+            .into_iter()
+            .find(|provider| provider.id == saved.id)
+            .expect("first provider exists");
+        assert!(second.is_default);
+        assert!(!first_after_default.is_default);
+
+        let without_key = store
+            .delete_llm_provider_key(&storage, &saved.id)
+            .expect("delete key");
+        assert!(!without_key.has_api_key);
+        assert_eq!(
+            storage
+                .get_secret(persisted_secret_ref.as_deref().unwrap())
+                .expect("secret removed"),
+            None
+        );
+    }
+
+    #[test]
+    fn llm_provider_rejects_invalid_url() {
+        let mut store = temp_store();
+        let storage = llm::MemorySecretStorage::default();
+        let error = store
+            .save_llm_provider(
+                &storage,
+                llm::SaveLlmProviderRequest {
+                    base_url: "ftp://api.example.com".to_string(),
+                    ..llm_provider_request(None, "Bad provider", None)
+                },
+            )
+            .expect_err("invalid url rejected");
+
+        assert!(error.to_string().contains("http:// или https://"));
+    }
+
+    #[test]
+    fn llm_provider_backup_excludes_api_keys_and_secret_refs() {
+        let mut store = temp_store();
+        let storage = llm::MemorySecretStorage::default();
+        store
+            .save_llm_provider(
+                &storage,
+                llm_provider_request(None, "Backup provider", Some("sk-backup-secret")),
+            )
+            .expect("save provider");
+
+        let backup = store.create_backup().expect("create backup");
+        let bytes = fs::read(backup.path).expect("read backup");
+        let reader = Cursor::new(bytes);
+        let mut archive = ZipArchive::new(reader).expect("backup zip opens");
+        let mut backup_json = String::new();
+        archive
+            .by_name("noteflow-backup.json")
+            .expect("backup json exists")
+            .read_to_string(&mut backup_json)
+            .expect("read backup json");
+
+        assert!(backup_json.contains("Backup provider"));
+        assert!(!backup_json.contains("sk-backup-secret"));
+        assert!(!backup_json.contains("api_key_ref"));
+        assert!(!backup_json.contains("apiKeyRef"));
     }
 
     #[test]
