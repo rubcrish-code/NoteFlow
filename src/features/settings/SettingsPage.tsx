@@ -4,6 +4,13 @@ import { PageShell } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
 import * as llmProviderService from "../../services/llmProviderService";
 import type { LlmProvider, LlmProviderType } from "../../services/llmProviderService";
+import {
+  createLlmNetworkOperation,
+  getVisibleLlmNetworkAction,
+  isLlmNetworkOperationActiveById,
+  shouldClearLlmNetworkOperationForTarget,
+} from "./llmNetworkOperation";
+import type { LlmNetworkAction, LlmNetworkOperation } from "./llmNetworkOperation";
 
 interface SettingsPageProps {
   appZoomPercent: number;
@@ -34,11 +41,11 @@ const settingsPanels: Array<{ id: SettingsPanel; label: string }> = [
 const providerPresets = [
   {
     id: "openai",
-    label: "OpenAI-совместимый",
-    detail: "Облачный или свой сервер",
+    label: "OpenAI",
+    detail: "Публичный API с ключом",
     icon: "◎",
-    url: "https://api.example.com/v1",
-    model: "model-name",
+    url: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
     modelsEndpoint: "/models",
     chatEndpoint: "/chat/completions",
     embeddingsEndpoint: "/embeddings",
@@ -48,8 +55,8 @@ const providerPresets = [
     label: "Ollama",
     detail: "Локально на компьютере",
     icon: "◉",
-    url: "http://localhost:11434",
-    model: "qwen3:8b",
+    url: "http://127.0.0.1:11434",
+    model: "qwen3-4b-local:latest",
     modelsEndpoint: "/api/tags",
     chatEndpoint: "/api/generate",
     embeddingsEndpoint: "/api/embeddings",
@@ -67,8 +74,8 @@ const providerPresets = [
   },
   {
     id: "custom",
-    label: "Свой API",
-    detail: "Настраиваемые заголовки",
+    label: "OpenAI-compatible",
+    detail: "Свой сервер или другой API",
     icon: "</>",
     url: "http://localhost:8000/v1",
     model: "custom-model",
@@ -80,8 +87,8 @@ const providerPresets = [
 
 type ProviderPreset = (typeof providerPresets)[number];
 type StorageAction = "default" | "delete" | "key" | "save" | null;
-type NetworkAction = "models" | "test" | null;
 type MessageTone = "neutral" | "error";
+type DraftMode = "new" | "edit";
 
 interface ProviderFormState {
   id?: string;
@@ -213,12 +220,12 @@ function isLocalEndpoint(baseUrl: string) {
 
 function statusLabel(status: LlmProvider["lastStatus"]) {
   if (status === "success") {
-    return "Подключено";
+    return "Работает";
   }
   if (status === "error") {
-    return "Ошибка подключения";
+    return "Ошибка";
   }
-  return "Не настроено";
+  return "Не проверялось";
 }
 
 function sortProviders(providers: LlmProvider[]) {
@@ -226,7 +233,81 @@ function sortProviders(providers: LlmProvider[]) {
 }
 
 function formSignature(form: ProviderFormState) {
-  return JSON.stringify(form);
+  return JSON.stringify({
+    ...form,
+    apiKey: form.apiKey.trim().length > 0 ? "provided" : "",
+  });
+}
+
+function createDraftId() {
+  return `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function draftTargetId(form: ProviderFormState, draftId: string) {
+  return form.id ? `provider:${form.id}` : `draft:${draftId}`;
+}
+
+function isLocalProviderType(providerType: LlmProviderType) {
+  return providerType === "ollama" || providerType === "lmstudio";
+}
+
+function parseProviderNumber(value: string, fallback: number) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function safeUrlForDiagnostics(url: string) {
+  try {
+    const parsed = new URL(url);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return url.split("?")[0]?.split("#")[0] ?? "";
+  }
+}
+
+function draftInputFromForm(form: ProviderFormState): llmProviderService.DraftLlmProviderInput {
+  return {
+    providerType: form.providerType,
+    baseUrl: form.baseUrl,
+    apiKey: form.apiKey,
+    chatModel: form.chatModel,
+    embeddingModel: form.embeddingModel,
+    modelsEndpoint: form.modelsEndpoint,
+    chatEndpoint: form.chatEndpoint,
+    embeddingsEndpoint: form.embeddingsEndpoint,
+    timeoutMs: parseProviderNumber(form.timeoutSec, 120) * 1000,
+    contextSize: parseProviderNumber(form.contextSize, 16384),
+    temperature: parseProviderNumber(form.temperature, 0.3),
+    streamingEnabled: form.streamingEnabled,
+    customHeadersJson: form.customHeadersJson,
+  };
+}
+
+function validateDraftForm(form: ProviderFormState, action: "listModels" | "save" | "testConnection", hasSavedApiKey = false) {
+  const errors: string[] = [];
+  const baseUrl = form.baseUrl.trim();
+  if (action === "save" && !form.name.trim()) {
+    errors.push("Укажите название подключения.");
+  }
+  if (!baseUrl) {
+    errors.push("Укажите Base URL.");
+  } else if (!/^https?:\/\//i.test(baseUrl)) {
+    errors.push("Base URL должен начинаться с http:// или https://.");
+  }
+  if (form.providerType === "ollama" && /\/v1\/?$/i.test(baseUrl)) {
+    errors.push("Для Ollama используйте адрес без /v1, например http://127.0.0.1:11434.");
+  }
+  if (action === "save" && !form.chatModel.trim()) {
+    errors.push("Выберите или введите chat model.");
+  }
+  if (action === "save" && !isLocalProviderType(form.providerType) && !form.apiKey.trim() && !hasSavedApiKey) {
+    errors.push("Для внешнего provider нужен API key.");
+  }
+  return errors;
 }
 
 function LoadingInline({ label }: { label: string }) {
@@ -241,25 +322,42 @@ function LoadingInline({ label }: { label: string }) {
 function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>();
+  const [isProviderModalOpen, setIsProviderModalOpen] = useState(false);
+  const [draftMode, setDraftMode] = useState<DraftMode>("new");
+  const [draftId, setDraftId] = useState(() => createDraftId());
+  const [isDraftDirty, setIsDraftDirty] = useState(false);
   const [form, setForm] = useState<ProviderFormState>(() => createProviderForm());
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [isLoadingProviders, setIsLoadingProviders] = useState(true);
   const [storageAction, setStorageAction] = useState<StorageAction>(null);
-  const [networkAction, setNetworkAction] = useState<NetworkAction>(null);
+  const [networkOperation, setNetworkOperation] = useState<LlmNetworkOperation | null>(null);
   const [message, setMessage] = useState("Подключения пока не проверялись.");
   const [messageTone, setMessageTone] = useState<MessageTone>("neutral");
   const [showSecret, setShowSecret] = useState(false);
   const latestNetworkRequestIdRef = useRef(0);
   const currentFormRef = useRef(form);
+  const draftIdRef = useRef(draftId);
+  const deletedTargetIdsRef = useRef<Set<string>>(new Set());
+  const networkOperationRef = useRef<LlmNetworkOperation | null>(null);
+  const providersRef = useRef(providers);
+  const selectedProviderIdRef = useRef(selectedProviderId);
   const isMountedRef = useRef(true);
+  const modalInitialFocusRef = useRef<HTMLButtonElement>(null);
 
   const selectedProvider = useMemo(() => providers.find((provider) => provider.id === selectedProviderId), [providers, selectedProviderId]);
   const activePreset = getProviderPreset(form.providerType);
-  const isTestingConnection = networkAction === "test";
-  const isLoadingModels = networkAction === "models";
-  const statusClass = selectedProvider?.lastStatus === "success" ? "ok" : selectedProvider?.lastStatus === "error" ? "error" : "";
+  const currentTargetId = draftTargetId(form, draftId);
+  const visibleNetworkAction = isProviderModalOpen ? getVisibleLlmNetworkAction(networkOperation, currentTargetId) : null;
+  const checkingProviderId = networkOperation?.action === "testConnection" ? networkOperation.targetId : undefined;
+  const loadingModelsProviderId = networkOperation?.action === "listModels" ? networkOperation.targetId : undefined;
+  const isTestingConnection = visibleNetworkAction === "testConnection" && (checkingProviderId === undefined || checkingProviderId === currentTargetId);
+  const isLoadingModels = visibleNetworkAction === "listModels" && (loadingModelsProviderId === undefined || loadingModelsProviderId === currentTargetId);
+  const showApiKeyField = !isLocalProviderType(form.providerType);
+  const showBaseUrlField = form.providerType !== "openai";
+  const hasSavedApiKey = Boolean(selectedProvider && selectedProvider.id === form.id && selectedProvider.hasApiKey);
   const keyLabel = selectedProvider?.hasApiKey ? "Ключ сохранён" : "Ключ не задан";
   const privacyNotice = selectedProvider?.privacyNotice ?? (isLocalEndpoint(form.baseUrl) ? "Локальный endpoint: данные остаются на устройстве, если сервер действительно запущен локально." : "Внешний endpoint: при использовании модели выбранный контекст будет отправлен провайдеру.");
+  const modalTitle = draftMode === "edit" ? "Изменить подключение" : "Добавить подключение";
   const activeOperationMessage = isLoadingProviders
     ? "Загружаем подключения…"
     : isTestingConnection
@@ -278,17 +376,79 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const connectionNoteClass = ["connection-note", !activeOperationMessage && (messageTone === "error" || selectedProvider?.lastStatus === "error") ? "error" : "", activeOperationMessage ? "pending" : ""]
     .filter(Boolean)
     .join(" ");
+  const shouldShowConnectionNote = Boolean(activeOperationMessage || messageTone === "error" || providers.length > 0 || isProviderModalOpen);
 
   useEffect(() => {
     currentFormRef.current = form;
   }, [form]);
 
   useEffect(() => {
+    draftIdRef.current = draftId;
+  }, [draftId]);
+
+  useEffect(() => {
+    providersRef.current = providers;
+  }, [providers]);
+
+  useEffect(() => {
+    selectedProviderIdRef.current = selectedProviderId;
+  }, [selectedProviderId]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       latestNetworkRequestIdRef.current += 1;
+      networkOperationRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isProviderModalOpen) {
+      return;
+    }
+    modalInitialFocusRef.current?.focus();
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeProviderModal();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isProviderModalOpen, draftId]);
+
+  useEffect(() => {
+    if (!networkOperation) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      if (!isNetworkOperationActive(networkOperation)) {
+        llmProviderService.logLlmDiagnostic("ui_timeout_ignored_inactive", {
+          operationId: networkOperation.id,
+          targetId: networkOperation.targetId,
+        });
+        return;
+      }
+      const isStillCurrent =
+        networkOperation.targetKind === "provider"
+          ? isProviderOperationResultCurrent(networkOperation, { ignoreTimeout: true })
+          : isNetworkResultCurrent(networkOperation, { ignoreTimeout: true });
+      llmProviderService.logLlmDiagnostic("ui_timeout_fired", {
+        operationId: networkOperation.id,
+        targetId: networkOperation.targetId,
+        action: networkOperation.action,
+        isStillCurrent,
+      });
+      const text =
+        networkOperation.action === "listModels"
+          ? "Timeout: список моделей не был получен вовремя. Проверьте Base URL, endpoint и состояние локального сервера."
+          : "Timeout: проверка подключения не завершилась вовремя. Проверьте, запущена ли локальная модель и доступен ли endpoint.";
+      updateMessage(text, "error");
+      finishNetworkOperation(networkOperation);
+    }, networkOperation.timeoutMs + 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [networkOperation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -299,12 +459,9 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
         if (cancelled) {
           return;
         }
+        providersRef.current = loadedProviders;
         setProviders(loadedProviders);
-        if (loadedProviders[0]) {
-          setSelectedProviderId(loadedProviders[0].id);
-          replaceForm(formFromProvider(loadedProviders[0]));
-          updateMessage(loadedProviders[0].statusMessage ?? "Подключение загружено из локальной базы.");
-        }
+        updateMessage(loadedProviders.length > 0 ? "Подключения загружены из локальной базы." : "Подключений пока нет.");
       } catch (error) {
         if (!cancelled) {
           updateMessage(error instanceof Error ? error.message : "Не удалось загрузить подключения LLM", "error");
@@ -326,9 +483,90 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     setMessageTone(tone);
   }
 
-  function replaceForm(nextForm: ProviderFormState) {
+  function beginNetworkOperation(action: LlmNetworkAction, snapshot: ProviderFormState) {
+    const requestId = latestNetworkRequestIdRef.current + 1;
+    latestNetworkRequestIdRef.current = requestId;
+    const operation = createLlmNetworkOperation(
+      action,
+      requestId,
+      snapshot.id ? "provider" : "draft",
+      draftTargetId(snapshot, draftIdRef.current),
+      formSignature(snapshot),
+      action === "listModels" ? llmProviderService.LLM_MODEL_LIST_TIMEOUT_MS : llmProviderService.LLM_TEST_CONNECTION_TIMEOUT_MS,
+    );
+    networkOperationRef.current = operation;
+    setNetworkOperation(operation);
+    llmProviderService.logLlmDiagnostic("operation_started", {
+      action,
+      operationId: operation.id,
+      targetId: operation.targetId,
+      draftId: draftIdRef.current,
+      fingerprint: operation.fingerprint,
+      providerType: snapshot.providerType,
+      baseUrl: safeUrlForDiagnostics(snapshot.baseUrl),
+      modelsEndpoint: snapshot.modelsEndpoint,
+    });
+    return operation;
+  }
+
+  function traceContext(operation: LlmNetworkOperation): llmProviderService.LlmNetworkTraceContext {
+    return {
+      operationId: operation.id,
+      targetId: operation.targetId,
+      draftId: draftIdRef.current,
+      fingerprint: operation.fingerprint,
+    };
+  }
+
+  function isNetworkOperationActive(operation: LlmNetworkOperation) {
+    return isLlmNetworkOperationActiveById(operation, networkOperationRef.current, isMountedRef.current);
+  }
+
+  function cancelNetworkOperation() {
+    latestNetworkRequestIdRef.current += 1;
+    if (networkOperationRef.current) {
+      llmProviderService.logLlmDiagnostic("operation_cancelled", {
+        operationId: networkOperationRef.current.id,
+        targetId: networkOperationRef.current.targetId,
+      });
+    }
+    networkOperationRef.current = null;
+    setNetworkOperation(null);
+  }
+
+  function cancelNetworkOperationForTarget(targetId: string, options: { markDeleted?: boolean } = {}) {
+    if (options.markDeleted) {
+      deletedTargetIdsRef.current.add(targetId);
+    }
+    if (shouldClearLlmNetworkOperationForTarget(networkOperationRef.current, targetId)) {
+      cancelNetworkOperation();
+    }
+  }
+
+  function finishNetworkOperation(operation: LlmNetworkOperation) {
+    if (!isMountedRef.current) {
+      return;
+    }
+    llmProviderService.logLlmDiagnostic("cleanup_loading_called", {
+      operationId: operation.id,
+      targetId: operation.targetId,
+      currentOperationId: networkOperationRef.current?.id ?? null,
+    });
+    if (networkOperationRef.current?.id === operation.id) {
+      networkOperationRef.current = null;
+    }
+    setNetworkOperation((currentOperation) => (currentOperation?.id === operation.id ? null : currentOperation));
+  }
+
+  function replaceForm(nextForm: ProviderFormState, options: { preserveNetworkOperation?: boolean; markDirty?: boolean } = {}) {
+    if (!options.preserveNetworkOperation && networkOperationRef.current && formSignature(currentFormRef.current) !== formSignature(nextForm)) {
+      cancelNetworkOperation();
+    }
     currentFormRef.current = nextForm;
     setForm(nextForm);
+    if (options.markDirty !== undefined) {
+      setIsDraftDirty(options.markDirty);
+    }
   }
 
   function mergeProviderInState(provider: LlmProvider) {
@@ -336,31 +574,99 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       const nextProviders = currentProviders.some((item) => item.id === provider.id)
         ? currentProviders.map((item) => (item.id === provider.id ? provider : provider.isDefault ? { ...item, isDefault: false } : item))
         : [...currentProviders.map((item) => (provider.isDefault ? { ...item, isDefault: false } : item)), provider];
-      return sortProviders(nextProviders);
+      const sortedProviders = sortProviders(nextProviders);
+      providersRef.current = sortedProviders;
+      return sortedProviders;
     });
   }
 
   function updateProviderInState(provider: LlmProvider) {
     mergeProviderInState(provider);
+    if (isProviderModalOpen && currentFormRef.current.id === provider.id) {
+      selectedProviderIdRef.current = provider.id;
+      setSelectedProviderId(provider.id);
+      setDraftMode("edit");
+      replaceForm(formFromProvider(provider), { preserveNetworkOperation: true, markDirty: false });
+    }
+  }
+
+  function openAddProvider(preset: ProviderPreset = providerPresets[1]) {
+    cancelNetworkOperation();
+    selectedProviderIdRef.current = undefined;
+    setSelectedProviderId(undefined);
+    const nextDraftId = createDraftId();
+    setDraftId(nextDraftId);
+    draftIdRef.current = nextDraftId;
+    setDraftMode("new");
+    setModelOptions([]);
+    setShowSecret(false);
+    replaceForm(
+      {
+        ...createProviderForm(preset),
+        isDefault: providersRef.current.length === 0,
+      },
+      { markDirty: false },
+    );
+    setIsProviderModalOpen(true);
+    updateMessage("Выберите тип провайдера и заполните минимальные параметры.");
+  }
+
+  function openEditProvider(provider: LlmProvider) {
+    cancelNetworkOperation();
+    selectedProviderIdRef.current = provider.id;
     setSelectedProviderId(provider.id);
-    replaceForm(formFromProvider(provider));
+    const nextDraftId = createDraftId();
+    setDraftId(nextDraftId);
+    draftIdRef.current = nextDraftId;
+    setDraftMode("edit");
+    setModelOptions([]);
+    setShowSecret(false);
+    replaceForm(formFromProvider(provider), { markDirty: false });
+    setIsProviderModalOpen(true);
+    updateMessage(provider.statusMessage ?? "Подключение открыто для редактирования.", provider.lastStatus === "error" ? "error" : "neutral");
   }
 
-  async function refreshProviders(preferredId: string, requestId?: number, signature?: string) {
-    const loadedProviders = sortProviders(await llmProviderService.listLlmProviders());
-    if (requestId !== undefined && signature !== undefined && !isNetworkResultCurrent(requestId, signature)) {
-      return;
-    }
-    setProviders(loadedProviders);
-    const selected = loadedProviders.find((provider) => provider.id === preferredId) ?? loadedProviders[0];
-    if (selected) {
-      setSelectedProviderId(selected.id);
-      replaceForm(formFromProvider(selected));
-    }
+  function closeProviderModal() {
+    cancelNetworkOperationForTarget(draftTargetId(currentFormRef.current, draftIdRef.current), { markDeleted: !currentFormRef.current.id });
+    selectedProviderIdRef.current = undefined;
+    setSelectedProviderId(undefined);
+    setIsProviderModalOpen(false);
+    setDraftMode("new");
+    setModelOptions([]);
+    setShowSecret(false);
+    const nextDraftId = createDraftId();
+    setDraftId(nextDraftId);
+    draftIdRef.current = nextDraftId;
+    replaceForm(createProviderForm(providerPresets[1]), { markDirty: false });
   }
 
-  function isNetworkResultCurrent(requestId: number, signature: string) {
-    return isMountedRef.current && latestNetworkRequestIdRef.current === requestId && formSignature(currentFormRef.current) === signature;
+  function isNetworkResultCurrent(operation: LlmNetworkOperation, options: { ignoreTimeout?: boolean } = {}) {
+    if (!isNetworkOperationActive(operation)) {
+      return false;
+    }
+    if (deletedTargetIdsRef.current.has(operation.targetId)) {
+      return false;
+    }
+    if (draftTargetId(currentFormRef.current, draftIdRef.current) !== operation.targetId) {
+      return false;
+    }
+    if (!options.ignoreTimeout && Date.now() - operation.startedAt > operation.timeoutMs) {
+      return false;
+    }
+    return true;
+  }
+
+  function isProviderOperationResultCurrent(operation: LlmNetworkOperation, options: { ignoreTimeout?: boolean } = {}) {
+    if (!isNetworkOperationActive(operation)) {
+      return false;
+    }
+    if (deletedTargetIdsRef.current.has(operation.targetId)) {
+      return false;
+    }
+    if (!options.ignoreTimeout && Date.now() - operation.startedAt > operation.timeoutMs) {
+      return false;
+    }
+    return true;
   }
 
   async function persistProvider(providerForm: ProviderFormState) {
@@ -389,15 +695,23 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
 
   async function saveCurrentProvider() {
     const savedProvider = await persistProvider(currentFormRef.current);
-    updateProviderInState(savedProvider);
+    mergeProviderInState(savedProvider);
     setShowSecret(false);
     return savedProvider;
   }
 
   async function handleSave() {
+    const validationErrors = validateDraftForm(currentFormRef.current, "save", hasSavedApiKey);
+    if (validationErrors.length > 0) {
+      const text = validationErrors.join(" ");
+      updateMessage(text, "error");
+      onToast(text);
+      return;
+    }
     setStorageAction("save");
     try {
       const savedProvider = await saveCurrentProvider();
+      closeProviderModal();
       updateMessage(savedProvider.hasApiKey ? "Подключение сохранено. API key находится в защищённом хранилище ОС." : "Подключение сохранено без API key.");
       onToast("Подключение LLM сохранено");
     } catch (error) {
@@ -411,65 +725,138 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
 
   async function handleLoadModels() {
     const snapshot = currentFormRef.current;
-    const signature = formSignature(snapshot);
-    const requestId = latestNetworkRequestIdRef.current + 1;
-    latestNetworkRequestIdRef.current = requestId;
-    setNetworkAction("models");
+    llmProviderService.logLlmDiagnostic("button_click", {
+      action: "listModels",
+      providerType: snapshot.providerType,
+      baseUrl: safeUrlForDiagnostics(snapshot.baseUrl),
+      modelsEndpoint: snapshot.modelsEndpoint,
+      draftId: draftIdRef.current,
+    });
+    const validationErrors = validateDraftForm(snapshot, "listModels", hasSavedApiKey);
+    if (validationErrors.length > 0) {
+      const text = validationErrors.join(" ");
+      updateMessage(text, "error");
+      onToast(text);
+      return;
+    }
+    const operation = beginNetworkOperation("listModels", snapshot);
     updateMessage("Загружаем модели…");
     try {
-      const savedProvider = await persistProvider(snapshot);
-      mergeProviderInState(savedProvider);
-      const result = await llmProviderService.listLlmModels(savedProvider.id);
-      if (!isNetworkResultCurrent(requestId, signature)) {
+      const result = await llmProviderService.listLlmModelsForDraft(draftInputFromForm(snapshot), traceContext(operation));
+      if (!isNetworkResultCurrent(operation)) {
+        llmProviderService.logLlmDiagnostic("result_ignored_stale", {
+          operationId: operation.id,
+          targetId: operation.targetId,
+          action: operation.action,
+        });
         return;
       }
-      setSelectedProviderId(savedProvider.id);
-      const nextForm = result.status === "success" && result.models.length > 0 && !savedProvider.chatModel ? { ...formFromProvider(savedProvider), chatModel: result.models[0] ?? "" } : formFromProvider(savedProvider);
-      replaceForm(nextForm);
+      const nextForm = result.status === "success" && result.models.length > 0 && !snapshot.chatModel ? { ...currentFormRef.current, chatModel: result.models[0] ?? "" } : currentFormRef.current;
+      replaceForm(nextForm, { preserveNetworkOperation: true, markDirty: true });
       setModelOptions(result.models);
       updateMessage(result.message, result.status === "error" ? "error" : "neutral");
       onToast(result.message);
     } catch (error) {
-      if (isNetworkResultCurrent(requestId, signature)) {
+      if (isNetworkOperationActive(operation)) {
         const text = error instanceof Error ? error.message : "Не удалось получить список моделей";
         updateMessage(text, "error");
         onToast(text);
+      } else {
+        llmProviderService.logLlmDiagnostic("error_ignored_inactive", {
+          operationId: operation.id,
+          targetId: operation.targetId,
+          action: operation.action,
+        });
       }
     } finally {
-      if (isMountedRef.current && latestNetworkRequestIdRef.current === requestId) {
-        setNetworkAction(null);
-      }
+      finishNetworkOperation(operation);
     }
   }
 
   async function handleTestConnection() {
     const snapshot = currentFormRef.current;
-    const signature = formSignature(snapshot);
-    const requestId = latestNetworkRequestIdRef.current + 1;
-    latestNetworkRequestIdRef.current = requestId;
-    setNetworkAction("test");
+    llmProviderService.logLlmDiagnostic("button_click", {
+      action: "testConnection",
+      providerType: snapshot.providerType,
+      baseUrl: safeUrlForDiagnostics(snapshot.baseUrl),
+      modelsEndpoint: snapshot.modelsEndpoint,
+      draftId: draftIdRef.current,
+    });
+    const validationErrors = validateDraftForm(snapshot, "testConnection", hasSavedApiKey);
+    if (validationErrors.length > 0) {
+      const text = validationErrors.join(" ");
+      updateMessage(text, "error");
+      onToast(text);
+      return;
+    }
+    const operation = beginNetworkOperation("testConnection", snapshot);
     updateMessage("Проверяем подключение…");
     try {
-      const savedProvider = await persistProvider(snapshot);
-      mergeProviderInState(savedProvider);
-      const result = await llmProviderService.testLlmProvider(savedProvider.id);
-      if (!isNetworkResultCurrent(requestId, signature)) {
+      const result = await llmProviderService.testLlmProviderDraft(draftInputFromForm(snapshot), traceContext(operation));
+      if (!isNetworkResultCurrent(operation)) {
+        llmProviderService.logLlmDiagnostic("result_ignored_stale", {
+          operationId: operation.id,
+          targetId: operation.targetId,
+          action: operation.action,
+        });
         return;
       }
       setModelOptions(result.models);
       updateMessage(result.message, result.status === "error" ? "error" : "neutral");
-      await refreshProviders(savedProvider.id, requestId, signature);
       onToast(result.message);
     } catch (error) {
-      if (isNetworkResultCurrent(requestId, signature)) {
+      if (isNetworkOperationActive(operation)) {
         const text = error instanceof Error ? error.message : "Не удалось проверить подключение";
         updateMessage(text, "error");
         onToast(text);
+      } else {
+        llmProviderService.logLlmDiagnostic("error_ignored_inactive", {
+          operationId: operation.id,
+          targetId: operation.targetId,
+          action: operation.action,
+        });
       }
     } finally {
-      if (isMountedRef.current && latestNetworkRequestIdRef.current === requestId) {
-        setNetworkAction(null);
+      finishNetworkOperation(operation);
+    }
+  }
+
+  async function handleCheckSavedProvider(provider: LlmProvider) {
+    const snapshot = formFromProvider(provider);
+    const operation = beginNetworkOperation("testConnection", snapshot);
+    updateMessage(`Проверяем подключение ${provider.name}…`);
+    try {
+      const result = await llmProviderService.testLlmProvider(provider.id, traceContext(operation));
+      if (!isProviderOperationResultCurrent(operation)) {
+        llmProviderService.logLlmDiagnostic("result_ignored_stale", {
+          operationId: operation.id,
+          targetId: operation.targetId,
+          action: operation.action,
+        });
+        return;
       }
+      mergeProviderInState({
+        ...provider,
+        lastStatus: result.status,
+        statusMessage: result.message,
+        lastCheckedAt: result.checkedAt,
+      });
+      updateMessage(result.message, result.status === "error" ? "error" : "neutral");
+      onToast(result.message);
+    } catch (error) {
+      if (isNetworkOperationActive(operation)) {
+        const text = error instanceof Error ? error.message : "Не удалось проверить подключение";
+        updateMessage(text, "error");
+        onToast(text);
+      } else {
+        llmProviderService.logLlmDiagnostic("error_ignored_inactive", {
+          operationId: operation.id,
+          targetId: operation.targetId,
+          action: operation.action,
+        });
+      }
+    } finally {
+      finishNetworkOperation(operation);
     }
   }
 
@@ -492,22 +879,16 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     }
   }
 
-  async function handleDeleteProvider() {
-    if (!form.id) {
-      return;
-    }
+  async function deleteProvider(providerId: string) {
+    cancelNetworkOperationForTarget(`provider:${providerId}`, { markDeleted: true });
     setStorageAction("delete");
     try {
-      await llmProviderService.deleteLlmProvider(form.id);
-      const nextProviders = providers.filter((provider) => provider.id !== form.id);
+      await llmProviderService.deleteLlmProvider(providerId);
+      const nextProviders = providersRef.current.filter((provider) => provider.id !== providerId);
+      providersRef.current = nextProviders;
       setProviders(nextProviders);
-      const nextSelected = nextProviders[0];
-      if (nextSelected) {
-        setSelectedProviderId(nextSelected.id);
-        replaceForm(formFromProvider(nextSelected));
-      } else {
-        setSelectedProviderId(undefined);
-        replaceForm(createProviderForm());
+      if (currentFormRef.current.id === providerId) {
+        closeProviderModal();
       }
       updateMessage("Подключение удалено.");
       onToast("Подключение LLM удалено");
@@ -520,13 +901,17 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     }
   }
 
-  async function handleSetDefault() {
+  async function handleDeleteProvider() {
     if (!form.id) {
       return;
     }
+    await deleteProvider(form.id);
+  }
+
+  async function setDefaultProvider(providerId: string) {
     setStorageAction("default");
     try {
-      const updatedProvider = await llmProviderService.setDefaultLlmProvider(form.id);
+      const updatedProvider = await llmProviderService.setDefaultLlmProvider(providerId);
       updateProviderInState(updatedProvider);
       updateMessage("Подключение назначено основным.");
       onToast("Основная модель обновлена");
@@ -540,200 +925,284 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   }
 
   function applyPreset(preset: ProviderPreset) {
-    latestNetworkRequestIdRef.current += 1;
-    setSelectedProviderId(undefined);
+    cancelNetworkOperationForTarget(draftTargetId(currentFormRef.current, draftIdRef.current), { markDeleted: !currentFormRef.current.id });
+    const nextDraftId = createDraftId();
+    setDraftId(nextDraftId);
+    draftIdRef.current = nextDraftId;
     setModelOptions([]);
     setShowSecret(false);
-    replaceForm({
-      ...createProviderForm(preset),
-      name: form.id ? createProviderForm(preset).name : form.name || createProviderForm(preset).name,
-      isDefault: providers.length === 0,
-    });
+    const current = currentFormRef.current;
+    const presetForm = createProviderForm(preset);
+    replaceForm(
+      {
+        ...presetForm,
+        id: current.id,
+        name: current.id ? current.name : presetForm.name,
+        isDefault: current.isDefault || providersRef.current.length === 0,
+      },
+      { markDirty: Boolean(current.id) || isDraftDirty },
+    );
+    setDraftMode(current.id ? "edit" : "new");
     updateMessage("Заполните параметры и сохраните подключение.");
+  }
+
+  function handleCancelDraft() {
+    closeProviderModal();
+    updateMessage("Черновик подключения отменён.");
+  }
+
+  function updateDraft(values: Partial<ProviderFormState>) {
+    replaceForm({ ...currentFormRef.current, ...values }, { markDirty: true });
+    if ("providerType" in values || "baseUrl" in values || "apiKey" in values || "modelsEndpoint" in values) {
+      setModelOptions([]);
+    }
   }
 
   return (
     <div>
       <div className="settings-title">Модели ИИ</div>
-      <div className="settings-subtitle">Подключите локальную или публичную модель. NoteFlow поддерживает OpenAI-совместимые API, Ollama, LM Studio и пользовательские HTTP-endpoint.</div>
+      <div className="settings-subtitle">Подключите локальную или облачную модель для работы с заметками.</div>
       <div className="settings-card llm-provider-list-card">
         <div className="settings-section-head">
           <div>
             <b>Подключения</b>
             <div className="field-help">Метаданные хранятся в SQLite, API key — только в защищённом хранилище ОС.</div>
           </div>
-          <button className="secondary-btn compact" disabled={isLoadingProviders || storageAction !== null} onClick={() => applyPreset(providerPresets[0])} type="button">
-            Новое подключение
-          </button>
-        </div>
-        <div className="llm-provider-list">
-          {providers.length === 0 ? <div className="llm-empty-state">Подключений пока нет. Выберите тип провайдера и сохраните первое подключение.</div> : null}
-          {providers.map((provider) => (
-            <button
-              className={`llm-provider-row ${selectedProviderId === provider.id ? "active" : ""}`}
-              key={provider.id}
-              onClick={() => {
-                latestNetworkRequestIdRef.current += 1;
-                setSelectedProviderId(provider.id);
-                replaceForm(formFromProvider(provider));
-                setModelOptions([]);
-                setShowSecret(false);
-                updateMessage(provider.statusMessage ?? "Подключение выбрано.", provider.lastStatus === "error" ? "error" : "neutral");
-              }}
-              type="button"
-            >
-              <span className="provider-icon">{getProviderPreset(provider.providerType).icon}</span>
-              <span>
-                <b>{provider.name}</b>
-                <small>{getProviderPreset(provider.providerType).label} · {provider.chatModel || "модель не выбрана"}</small>
-              </span>
-              {provider.isDefault ? <span className="llm-default-badge">По умолчанию</span> : null}
-              <span className={`status-pill ${provider.lastStatus === "success" ? "ok" : provider.lastStatus === "error" ? "error" : ""}`}>{statusLabel(provider.lastStatus)}</span>
+          {providers.length > 0 ? (
+            <button className="primary-btn compact" disabled={isLoadingProviders || storageAction !== null} onClick={() => openAddProvider()} type="button">
+              Добавить подключение
             </button>
-          ))}
+          ) : null}
         </div>
-      </div>
-      <div className="settings-card provider-card">
-        <div className="settings-section-head">
-          <div>
-            <b>Подключение к LLM</b>
-            <div className="field-help">{privacyNotice}</div>
+        {providers.length === 0 && !isLoadingProviders ? (
+          <div className="llm-empty-state-card">
+            <div className="llm-empty-icon" aria-hidden="true">✦</div>
+            <b>Подключений пока нет</b>
+            <p>Добавьте Ollama, LM Studio, OpenAI или совместимый API.</p>
+            <button className="primary-btn" onClick={() => openAddProvider()} type="button">
+              Добавить подключение
+            </button>
           </div>
-          <span className={`status-pill ${statusClass}`}>{selectedProvider ? statusLabel(selectedProvider.lastStatus) : "Новое подключение"}</span>
-        </div>
-        <div className="provider-presets">
-          {providerPresets.map((provider) => (
-            <button
-              className={`provider-preset ${activePreset.id === provider.id ? "active" : ""}`}
-              key={provider.id}
-              onClick={() => {
-                applyPreset(provider);
-                onToast(`Выбран провайдер: ${provider.label}`);
-              }}
-              type="button"
-            >
-              <span className="provider-icon">{provider.icon}</span>
-              <b>{provider.label}</b>
-              <small>{provider.detail}</small>
-            </button>
-          ))}
-        </div>
-        <div className="form-grid">
-          <label className="field full">
-            Название подключения
-            <input onChange={(event) => replaceForm({ ...currentFormRef.current, name: event.currentTarget.value })} placeholder="Например, Рабочий сервер" value={form.name} />
-          </label>
-          <label className="field full">
-            Base URL
-            <input onChange={(event) => replaceForm({ ...currentFormRef.current, baseUrl: event.currentTarget.value })} placeholder="https://…/v1" value={form.baseUrl} />
-            <span className="field-help">Для локальных моделей обычно используется localhost. Для OpenAI-совместимых сервисов укажите корневой URL API.</span>
-          </label>
-          <label className="field full">
-            API key
-            <div className="secret-wrap">
-              <input
-                autoComplete="off"
-                onChange={(event) => replaceForm({ ...currentFormRef.current, apiKey: event.currentTarget.value })}
-                placeholder={selectedProvider?.hasApiKey ? "Введите новый ключ, чтобы заменить сохранённый" : "Введите ключ, если он требуется"}
-                type={showSecret ? "text" : "password"}
-                value={form.apiKey}
-              />
-              <button onClick={() => setShowSecret((current) => !current)} type="button">
-                {showSecret ? "Скрыть" : "Показать"}
-              </button>
-              <button disabled={!selectedProvider?.hasApiKey || storageAction === "key"} onClick={() => void handleDeleteKey()} type="button">
-                {storageAction === "key" ? <LoadingInline label="Удаляем…" /> : "Удалить ключ"}
-              </button>
+        ) : null}
+        {providers.length > 0 ? (
+          <div className="llm-provider-cards">
+            {providers.map((provider) => {
+              const preset = getProviderPreset(provider.providerType);
+              const providerTargetId = `provider:${provider.id}`;
+              const isProviderTesting = networkOperation?.action === "testConnection" && networkOperation.targetId === providerTargetId;
+              return (
+                <article className="llm-provider-card" key={provider.id}>
+                  <div className="llm-provider-card-main">
+                    <span className="provider-icon">{preset.icon}</span>
+                    <div>
+                      <div className="llm-provider-card-title">
+                        <b>{provider.name}</b>
+                        {provider.isDefault ? <span className="llm-default-badge">Основное</span> : null}
+                      </div>
+                      <small>{preset.label} · {provider.chatModel || "модель не выбрана"}</small>
+                    </div>
+                    <span className={`status-pill ${provider.lastStatus === "success" ? "ok" : provider.lastStatus === "error" ? "error" : ""}`}>{isProviderTesting ? "Проверяем…" : statusLabel(provider.lastStatus)}</span>
+                  </div>
+                  <div className="llm-provider-card-meta">
+                    <span>{provider.baseUrl}</span>
+                    {provider.statusMessage ? <span>{provider.statusMessage}</span> : null}
+                  </div>
+                  <div className="llm-provider-card-actions">
+                    <button className="secondary-btn compact" disabled={isProviderTesting || storageAction !== null} onClick={() => void handleCheckSavedProvider(provider)} type="button">
+                      {isProviderTesting ? <LoadingInline label="Проверяем…" /> : "Проверить"}
+                    </button>
+                    <button className="secondary-btn compact" disabled={storageAction !== null} onClick={() => openEditProvider(provider)} type="button">
+                      Изменить
+                    </button>
+                    <button className="secondary-btn compact" disabled={provider.isDefault || storageAction === "default"} onClick={() => void setDefaultProvider(provider.id)} type="button">
+                      {storageAction === "default" ? <LoadingInline label="Назначение…" /> : "Сделать основным"}
+                    </button>
+                    <button className="danger-btn compact" disabled={storageAction === "delete"} onClick={() => void deleteProvider(provider.id)} type="button">
+                      {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить"}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+        {shouldShowConnectionNote ? <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div> : null}
+      </div>
+      {isProviderModalOpen ? (
+        <div className="modal-backdrop llm-provider-modal-backdrop" onMouseDown={(event) => event.currentTarget === event.target && closeProviderModal()} role="presentation">
+          <section aria-labelledby="llm-provider-modal-title" aria-modal="true" className="llm-provider-modal" role="dialog">
+            <div className="llm-provider-modal-head">
+              <div>
+                <span className="llm-modal-eyebrow">{draftMode === "edit" ? "Редактирование" : "Новое подключение"}</span>
+                <h2 id="llm-provider-modal-title">{modalTitle}</h2>
+                <p>{privacyNotice}</p>
+              </div>
+              <button aria-label="Закрыть окно подключения" className="llm-modal-close" onClick={closeProviderModal} type="button">×</button>
             </div>
-            <span className={`field-help key-state ${selectedProvider?.hasApiKey ? "ok" : "warn"}`}>{keyLabel}. Реальный ключ не возвращается в форму после сохранения.</span>
-          </label>
-          <label className="field">
-            Модель чата
-            <div className="input-action">
-              <input list="llm-chat-model-options" onChange={(event) => replaceForm({ ...currentFormRef.current, chatModel: event.currentTarget.value })} placeholder="Введите ID модели" value={form.chatModel} />
-              <button disabled={isLoadingModels} onClick={() => void handleLoadModels()} type="button">
-                {isLoadingModels ? <LoadingInline label="Загружаем модели…" /> : "Получить модели"}
-              </button>
-            </div>
-            <datalist id="llm-chat-model-options">
-              {modelOptions.map((model) => (
-                <option key={model} value={model} />
+            <div className="provider-presets llm-provider-type-grid">
+              {providerPresets.map((provider, index) => (
+                <button
+                  className={`provider-preset ${activePreset.id === provider.id ? "active" : ""}`}
+                  key={provider.id}
+                  onClick={() => {
+                    applyPreset(provider);
+                    onToast(`Выбран провайдер: ${provider.label}`);
+                  }}
+                  ref={index === 0 ? modalInitialFocusRef : undefined}
+                  type="button"
+                >
+                  <span className="provider-icon">{provider.icon}</span>
+                  <b>{provider.label}</b>
+                  <small>{provider.detail}</small>
+                </button>
               ))}
-            </datalist>
-          </label>
-          <label className="field">
-            Embedding-модель
-            <input list="llm-chat-model-options" onChange={(event) => replaceForm({ ...currentFormRef.current, embeddingModel: event.currentTarget.value })} placeholder="Необязательно, для RAG" value={form.embeddingModel} />
-          </label>
-          <label className="field">
-            Тайм-аут, сек.
-            <input max="600" min="5" onChange={(event) => replaceForm({ ...currentFormRef.current, timeoutSec: event.currentTarget.value })} type="number" value={form.timeoutSec} />
-          </label>
-          <label className="field">
-            Контекст, токенов
-            <input min="1024" onChange={(event) => replaceForm({ ...currentFormRef.current, contextSize: event.currentTarget.value })} step="1024" type="number" value={form.contextSize} />
-          </label>
-          <label className="field">
-            Температура
-            <input max="2" min="0" onChange={(event) => replaceForm({ ...currentFormRef.current, temperature: event.currentTarget.value })} step="0.1" type="number" value={form.temperature} />
-          </label>
-          <label className="field switch-field">
-            <span>
-              <b>Потоковая выдача</b>
-              <small>Показывать ответ по мере генерации</small>
-            </span>
-            <input checked={form.streamingEnabled} onChange={(event) => replaceForm({ ...currentFormRef.current, streamingEnabled: event.currentTarget.checked })} type="checkbox" />
-          </label>
-          <label className="field switch-field">
-            <span>
-              <b>Основное подключение</b>
-              <small>Использовать по умолчанию для будущих AI-функций</small>
-            </span>
-            <input checked={form.isDefault} onChange={(event) => replaceForm({ ...currentFormRef.current, isDefault: event.currentTarget.checked })} type="checkbox" />
-          </label>
+            </div>
+            <div className="form-grid llm-provider-modal-form">
+              <label className="field full">
+                Название подключения
+                <input onChange={(event) => updateDraft({ name: event.currentTarget.value })} placeholder="Например, Ollama Local" value={form.name} />
+              </label>
+              {showBaseUrlField ? (
+                <label className="field full">
+                  Base URL
+                  <input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })} placeholder={form.providerType === "ollama" ? "http://127.0.0.1:11434" : "https://…/v1"} value={form.baseUrl} />
+                  <span className="field-help">
+                    {form.providerType === "ollama"
+                      ? "Для Ollama используйте адрес без /v1: http://127.0.0.1:11434."
+                      : form.providerType === "lmstudio"
+                        ? "Для LM Studio обычно используется http://localhost:1234/v1."
+                        : "Например: http://localhost:1234/v1 или https://api.example.com/v1."}
+                  </span>
+                </label>
+              ) : null}
+              {showApiKeyField ? (
+                <label className="field full">
+                  API key
+                  <div className="secret-wrap">
+                    <input
+                      autoComplete="off"
+                      onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })}
+                      placeholder={hasSavedApiKey ? "Введите новый ключ, чтобы заменить сохранённый" : "Введите ключ, если он требуется"}
+                      type={showSecret ? "text" : "password"}
+                      value={form.apiKey}
+                    />
+                    <button onClick={() => setShowSecret((current) => !current)} type="button">
+                      {showSecret ? "Скрыть" : "Показать"}
+                    </button>
+                    <button disabled={!hasSavedApiKey || storageAction === "key"} onClick={() => void handleDeleteKey()} type="button">
+                      {storageAction === "key" ? <LoadingInline label="Удаляем…" /> : "Удалить ключ"}
+                    </button>
+                  </div>
+                  <span className={`field-help key-state ${hasSavedApiKey ? "ok" : "warn"}`}>{keyLabel}. Реальный ключ не возвращается в форму после сохранения.</span>
+                </label>
+              ) : null}
+              <label className="field full">
+                Модель чата
+                <div className="input-action">
+                  <input list="llm-chat-model-options" onChange={(event) => updateDraft({ chatModel: event.currentTarget.value })} placeholder="Введите ID модели" value={form.chatModel} />
+                  <button disabled={isLoadingModels} onClick={() => void handleLoadModels()} type="button">
+                    {isLoadingModels ? <LoadingInline label="Загружаем модели…" /> : "Получить модели"}
+                  </button>
+                </div>
+                <datalist id="llm-chat-model-options">
+                  {modelOptions.map((model) => (
+                    <option key={model} value={model} />
+                  ))}
+                </datalist>
+              </label>
+              {modelOptions.length > 0 ? (
+                <div className="llm-model-options">
+                  {modelOptions.map((model) => (
+                    <button className={form.chatModel === model ? "active" : ""} key={model} onClick={() => updateDraft({ chatModel: model })} type="button">
+                      {model}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <label className="field switch-field full">
+                <span>
+                  <b>Основное подключение</b>
+                  <small>Использовать по умолчанию для AI-функций</small>
+                </span>
+                <input checked={form.isDefault} onChange={(event) => updateDraft({ isDefault: event.currentTarget.checked })} type="checkbox" />
+              </label>
+            </div>
+            <details className="advanced-settings">
+              <summary>Дополнительные параметры</summary>
+              <div className="form-grid advanced-grid llm-provider-modal-form">
+                {!showBaseUrlField ? (
+                  <label className="field full">
+                    Base URL
+                    <input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })} value={form.baseUrl} />
+                    <span className="field-help">Стандартный OpenAI endpoint обычно не нужно менять.</span>
+                  </label>
+                ) : null}
+                <label className="field full">
+                  Embedding-модель
+                  <input list="llm-chat-model-options" onChange={(event) => updateDraft({ embeddingModel: event.currentTarget.value })} placeholder="Необязательно, для RAG" value={form.embeddingModel} />
+                </label>
+                <label className="field">
+                  Тайм-аут, сек.
+                  <input max="600" min="5" onChange={(event) => updateDraft({ timeoutSec: event.currentTarget.value })} type="number" value={form.timeoutSec} />
+                </label>
+                <label className="field">
+                  Контекст, токенов
+                  <input min="1024" onChange={(event) => updateDraft({ contextSize: event.currentTarget.value })} step="1024" type="number" value={form.contextSize} />
+                </label>
+                <label className="field">
+                  Температура
+                  <input max="2" min="0" onChange={(event) => updateDraft({ temperature: event.currentTarget.value })} step="0.1" type="number" value={form.temperature} />
+                </label>
+                <label className="field switch-field">
+                  <span>
+                    <b>Потоковая выдача</b>
+                    <small>Показывать ответ по мере генерации</small>
+                  </span>
+                  <input checked={form.streamingEnabled} onChange={(event) => updateDraft({ streamingEnabled: event.currentTarget.checked })} type="checkbox" />
+                </label>
+                <label className="field full">
+                  Дополнительные HTTP-заголовки
+                  <textarea onChange={(event) => updateDraft({ customHeadersJson: event.currentTarget.value })} placeholder='{"X-Organization":"example"}' rows={3} value={form.customHeadersJson} />
+                  <span className="field-help">Секретные заголовки вроде Authorization или X-API-Key запрещены. Используйте поле API key.</span>
+                </label>
+                <label className="field">
+                  Путь списка моделей
+                  <input onChange={(event) => updateDraft({ modelsEndpoint: event.currentTarget.value })} value={form.modelsEndpoint} />
+                </label>
+                <label className="field">
+                  Путь чата
+                  <input onChange={(event) => updateDraft({ chatEndpoint: event.currentTarget.value })} value={form.chatEndpoint} />
+                </label>
+                <label className="field">
+                  Путь embeddings
+                  <input onChange={(event) => updateDraft({ embeddingsEndpoint: event.currentTarget.value })} value={form.embeddingsEndpoint} />
+                </label>
+              </div>
+            </details>
+            <div className="llm-action-bar">
+              <div className="llm-danger-actions">
+                {form.id ? (
+                  <button className="danger-btn" disabled={storageAction === "delete"} onClick={() => void handleDeleteProvider()} type="button">
+                    {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить подключение"}
+                  </button>
+                ) : null}
+                <button className="secondary-btn" disabled={storageAction !== null} onClick={handleCancelDraft} type="button">
+                  Отменить
+                </button>
+              </div>
+              <div className="llm-main-actions">
+                <button className="secondary-btn" disabled={isTestingConnection} onClick={() => void handleTestConnection()} type="button">
+                  {isTestingConnection ? <LoadingInline label="Проверяем…" /> : form.providerType === "ollama" ? "Проверить Ollama" : "Проверить"}
+                </button>
+                <button className="primary-btn" disabled={storageAction === "save"} onClick={() => void handleSave()} type="button">
+                  {storageAction === "save" ? <LoadingInline label="Сохранение…" /> : draftMode === "edit" ? "Сохранить изменения" : "Сохранить подключение"}
+                </button>
+              </div>
+            </div>
+            <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div>
+          </section>
         </div>
-        <details className="advanced-settings">
-          <summary>Дополнительные параметры</summary>
-          <div className="form-grid advanced-grid">
-            <label className="field full">
-              Дополнительные HTTP-заголовки
-              <textarea onChange={(event) => replaceForm({ ...currentFormRef.current, customHeadersJson: event.currentTarget.value })} placeholder='{"X-Organization":"example"}' rows={3} value={form.customHeadersJson} />
-              <span className="field-help">Секретные заголовки вроде Authorization или X-API-Key на этом этапе запрещены. Используйте поле API key.</span>
-            </label>
-            <label className="field">
-              Путь списка моделей
-              <input onChange={(event) => replaceForm({ ...currentFormRef.current, modelsEndpoint: event.currentTarget.value })} value={form.modelsEndpoint} />
-            </label>
-            <label className="field">
-              Путь чата
-              <input onChange={(event) => replaceForm({ ...currentFormRef.current, chatEndpoint: event.currentTarget.value })} value={form.chatEndpoint} />
-            </label>
-            <label className="field">
-              Путь embeddings
-              <input onChange={(event) => replaceForm({ ...currentFormRef.current, embeddingsEndpoint: event.currentTarget.value })} value={form.embeddingsEndpoint} />
-            </label>
-          </div>
-        </details>
-        <div className="llm-action-bar">
-          <div className="llm-danger-actions">
-            <button className="danger-btn" disabled={!form.id || storageAction === "delete"} onClick={() => void handleDeleteProvider()} type="button">
-              {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить подключение"}
-            </button>
-          </div>
-          <div className="llm-main-actions">
-            <button className="secondary-btn" disabled={!form.id || storageAction === "default"} onClick={() => void handleSetDefault()} type="button">
-              {storageAction === "default" ? <LoadingInline label="Назначение…" /> : "Сделать основным"}
-            </button>
-            <button className="secondary-btn" disabled={isTestingConnection} onClick={() => void handleTestConnection()} type="button">
-              {isTestingConnection ? <LoadingInline label="Проверяем…" /> : "Проверить подключение"}
-            </button>
-            <button className="primary-btn" disabled={storageAction === "save"} onClick={() => void handleSave()} type="button">
-              {storageAction === "save" ? <LoadingInline label="Сохранение…" /> : "Сохранить подключение"}
-            </button>
-          </div>
-        </div>
-        <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div>
-      </div>
+      ) : null}
     </div>
   );
 }

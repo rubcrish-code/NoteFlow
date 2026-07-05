@@ -57,4 +57,18 @@ describe("production data layer contract", () => {
 
     assert.deepEqual(offenders, []);
   });
+
+  it("normalizes UI settings dimensions to safe integers before Tauri invoke", () => {
+    const source = readFileSync("src/services/uiSettingsService.ts", "utf8");
+
+    assert.match(source, /function clampInteger/);
+    assert.match(source, /Math\.round/);
+    assert.match(source, /Number\.isFinite/);
+    assert.match(source, /chatWidth: clampInteger/);
+    assert.match(source, /listWidth: clampInteger/);
+    assert.match(source, /ragConversationWidth: clampInteger/);
+    assert.match(source, /ragSourcesWidth: clampInteger/);
+    assert.match(source, /sidebarWidth: clampInteger/);
+    assert.match(source, /request: normalizeUiSettings\(settings\)/);
+  });
 });

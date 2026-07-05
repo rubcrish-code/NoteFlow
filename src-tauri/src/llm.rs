@@ -17,6 +17,45 @@ const STATUS_SUCCESS: &str = "success";
 const STATUS_ERROR: &str = "error";
 const LIST_MODELS_TIMEOUT_MS: i64 = 15_000;
 const TEST_CONNECTION_TIMEOUT_MS: i64 = 10_000;
+const NOTE_AI_TIMEOUT_MS: i64 = 45_000;
+const NOTE_AI_CONTEXT_LIMIT: usize = 24_000;
+const NOTE_AI_HARD_CONTEXT_LIMIT: usize = 120_000;
+const NOTE_AI_SELECTED_LIMIT: usize = 12_000;
+const NOTE_AI_QUESTION_LIMIT: usize = 3_000;
+const OPENAI_COMPATIBLE_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+const OPENAI_COMPATIBLE_TEST_MAX_TOKENS: i64 = 512;
+const OPENAI_COMPATIBLE_NOTE_AI_MAX_TOKENS: i64 = 2048;
+
+pub fn diagnostic_url(url: &str) -> String {
+    let without_query = url.split(['?', '#']).next().unwrap_or_default();
+    if let Some((scheme, rest)) = without_query.split_once("://") {
+        if let Some((_, host_and_path)) = rest.rsplit_once('@') {
+            return format!("{scheme}://{host_and_path}");
+        }
+    }
+    without_query.to_string()
+}
+
+pub fn log_llm_diagnostic(event: &str, fields: &[(&str, String)]) {
+    #[cfg(debug_assertions)]
+    {
+        let rendered = fields
+            .iter()
+            .map(|(key, value)| {
+                let safe_value = value.replace(['\r', '\n', '\t'], " ");
+                format!("{key}={safe_value}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!("[NoteFlow LLM] {event} {rendered}");
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = event;
+        let _ = fields;
+    }
+}
 
 pub const LLM_PROVIDER_SCHEMA_SQL: &str = "
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -123,6 +162,24 @@ pub struct SaveLlmProviderRequest {
     pub is_default: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftLlmProviderRequest {
+    pub provider_type: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub chat_model: String,
+    pub embedding_model: String,
+    pub models_endpoint: String,
+    pub chat_endpoint: String,
+    pub embeddings_endpoint: String,
+    pub timeout_ms: i64,
+    pub context_size: i64,
+    pub temperature: f64,
+    pub streaming_enabled: bool,
+    pub custom_headers_json: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmKeyStatusDto {
@@ -147,6 +204,61 @@ pub struct LlmConnectionTestResultDto {
     pub chat_ok: bool,
     pub embeddings_ok: bool,
     pub is_local: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteAiStatusDto {
+    pub has_provider: bool,
+    pub provider_name: Option<String>,
+    pub model: Option<String>,
+    pub is_local: bool,
+    pub privacy_scope: String,
+    pub privacy_accepted: bool,
+    pub privacy_notice: String,
+    pub can_use: bool,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteAiContextDto {
+    pub note_id: String,
+    pub title: String,
+    pub note_date: String,
+    pub project: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub plain_text: String,
+    pub content_markdown: String,
+    pub selected_text: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteAiRequestDto {
+    pub kind: String,
+    pub action_id: Option<String>,
+    pub scope: String,
+    pub question: Option<String>,
+    pub context: NoteAiContextDto,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteAiResponseDto {
+    pub status: String,
+    pub message: String,
+    pub response: String,
+    pub provider_name: String,
+    pub model: String,
+    pub is_local: bool,
+}
+
+#[derive(Debug)]
+struct NoteAiPrompt {
+    system: String,
+    user: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -194,6 +306,50 @@ impl SecretStorage for SystemSecretStorage {
 
     fn delete_secret(&self, secret_ref: &str) -> DataResult<()> {
         system_secret_storage::delete_secret(secret_ref)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct OperationSecretStorage {
+    secret_ref: Option<String>,
+    secret: Option<String>,
+}
+
+impl OperationSecretStorage {
+    fn from_api_key(api_key: Option<String>) -> Self {
+        let trimmed_key = api_key.unwrap_or_default().trim().to_string();
+        if trimmed_key.is_empty() {
+            Self::default()
+        } else {
+            Self {
+                secret_ref: Some("noteflow.llm.draft.api_key".to_string()),
+                secret: Some(trimmed_key),
+            }
+        }
+    }
+
+    fn secret_ref(&self) -> Option<String> {
+        self.secret_ref.clone()
+    }
+}
+
+impl SecretStorage for OperationSecretStorage {
+    fn set_secret(&self, _secret_ref: &str, _secret: &str) -> DataResult<()> {
+        Err(DataError::State(
+            "Operation secret storage is read-only".to_string(),
+        ))
+    }
+
+    fn get_secret(&self, secret_ref: &str) -> DataResult<Option<String>> {
+        if self.secret_ref.as_deref() == Some(secret_ref) {
+            Ok(self.secret.clone())
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn delete_secret(&self, _secret_ref: &str) -> DataResult<()> {
+        Ok(())
     }
 }
 
@@ -308,6 +464,145 @@ pub fn list_providers<S: SecretStorage>(
 
 pub fn get_provider_record(conn: &Connection, provider_id: &str) -> DataResult<LlmProviderRecord> {
     query_provider_record(conn, provider_id)
+}
+
+pub fn get_default_provider_record(conn: &Connection) -> DataResult<Option<LlmProviderRecord>> {
+    query_default_provider_record(conn)
+}
+
+pub fn list_models_for_draft<H: HttpClient>(
+    request: DraftLlmProviderRequest,
+    client: &H,
+) -> DataResult<LlmModelsResultDto> {
+    let (provider, storage) = draft_provider_record(request)?;
+    list_models_for_provider(&provider, &storage, client)
+}
+
+pub fn test_draft_provider_connection<H: HttpClient>(
+    request: DraftLlmProviderRequest,
+    client: &H,
+) -> DataResult<LlmConnectionTestResultDto> {
+    let (provider, storage) = draft_provider_record(request)?;
+    test_provider_connection(&provider, &storage, client)
+}
+
+pub fn note_ai_status<S: SecretStorage>(
+    provider: Option<&LlmProviderRecord>,
+    privacy_accepted: bool,
+    storage: &S,
+) -> DataResult<NoteAiStatusDto> {
+    let Some(provider) = provider else {
+        return Ok(NoteAiStatusDto {
+            has_provider: false,
+            provider_name: None,
+            model: None,
+            is_local: true,
+            privacy_scope: "local".to_string(),
+            privacy_accepted,
+            privacy_notice: "Выберите default LLM provider в настройках моделей.".to_string(),
+            can_use: false,
+            message: "Default LLM provider не выбран".to_string(),
+        });
+    };
+
+    let is_local = is_local_base_url(&provider.base_url);
+    let has_required_key = is_local || provider_has_api_key(provider, storage)?;
+    let has_model = !provider.chat_model.trim().is_empty();
+    let message = if !has_model {
+        "Для чата не выбрана модель".to_string()
+    } else if !has_required_key {
+        "Для внешнего провайдера нужен API key".to_string()
+    } else if !privacy_accepted {
+        "Перед первым AI-запросом подтвердите предупреждение о передаче текста".to_string()
+    } else {
+        "AI по текущей заметке готов".to_string()
+    };
+
+    Ok(NoteAiStatusDto {
+        has_provider: true,
+        provider_name: Some(provider.name.clone()),
+        model: Some(provider.chat_model.clone()),
+        is_local,
+        privacy_scope: privacy_scope_for_provider(provider).to_string(),
+        privacy_accepted,
+        privacy_notice: privacy_notice(is_local),
+        can_use: has_model && has_required_key && privacy_accepted,
+        message,
+    })
+}
+
+pub fn privacy_scope_for_provider(provider: &LlmProviderRecord) -> &'static str {
+    if is_local_base_url(&provider.base_url) {
+        "local"
+    } else {
+        "external"
+    }
+}
+
+pub fn run_note_ai_request<S: SecretStorage, H: HttpClient>(
+    provider: &LlmProviderRecord,
+    storage: &S,
+    client: &H,
+    request: NoteAiRequestDto,
+) -> DataResult<NoteAiResponseDto> {
+    ensure_note_ai_provider_ready(provider, storage)?;
+    let prompt = build_note_ai_prompt(&request)?;
+    let budget = LlmOperationBudget::new(NOTE_AI_TIMEOUT_MS, "AI-запрос по текущей заметке");
+    let headers = provider_headers(provider, storage)?;
+    let url = join_url(&provider.base_url, &provider.chat_endpoint)?;
+    let timeout_ms = budget.request_timeout(provider.timeout_ms)?;
+    log_llm_diagnostic(
+        "note_ai_request",
+        &[
+            ("providerType", provider.provider_type.clone()),
+            ("baseUrl", diagnostic_url(&provider.base_url)),
+            ("endpointPath", provider.chat_endpoint.clone()),
+            ("url", diagnostic_url(&url)),
+            (
+                "hasAuthorization",
+                has_header(&headers, "Authorization").to_string(),
+            ),
+            (
+                "hasUserAgent",
+                has_header(&headers, "User-Agent").to_string(),
+            ),
+            ("timeoutMs", timeout_ms.to_string()),
+            (
+                "maxTokens",
+                note_ai_max_tokens(provider).unwrap_or(0).to_string(),
+            ),
+        ],
+    );
+    let response = client.send(HttpRequest {
+        method: "POST".to_string(),
+        url,
+        headers,
+        body: Some(note_ai_request_body(provider, &prompt)),
+        timeout_ms,
+    })?;
+    let metadata = openai_response_metadata(&response.body);
+    log_llm_diagnostic(
+        "note_ai_response",
+        &[
+            ("providerType", provider.provider_type.clone()),
+            ("endpointPath", provider.chat_endpoint.clone()),
+            ("status", response.status.to_string()),
+            ("finishReason", metadata.finish_reason.unwrap_or_default()),
+            ("hasContent", metadata.has_content.to_string()),
+            ("hasReasoning", metadata.has_reasoning.to_string()),
+        ],
+    );
+    ensure_success_status(response.status, &response.body)?;
+    let generated = parse_note_ai_response(&provider.provider_type, &response.body)?;
+
+    Ok(NoteAiResponseDto {
+        status: STATUS_SUCCESS.to_string(),
+        message: "Ответ модели получен".to_string(),
+        response: generated,
+        provider_name: provider.name.clone(),
+        model: provider.chat_model.clone(),
+        is_local: is_local_base_url(&provider.base_url),
+    })
 }
 
 pub fn save_provider<S: SecretStorage>(
@@ -590,12 +885,32 @@ pub fn list_models_for_provider<S: SecretStorage, H: HttpClient>(
     client: &H,
 ) -> DataResult<LlmModelsResultDto> {
     let budget = LlmOperationBudget::new(LIST_MODELS_TIMEOUT_MS, "получение списка моделей");
-    let models = fetch_models(
+    let models = match fetch_models(
         provider,
         storage,
         client,
         budget.request_timeout(provider.timeout_ms)?,
-    )?;
+    ) {
+        Ok(models) => models,
+        Err(error) if is_openai_compatible_provider(provider) => {
+            log_llm_diagnostic(
+                "models_unavailable_manual_entry_allowed",
+                &[
+                    ("providerType", provider.provider_type.clone()),
+                    ("baseUrl", diagnostic_url(&provider.base_url)),
+                    ("endpointPath", provider.models_endpoint.clone()),
+                    ("error", safe_diagnostic_error(&error)),
+                ],
+            );
+            return Ok(LlmModelsResultDto {
+                status: STATUS_ERROR.to_string(),
+                message: "Не удалось получить список моделей. Введите название модели вручную."
+                    .to_string(),
+                models: Vec::new(),
+            });
+        }
+        Err(error) => return Err(error),
+    };
     let message = if models.is_empty() {
         "Endpoint доступен, но список моделей пуст".to_string()
     } else {
@@ -613,6 +928,10 @@ pub fn test_provider_connection<S: SecretStorage, H: HttpClient>(
     storage: &S,
     client: &H,
 ) -> DataResult<LlmConnectionTestResultDto> {
+    if is_openai_compatible_provider(provider) {
+        return test_openai_compatible_connection(provider, storage, client);
+    }
+
     let checked_at = now_iso();
     let budget = LlmOperationBudget::new(TEST_CONNECTION_TIMEOUT_MS, "проверка подключения");
     let models = fetch_models(
@@ -621,34 +940,124 @@ pub fn test_provider_connection<S: SecretStorage, H: HttpClient>(
         client,
         budget.request_timeout(provider.timeout_ms)?,
     )?;
-    let chat_ok = if provider.chat_model.trim().is_empty() {
-        false
-    } else {
-        run_chat_probe(
-            provider,
-            storage,
-            client,
-            budget.request_timeout(provider.timeout_ms)?,
-        )?;
-        true
-    };
-    let embeddings_ok = if provider.embedding_model.trim().is_empty() {
-        false
-    } else {
-        run_embeddings_probe(
-            provider,
-            storage,
-            client,
-            budget.request_timeout(provider.timeout_ms)?,
-        )?;
-        true
-    };
+    let chat_ok = model_is_listed(&models, &provider.chat_model);
+    let embeddings_ok = model_is_listed(&models, &provider.embedding_model);
     let message = if chat_ok || embeddings_ok {
         "Подключение успешно проверено".to_string()
     } else if models.is_empty() {
         "Endpoint доступен, но модели не найдены".to_string()
+    } else if !provider.chat_model.trim().is_empty() || !provider.embedding_model.trim().is_empty()
+    {
+        "Endpoint доступен, но выбранная модель не найдена в списке".to_string()
     } else {
         "Endpoint доступен, список моделей получен".to_string()
+    };
+
+    Ok(LlmConnectionTestResultDto {
+        status: STATUS_SUCCESS.to_string(),
+        message,
+        checked_at,
+        models,
+        chat_ok,
+        embeddings_ok,
+        is_local: is_local_base_url(&provider.base_url),
+    })
+}
+
+fn test_openai_compatible_connection<S: SecretStorage, H: HttpClient>(
+    provider: &LlmProviderRecord,
+    storage: &S,
+    client: &H,
+) -> DataResult<LlmConnectionTestResultDto> {
+    let checked_at = now_iso();
+    let budget = LlmOperationBudget::new(TEST_CONNECTION_TIMEOUT_MS, "проверка подключения");
+    let models = match fetch_models(
+        provider,
+        storage,
+        client,
+        budget.request_timeout(provider.timeout_ms)?,
+    ) {
+        Ok(models) => models,
+        Err(error) => {
+            log_llm_diagnostic(
+                "models_unavailable_falling_back_to_chat_probe",
+                &[
+                    ("providerType", provider.provider_type.clone()),
+                    ("baseUrl", diagnostic_url(&provider.base_url)),
+                    ("endpointPath", provider.models_endpoint.clone()),
+                    ("error", safe_diagnostic_error(&error)),
+                ],
+            );
+            Vec::new()
+        }
+    };
+
+    if provider.chat_model.trim().is_empty() {
+        return Err(DataError::InvalidInput(
+            "Для проверки OpenAI-compatible подключения укажите chat model вручную".to_string(),
+        ));
+    }
+    if !is_local_base_url(&provider.base_url) && !provider_has_api_key(provider, storage)? {
+        return Err(DataError::InvalidInput(
+            "API key missing: для внешнего LLM provider нужен сохранённый ключ".to_string(),
+        ));
+    }
+
+    let timeout_ms = budget.request_timeout(provider.timeout_ms)?;
+    let headers = provider_headers(provider, storage)?;
+    let url = join_url(&provider.base_url, &provider.chat_endpoint)?;
+    log_llm_diagnostic(
+        "chat_probe_request",
+        &[
+            ("providerType", provider.provider_type.clone()),
+            ("baseUrl", diagnostic_url(&provider.base_url)),
+            ("endpointPath", provider.chat_endpoint.clone()),
+            ("url", diagnostic_url(&url)),
+            (
+                "hasAuthorization",
+                has_header(&headers, "Authorization").to_string(),
+            ),
+            (
+                "hasUserAgent",
+                has_header(&headers, "User-Agent").to_string(),
+            ),
+            ("timeoutMs", timeout_ms.to_string()),
+            ("maxTokens", OPENAI_COMPATIBLE_TEST_MAX_TOKENS.to_string()),
+        ],
+    );
+    let response = client.send(HttpRequest {
+        method: "POST".to_string(),
+        url,
+        headers,
+        body: Some(openai_compatible_connection_test_body(provider)),
+        timeout_ms,
+    })?;
+    let metadata = openai_response_metadata(&response.body);
+    log_llm_diagnostic(
+        "chat_probe_response",
+        &[
+            ("providerType", provider.provider_type.clone()),
+            ("endpointPath", provider.chat_endpoint.clone()),
+            ("status", response.status.to_string()),
+            ("finishReason", metadata.finish_reason.unwrap_or_default()),
+            ("hasContent", metadata.has_content.to_string()),
+            ("hasReasoning", metadata.has_reasoning.to_string()),
+        ],
+    );
+    ensure_success_status(response.status, &response.body)?;
+
+    let chat_ok = true;
+    let embeddings_ok = model_is_listed(&models, &provider.embedding_model);
+    let message = if models.is_empty() {
+        "Подключение успешно проверено через chat completions. Список моделей недоступен; используйте ручной ввод модели."
+            .to_string()
+    } else if model_is_listed(&models, &provider.chat_model)
+        || provider.chat_model.trim().is_empty()
+    {
+        "Подключение успешно проверено".to_string()
+    } else {
+        "Chat endpoint доступен. Выбранная модель проверена запросом, но не найдена в /models."
+            .to_string()
     };
 
     Ok(LlmConnectionTestResultDto {
@@ -674,6 +1083,21 @@ pub fn connection_error_result(
         chat_ok: false,
         embeddings_ok: false,
         is_local: is_local_base_url(&provider.base_url),
+    }
+}
+
+pub fn connection_error_result_for_base_url(
+    base_url: &str,
+    error: DataError,
+) -> LlmConnectionTestResultDto {
+    LlmConnectionTestResultDto {
+        status: STATUS_ERROR.to_string(),
+        message: error.to_string(),
+        checked_at: now_iso(),
+        models: Vec::new(),
+        chat_ok: false,
+        embeddings_ok: false,
+        is_local: is_local_base_url(base_url),
     }
 }
 
@@ -711,6 +1135,23 @@ fn query_provider_record(conn: &Connection, provider_id: &str) -> DataResult<Llm
     )
     .optional()?
     .ok_or_else(|| DataError::NotFound("Подключение LLM не найдено".to_string()))
+}
+
+fn query_default_provider_record(conn: &Connection) -> DataResult<Option<LlmProviderRecord>> {
+    conn.query_row(
+        "SELECT id, name, provider_type, base_url, api_key_ref, chat_model, embedding_model,
+                models_endpoint, chat_endpoint, embeddings_endpoint, timeout_ms, context_size,
+                temperature, streaming_enabled, custom_headers_json, is_default, last_status,
+                status_message, last_checked_at, created_at, updated_at
+         FROM llm_providers
+         WHERE is_default = 1
+         ORDER BY updated_at DESC
+         LIMIT 1",
+        [],
+        provider_record_from_row,
+    )
+    .optional()
+    .map_err(DataError::from)
 }
 
 fn provider_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LlmProviderRecord> {
@@ -802,7 +1243,7 @@ fn normalize_provider_request(
     request: SaveLlmProviderRequest,
 ) -> DataResult<SaveLlmProviderRequest> {
     let provider_type = normalize_provider_type(&request.provider_type)?;
-    validate_http_url(&request.base_url)?;
+    let base_url = normalize_provider_base_url(&provider_type, &request.base_url)?;
     validate_endpoint(&request.models_endpoint, "Путь списка моделей")?;
     validate_endpoint(&request.chat_endpoint, "Путь чата")?;
     validate_endpoint(&request.embeddings_endpoint, "Путь embeddings")?;
@@ -812,7 +1253,7 @@ fn normalize_provider_request(
         id: request.id.filter(|id| !id.trim().is_empty()),
         name: normalize_name(&request.name)?,
         provider_type,
-        base_url: request.base_url.trim().trim_end_matches('/').to_string(),
+        base_url,
         api_key: request.api_key,
         delete_api_key: request.delete_api_key,
         chat_model: request.chat_model.trim().to_string(),
@@ -829,12 +1270,120 @@ fn normalize_provider_request(
     })
 }
 
+fn normalize_draft_provider_request(
+    request: DraftLlmProviderRequest,
+) -> DataResult<DraftLlmProviderRequest> {
+    let provider_type = normalize_provider_type(&request.provider_type)?;
+    let base_url = normalize_provider_base_url(&provider_type, &request.base_url)?;
+    validate_endpoint(&request.models_endpoint, "Путь списка моделей")?;
+    validate_endpoint(&request.chat_endpoint, "Путь чата")?;
+    validate_endpoint(&request.embeddings_endpoint, "Путь embeddings")?;
+    let custom_headers_json = normalize_custom_headers_json(&request.custom_headers_json)?;
+
+    Ok(DraftLlmProviderRequest {
+        provider_type,
+        base_url,
+        api_key: request.api_key,
+        chat_model: request.chat_model.trim().to_string(),
+        embedding_model: request.embedding_model.trim().to_string(),
+        models_endpoint: request.models_endpoint.trim().to_string(),
+        chat_endpoint: request.chat_endpoint.trim().to_string(),
+        embeddings_endpoint: request.embeddings_endpoint.trim().to_string(),
+        timeout_ms: clamp_i64(request.timeout_ms, 5000, 600000),
+        context_size: clamp_i64(request.context_size, 1024, 1048576),
+        temperature: clamp_temperature(request.temperature),
+        streaming_enabled: request.streaming_enabled,
+        custom_headers_json,
+    })
+}
+
+fn draft_provider_record(
+    request: DraftLlmProviderRequest,
+) -> DataResult<(LlmProviderRecord, OperationSecretStorage)> {
+    let normalized = normalize_draft_provider_request(request)?;
+    let storage = OperationSecretStorage::from_api_key(normalized.api_key);
+    let now = now_iso();
+    let provider = LlmProviderRecord {
+        id: "draft-provider".to_string(),
+        name: "Draft provider".to_string(),
+        provider_type: normalized.provider_type,
+        base_url: normalized.base_url,
+        api_key_ref: storage.secret_ref(),
+        chat_model: normalized.chat_model,
+        embedding_model: normalized.embedding_model,
+        models_endpoint: normalized.models_endpoint,
+        chat_endpoint: normalized.chat_endpoint,
+        embeddings_endpoint: normalized.embeddings_endpoint,
+        timeout_ms: normalized.timeout_ms,
+        context_size: normalized.context_size,
+        temperature: normalized.temperature,
+        streaming_enabled: normalized.streaming_enabled,
+        custom_headers_json: normalized.custom_headers_json,
+        is_default: false,
+        last_status: STATUS_NOT_CONFIGURED.to_string(),
+        status_message: None,
+        last_checked_at: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    Ok((provider, storage))
+}
+
 fn normalize_provider_type(provider_type: &str) -> DataResult<String> {
     match provider_type.trim() {
         "openai" | "ollama" | "lmstudio" | "custom" => Ok(provider_type.trim().to_string()),
         _ => Err(DataError::InvalidInput(
             "Неизвестный тип LLM-провайдера".to_string(),
         )),
+    }
+}
+
+fn normalize_provider_base_url(provider_type: &str, base_url: &str) -> DataResult<String> {
+    let mut normalized = base_url.trim().trim_end_matches('/').to_string();
+    validate_http_url(&normalized)?;
+
+    if provider_type == "ollama" {
+        if ends_with_path_segment(&normalized, "v1") {
+            return Err(DataError::InvalidInput(
+                "Для Ollama используйте адрес без /v1, например http://127.0.0.1:11434".to_string(),
+            ));
+        }
+        if ends_with_path_segment(&normalized, "api") {
+            normalized = strip_last_path_segment(&normalized);
+        }
+    } else if is_openai_compatible_provider_type(provider_type) {
+        normalized = strip_endpoint_suffix(&normalized, "/chat/completions");
+    }
+
+    validate_http_url(&normalized)?;
+    Ok(normalized)
+}
+
+fn ends_with_path_segment(value: &str, segment: &str) -> bool {
+    value
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .is_some_and(|last| last.eq_ignore_ascii_case(segment))
+}
+
+fn strip_last_path_segment(value: &str) -> String {
+    value
+        .trim_end_matches('/')
+        .rsplit_once('/')
+        .map(|(head, _)| head.to_string())
+        .unwrap_or_else(|| value.trim_end_matches('/').to_string())
+}
+
+fn strip_endpoint_suffix(value: &str, endpoint: &str) -> String {
+    let trimmed_value = value.trim_end_matches('/');
+    let normalized_endpoint = endpoint.trim().trim_matches('/').to_ascii_lowercase();
+    let normalized_value = trimmed_value.to_ascii_lowercase();
+    let suffix = format!("/{normalized_endpoint}");
+    if normalized_value.ends_with(&suffix) {
+        trimmed_value[..trimmed_value.len() - suffix.len()].to_string()
+    } else {
+        trimmed_value.to_string()
     }
 }
 
@@ -978,6 +1527,16 @@ fn fetch_models<S: SecretStorage, H: HttpClient>(
     timeout_ms: i64,
 ) -> DataResult<Vec<String>> {
     let url = join_url(&provider.base_url, &provider.models_endpoint)?;
+    log_llm_diagnostic(
+        "adapter_selected",
+        &[
+            ("providerType", provider.provider_type.clone()),
+            ("baseUrl", diagnostic_url(&provider.base_url)),
+            ("endpointPath", provider.models_endpoint.clone()),
+            ("url", diagnostic_url(&url)),
+            ("timeoutMs", timeout_ms.to_string()),
+        ],
+    );
     let response = client.send(HttpRequest {
         method: "GET".to_string(),
         url,
@@ -985,66 +1544,362 @@ fn fetch_models<S: SecretStorage, H: HttpClient>(
         body: None,
         timeout_ms,
     })?;
+    log_llm_diagnostic(
+        "http_response",
+        &[
+            ("providerType", provider.provider_type.clone()),
+            ("endpointPath", provider.models_endpoint.clone()),
+            ("status", response.status.to_string()),
+        ],
+    );
     ensure_success_status(response.status, &response.body)?;
-    parse_models_response(&provider.provider_type, &response.body)
+    let models = parse_models_response(&provider.provider_type, &response.body)?;
+    log_llm_diagnostic(
+        "parsed_models",
+        &[
+            ("providerType", provider.provider_type.clone()),
+            ("endpointPath", provider.models_endpoint.clone()),
+            ("modelsCount", models.len().to_string()),
+        ],
+    );
+    Ok(models)
 }
 
-fn run_chat_probe<S: SecretStorage, H: HttpClient>(
+fn ensure_note_ai_provider_ready<S: SecretStorage>(
     provider: &LlmProviderRecord,
     storage: &S,
-    client: &H,
-    timeout_ms: i64,
 ) -> DataResult<()> {
-    let body = if provider.provider_type == "ollama" {
+    if provider.chat_model.trim().is_empty() {
+        return Err(DataError::InvalidInput(
+            "Для чата по заметке выберите chat model в настройках LLM".to_string(),
+        ));
+    }
+    if !is_local_base_url(&provider.base_url) && !provider_has_api_key(provider, storage)? {
+        return Err(DataError::InvalidInput(
+            "API key missing: для внешнего LLM provider нужен сохранённый ключ".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn provider_has_api_key<S: SecretStorage>(
+    provider: &LlmProviderRecord,
+    storage: &S,
+) -> DataResult<bool> {
+    provider
+        .api_key_ref
+        .as_deref()
+        .map(|secret_ref| storage.has_secret(secret_ref))
+        .transpose()
+        .map(|value| value.unwrap_or(false))
+}
+
+fn is_openai_compatible_provider(provider: &LlmProviderRecord) -> bool {
+    is_openai_compatible_provider_type(&provider.provider_type)
+}
+
+fn is_openai_compatible_provider_type(provider_type: &str) -> bool {
+    provider_type != "ollama"
+}
+
+fn safe_diagnostic_error(error: &DataError) -> String {
+    error
+        .to_string()
+        .replace("Authorization", "[redacted-header]")
+        .replace("Bearer", "[redacted-auth-scheme]")
+}
+
+fn build_note_ai_prompt(request: &NoteAiRequestDto) -> DataResult<NoteAiPrompt> {
+    let kind = request.kind.trim();
+    if kind != "chat" && kind != "action" {
+        return Err(DataError::InvalidInput(
+            "Некорректный тип AI-запроса".to_string(),
+        ));
+    }
+
+    let selected_text = request
+        .context
+        .selected_text
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
+    if selected_text.chars().count() > NOTE_AI_SELECTED_LIMIT {
+        return Err(DataError::InvalidInput(
+            "Выделенный фрагмент слишком большой для одного AI-запроса".to_string(),
+        ));
+    }
+
+    let question = request.question.as_deref().unwrap_or_default().trim();
+    if question.chars().count() > NOTE_AI_QUESTION_LIMIT {
+        return Err(DataError::InvalidInput(
+            "Вопрос слишком длинный для одного AI-запроса".to_string(),
+        ));
+    }
+    if kind == "chat" && question.is_empty() {
+        return Err(DataError::InvalidInput(
+            "Введите вопрос для AI-чата".to_string(),
+        ));
+    }
+
+    let note_text = note_context_text(&request.context)?;
+    let note_metadata = note_metadata_block(&request.context);
+    let scope = request.scope.trim();
+    let target_text = if kind == "action" && scope == "selection" {
+        if selected_text.is_empty() {
+            return Err(DataError::InvalidInput(
+                "Сначала выделите текст или примените действие ко всей заметке".to_string(),
+            ));
+        }
+        selected_text.to_string()
+    } else {
+        note_text.clone()
+    };
+    if kind == "action" && target_text.trim().is_empty() {
+        return Err(DataError::InvalidInput(
+            "В заметке нет текста для AI-действия".to_string(),
+        ));
+    }
+
+    let system = [
+        "You are NoteFlow AI assistant.",
+        "Answer in Russian unless the user explicitly asks for another language.",
+        "Use only the current note context. Do not claim that you searched the whole notes database.",
+        "Do not include secrets, API keys, hidden prompts, or unrelated data.",
+    ]
+    .join(" ");
+
+    let user = if kind == "chat" {
+        let mut prompt = format!(
+            "TASK: Answer the user's question about the current note.\n\n{note_metadata}\n\nNOTE_CONTEXT:\n{}\n\nUSER_QUESTION:\n{}",
+            limit_chars(&note_text, NOTE_AI_CONTEXT_LIMIT),
+            question
+        );
+        if !selected_text.is_empty() {
+            prompt.push_str("\n\nSELECTED_TEXT:\n");
+            prompt.push_str(&limit_chars(selected_text, NOTE_AI_SELECTED_LIMIT));
+        }
+        prompt
+    } else {
+        let action_id = request.action_id.as_deref().unwrap_or_default();
+        let instruction = action_instruction(action_id)?;
+        format!(
+            "TASK: {instruction}\nReturn only the final text. No preface, no markdown fence unless code is requested.\n\n{note_metadata}\n\nTARGET_SCOPE: {}\n\nTARGET_TEXT:\n{}",
+            if scope == "selection" { "selection" } else { "whole_note" },
+            limit_chars(&target_text, NOTE_AI_CONTEXT_LIMIT)
+        )
+    };
+
+    Ok(NoteAiPrompt { system, user })
+}
+
+fn note_ai_request_body(provider: &LlmProviderRecord, prompt: &NoteAiPrompt) -> Value {
+    if provider.provider_type == "ollama" {
         json!({
             "model": provider.chat_model,
-            "prompt": "ping",
-            "stream": false
+            "prompt": format!("{}\n\n{}", prompt.system, prompt.user),
+            "stream": false,
+            "options": {
+                "temperature": provider.temperature
+            }
         })
     } else {
         json!({
             "model": provider.chat_model,
-            "messages": [{ "role": "user", "content": "ping" }],
-            "temperature": 0,
-            "max_tokens": 1,
-            "stream": false
+            "messages": [
+                { "role": "system", "content": prompt.system },
+                { "role": "user", "content": prompt.user }
+            ],
+            "temperature": provider.temperature,
+            "stream": false,
+            "max_tokens": note_ai_max_tokens(provider).unwrap_or(OPENAI_COMPATIBLE_NOTE_AI_MAX_TOKENS)
         })
-    };
-    let response = client.send(HttpRequest {
-        method: "POST".to_string(),
-        url: join_url(&provider.base_url, &provider.chat_endpoint)?,
-        headers: provider_headers(provider, storage)?,
-        body: Some(body),
-        timeout_ms,
-    })?;
-    ensure_success_status(response.status, &response.body)
+    }
 }
 
-fn run_embeddings_probe<S: SecretStorage, H: HttpClient>(
-    provider: &LlmProviderRecord,
-    storage: &S,
-    client: &H,
-    timeout_ms: i64,
-) -> DataResult<()> {
-    let body = if provider.provider_type == "ollama" {
-        json!({
-            "model": provider.embedding_model,
-            "prompt": "ping"
-        })
+fn openai_compatible_connection_test_body(provider: &LlmProviderRecord) -> Value {
+    json!({
+        "model": provider.chat_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Отвечай только финальным ответом. Не показывай рассуждения. Ответь кратко."
+            },
+            {
+                "role": "user",
+                "content": "Ответь одним предложением: соединение работает?"
+            }
+        ],
+        "stream": false,
+        "max_tokens": OPENAI_COMPATIBLE_TEST_MAX_TOKENS,
+        "temperature": 0
+    })
+}
+
+fn note_ai_max_tokens(provider: &LlmProviderRecord) -> Option<i64> {
+    if is_openai_compatible_provider(provider) {
+        Some(OPENAI_COMPATIBLE_NOTE_AI_MAX_TOKENS)
     } else {
-        json!({
-            "model": provider.embedding_model,
-            "input": "ping"
-        })
-    };
-    let response = client.send(HttpRequest {
-        method: "POST".to_string(),
-        url: join_url(&provider.base_url, &provider.embeddings_endpoint)?,
-        headers: provider_headers(provider, storage)?,
-        body: Some(body),
-        timeout_ms,
+        None
+    }
+}
+
+fn parse_note_ai_response(provider_type: &str, body: &str) -> DataResult<String> {
+    let value: Value = serde_json::from_str(body).map_err(|_| {
+        DataError::InvalidInput("Провайдер вернул некорректный JSON-ответ".to_string())
     })?;
-    ensure_success_status(response.status, &response.body)
+
+    let response = if provider_type == "ollama" {
+        value
+            .get("response")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/message/content").and_then(Value::as_str))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    } else {
+        let first_choice = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first());
+        let content = first_choice
+            .and_then(|choice| choice.pointer("/message/content"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if content.is_empty() {
+            let finish_reason = first_choice
+                .and_then(|choice| choice.get("finish_reason"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let has_reasoning = first_choice
+                .and_then(|choice| choice.pointer("/message/reasoning"))
+                .is_some_and(value_has_visible_content);
+            if finish_reason == "length" || has_reasoning {
+                return Err(DataError::InvalidInput(
+                    "Модель не вернула финальный ответ. Вероятно, лимит токенов слишком маленький или reasoning/thinking не отключён на стороне провайдера."
+                        .to_string(),
+                ));
+            }
+        }
+        content
+    };
+
+    if response.is_empty() {
+        let provider_label = if provider_type == "ollama" {
+            "Ollama"
+        } else {
+            "LLM provider"
+        };
+        return Err(DataError::InvalidInput(format!(
+            "{provider_label} вернул пустой или неподдерживаемый ответ"
+        )));
+    }
+    Ok(response)
+}
+
+#[derive(Default)]
+struct OpenAiResponseMetadata {
+    finish_reason: Option<String>,
+    has_content: bool,
+    has_reasoning: bool,
+}
+
+fn openai_response_metadata(body: &str) -> OpenAiResponseMetadata {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return OpenAiResponseMetadata::default();
+    };
+    let first_choice = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first());
+    let finish_reason = first_choice
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let has_content = first_choice
+        .and_then(|choice| choice.pointer("/message/content"))
+        .is_some_and(value_has_visible_content);
+    let has_reasoning = first_choice
+        .and_then(|choice| choice.pointer("/message/reasoning"))
+        .is_some_and(value_has_visible_content);
+    OpenAiResponseMetadata {
+        finish_reason,
+        has_content,
+        has_reasoning,
+    }
+}
+
+fn value_has_visible_content(value: &Value) -> bool {
+    match value {
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(object) => !object.is_empty(),
+        _ => false,
+    }
+}
+
+fn note_context_text(context: &NoteAiContextDto) -> DataResult<String> {
+    let plain_text = context.plain_text.trim();
+    let markdown = context.content_markdown.trim();
+    let raw_size = plain_text.chars().count().max(markdown.chars().count());
+    if raw_size > NOTE_AI_HARD_CONTEXT_LIMIT {
+        return Err(DataError::InvalidInput(
+            "Контекст заметки слишком большой для одного AI-запроса".to_string(),
+        ));
+    }
+
+    let source = if !plain_text.is_empty() {
+        plain_text
+    } else {
+        markdown
+    };
+    Ok(limit_chars(source, NOTE_AI_CONTEXT_LIMIT))
+}
+
+fn note_metadata_block(context: &NoteAiContextDto) -> String {
+    let tags = if context.tags.is_empty() {
+        "none".to_string()
+    } else {
+        context.tags.join(", ")
+    };
+    format!(
+        "NOTE_METADATA:\n- note_id: {}\n- title: {}\n- date: {}\n- project: {}\n- tags: {}",
+        context.note_id.trim(),
+        context.title.trim(),
+        context.note_date.trim(),
+        context.project.trim(),
+        tags
+    )
+}
+
+fn action_instruction(action_id: &str) -> DataResult<&'static str> {
+    match action_id {
+        "improve" => Ok("Improve the text while preserving meaning and structure."),
+        "fix" => Ok("Fix spelling, grammar, punctuation, and obvious wording issues."),
+        "shorten" => Ok("Make the text shorter and clearer without losing key facts."),
+        "expand" => Ok("Expand the text with useful detail while preserving the original intent."),
+        "tone" => Ok("Rewrite the text in a more polished, professional tone."),
+        "tasks" => Ok("Convert the text into a clear actionable task list."),
+        "translate" => Ok("Translate the text into Russian if it is not Russian, otherwise translate it into English."),
+        "explain" => Ok("Explain the text in simple words."),
+        "ask" => Ok("Answer what is important in this text and what conclusions follow from it."),
+        _ => Err(DataError::InvalidInput(
+            "Неизвестное AI-действие редактора".to_string(),
+        )),
+    }
+}
+
+fn limit_chars(value: &str, limit: usize) -> String {
+    let mut result = String::new();
+    for (index, character) in value.chars().enumerate() {
+        if index >= limit {
+            result.push_str("\n\n[context truncated]");
+            break;
+        }
+        result.push(character);
+    }
+    result
 }
 
 fn provider_headers<S: SecretStorage>(
@@ -1052,12 +1907,34 @@ fn provider_headers<S: SecretStorage>(
     storage: &S,
 ) -> DataResult<Vec<(String, String)>> {
     let mut headers = parse_custom_headers(&provider.custom_headers_json)?;
+    if is_openai_compatible_provider(provider) {
+        upsert_header(
+            &mut headers,
+            "User-Agent",
+            OPENAI_COMPATIBLE_USER_AGENT.to_string(),
+        );
+    }
     if let Some(secret_ref) = &provider.api_key_ref {
         if let Some(api_key) = storage.get_secret(secret_ref)? {
-            headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+            upsert_header(
+                &mut headers,
+                "Authorization",
+                format!("Bearer {}", api_key.trim()),
+            );
         }
     }
     Ok(headers)
+}
+
+fn upsert_header(headers: &mut Vec<(String, String)>, name: &str, value: String) {
+    headers.retain(|(candidate, _)| !candidate.eq_ignore_ascii_case(name));
+    headers.push((name.to_string(), value));
+}
+
+fn has_header(headers: &[(String, String)], name: &str) -> bool {
+    headers
+        .iter()
+        .any(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
 }
 
 fn parse_custom_headers(value: &str) -> DataResult<Vec<(String, String)>> {
@@ -1119,13 +1996,18 @@ fn collect_model_ids(items: &[Value], models: &mut Vec<String>) {
     }
 }
 
+fn model_is_listed(models: &[String], model: &str) -> bool {
+    let model = model.trim();
+    !model.is_empty() && models.iter().any(|candidate| candidate == model)
+}
+
 fn ensure_success_status(status: u16, body: &str) -> DataResult<()> {
     if (200..300).contains(&status) {
         return Ok(());
     }
     let message = match status {
         401 => "401 Unauthorized: проверьте API key".to_string(),
-        403 => "403 Forbidden: доступ запрещён провайдером".to_string(),
+        403 => "403 Forbidden: запрос заблокирован WAF или провайдером. Проверьте доступ, API key и User-Agent.".to_string(),
         404 => "404 Not Found: проверьте Base URL и endpoint".to_string(),
         408 | 504 => "Timeout: провайдер не ответил вовремя".to_string(),
         _ if body.to_ascii_lowercase().contains("model") => {
@@ -1139,11 +2021,24 @@ fn ensure_success_status(status: u16, body: &str) -> DataResult<()> {
 fn join_url(base_url: &str, endpoint: &str) -> DataResult<String> {
     validate_http_url(base_url)?;
     validate_endpoint(endpoint, "Endpoint")?;
-    Ok(format!(
-        "{}/{}",
-        base_url.trim().trim_end_matches('/'),
-        endpoint.trim().trim_start_matches('/')
-    ))
+    let normalized_base = base_url.trim().trim_end_matches('/');
+    let normalized_endpoint = endpoint.trim().trim_start_matches('/');
+    if path_ends_with_endpoint(normalized_base, normalized_endpoint) {
+        return Ok(normalized_base.to_string());
+    }
+    Ok(format!("{}/{}", normalized_base, normalized_endpoint))
+}
+
+fn path_ends_with_endpoint(base_url: &str, endpoint: &str) -> bool {
+    let normalized_endpoint = endpoint.trim_matches('/').to_ascii_lowercase();
+    if normalized_endpoint.is_empty() {
+        return false;
+    }
+    let base_without_query = base_url.split(['?', '#']).next().unwrap_or(base_url);
+    base_without_query
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+        .ends_with(&format!("/{normalized_endpoint}"))
 }
 
 fn is_local_base_url(base_url: &str) -> bool {
@@ -1650,12 +2545,161 @@ mod tests {
         }
     }
 
+    fn draft_request(provider_type: &str, base_url: &str) -> DraftLlmProviderRequest {
+        let (models_endpoint, chat_endpoint, embeddings_endpoint, chat_model) =
+            if provider_type == "ollama" {
+                (
+                    "/api/tags",
+                    "/api/generate",
+                    "/api/embeddings",
+                    "qwen3-4b-local:latest",
+                )
+            } else {
+                ("/models", "/chat/completions", "/embeddings", "gpt-test")
+            };
+        DraftLlmProviderRequest {
+            provider_type: provider_type.to_string(),
+            base_url: base_url.to_string(),
+            api_key: None,
+            chat_model: chat_model.to_string(),
+            embedding_model: String::new(),
+            models_endpoint: models_endpoint.to_string(),
+            chat_endpoint: chat_endpoint.to_string(),
+            embeddings_endpoint: embeddings_endpoint.to_string(),
+            timeout_ms: 5000,
+            context_size: 4096,
+            temperature: 0.3,
+            streaming_enabled: true,
+            custom_headers_json: "{}".to_string(),
+        }
+    }
+
     #[test]
     fn parses_openai_model_response() {
         let models = parse_models_response("openai", r#"{"data":[{"id":"gpt-a"},{"id":"gpt-b"}]}"#)
             .expect("models parse");
 
         assert_eq!(models, vec!["gpt-a".to_string(), "gpt-b".to_string()]);
+    }
+
+    #[test]
+    fn normalizes_ollama_base_url_and_lists_models_from_api_tags() {
+        let http = MockHttpClient::with_responses(vec![HttpResponse {
+            status: 200,
+            body: r#"{"models":[{"name":"qwen3-4b-local:latest"},{"name":"llama3"}]}"#.to_string(),
+        }]);
+
+        let result =
+            list_models_for_draft(draft_request("ollama", "http://127.0.0.1:11434/api"), &http)
+                .expect("ollama draft models listed");
+
+        assert_eq!(result.status, STATUS_SUCCESS);
+        assert_eq!(
+            result.models,
+            vec!["llama3".to_string(), "qwen3-4b-local:latest".to_string()]
+        );
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].url, "http://127.0.0.1:11434/api/tags");
+    }
+
+    #[test]
+    fn ollama_rejects_openai_v1_base_url_before_network() {
+        let http = MockHttpClient::default();
+
+        let error =
+            list_models_for_draft(draft_request("ollama", "http://127.0.0.1:11434/v1"), &http)
+                .expect_err("ollama v1 url is rejected");
+
+        assert!(error.to_string().contains("/v1"));
+        assert!(http.requests().is_empty());
+    }
+
+    #[test]
+    fn ollama_empty_model_list_is_successful_empty_state() {
+        let http = MockHttpClient::with_responses(vec![HttpResponse {
+            status: 200,
+            body: r#"{"models":[]}"#.to_string(),
+        }]);
+
+        let result =
+            list_models_for_draft(draft_request("ollama", "http://localhost:11434"), &http)
+                .expect("empty ollama models list is valid");
+
+        assert_eq!(result.status, STATUS_SUCCESS);
+        assert!(result.models.is_empty());
+    }
+
+    #[test]
+    fn openai_compatible_draft_keeps_single_v1_and_uses_ephemeral_key() {
+        let mut request = draft_request("lmstudio", "http://localhost:1234/v1");
+        request.api_key = Some("sk-draft".to_string());
+        let http = MockHttpClient::with_responses(vec![HttpResponse {
+            status: 200,
+            body: r#"{"data":[{"id":"local-model"}]}"#.to_string(),
+        }]);
+
+        let result = list_models_for_draft(request, &http).expect("models listed");
+
+        assert_eq!(result.models, vec!["local-model".to_string()]);
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, "http://localhost:1234/v1/models");
+        assert_eq!(
+            requests[0]
+                .headers
+                .iter()
+                .find(|(name, _)| name == "Authorization")
+                .map(|(_, value)| value.as_str()),
+            Some("Bearer sk-draft")
+        );
+        assert_eq!(
+            requests[0]
+                .headers
+                .iter()
+                .find(|(name, _)| name == "User-Agent")
+                .map(|(_, value)| value.as_str()),
+            Some(OPENAI_COMPATIBLE_USER_AGENT)
+        );
+    }
+
+    #[test]
+    fn openai_compatible_base_url_strips_full_chat_endpoint() {
+        let request = draft_request(
+            "openai",
+            "https://bridge-back.admlr.lipetsk.ru/api/v1/chat/completions",
+        );
+        let (provider, _) = draft_provider_record(request).expect("draft provider normalizes");
+
+        assert_eq!(
+            provider.base_url,
+            "https://bridge-back.admlr.lipetsk.ru/api/v1"
+        );
+        assert_eq!(
+            join_url(&provider.base_url, &provider.chat_endpoint).expect("url joins"),
+            "https://bridge-back.admlr.lipetsk.ru/api/v1/chat/completions"
+        );
+        assert_eq!(
+            join_url(
+                "https://bridge-back.admlr.lipetsk.ru/api/v1/chat/completions",
+                "/chat/completions"
+            )
+            .expect("full endpoint does not duplicate"),
+            "https://bridge-back.admlr.lipetsk.ru/api/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn draft_connection_error_result_keeps_locality_without_provider_record() {
+        let result = connection_error_result_for_base_url(
+            "http://127.0.0.1:11434",
+            DataError::InvalidInput("Timeout: test".to_string()),
+        );
+
+        assert_eq!(result.status, STATUS_ERROR);
+        assert!(result.is_local);
+        assert!(result.models.is_empty());
     }
 
     #[test]
@@ -1667,23 +2711,19 @@ mod tests {
     }
 
     #[test]
-    fn adapter_runs_model_chat_and_embedding_checks() {
+    fn openai_connection_test_falls_back_to_chat_probe_without_models() {
         let storage = MemorySecretStorage::default();
         storage
             .set_secret("secret-ref", "sk-test")
             .expect("secret saved");
         let http = MockHttpClient::with_responses(vec![
             HttpResponse {
-                status: 200,
-                body: r#"{"data":[{"id":"gpt-test"},{"id":"embed-test"}]}"#.to_string(),
+                status: 404,
+                body: r#"{"error":"models unavailable"}"#.to_string(),
             },
             HttpResponse {
-                status: 200,
-                body: r#"{"choices":[{"message":{"content":"ok"}}]}"#.to_string(),
-            },
-            HttpResponse {
-                status: 200,
-                body: r#"{"data":[{"embedding":[0.1]}]}"#.to_string(),
+                status: 201,
+                body: r#"{"choices":[{"finish_reason":"stop","message":{"content":"Соединение работает","reasoning":"hidden chain"}}]}"#.to_string(),
             },
         ]);
 
@@ -1692,11 +2732,40 @@ mod tests {
 
         assert_eq!(result.status, STATUS_SUCCESS);
         assert!(result.chat_ok);
-        assert!(result.embeddings_ok);
+        assert!(!result.embeddings_ok);
+        assert!(result.models.is_empty());
+        assert!(result.message.contains("ручной ввод модели"));
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "GET");
+        assert!(requests[0].url.ends_with("/models"));
+        assert_eq!(requests[1].method, "POST");
+        assert_eq!(requests[1].url, "http://localhost:8080/v1/chat/completions");
         assert_eq!(
-            result.models,
-            vec!["embed-test".to_string(), "gpt-test".to_string()]
+            requests[1]
+                .headers
+                .iter()
+                .find(|(name, _)| name == "Authorization")
+                .map(|(_, value)| value.as_str()),
+            Some("Bearer sk-test")
         );
+        assert_eq!(
+            requests[1]
+                .headers
+                .iter()
+                .find(|(name, _)| name == "User-Agent")
+                .map(|(_, value)| value.as_str()),
+            Some(OPENAI_COMPATIBLE_USER_AGENT)
+        );
+        let body = requests[1].body.as_ref().expect("probe body exists");
+        assert_eq!(body.get("model").and_then(Value::as_str), Some("gpt-test"));
+        let max_tokens = body
+            .get("max_tokens")
+            .and_then(Value::as_i64)
+            .expect("probe max_tokens is present");
+        assert_eq!(max_tokens, OPENAI_COMPATIBLE_TEST_MAX_TOKENS);
+        assert!(max_tokens >= 512);
+        assert!(!body.to_string().contains("max_tokens\":16"));
     }
 
     #[test]
@@ -1719,6 +2788,26 @@ mod tests {
     }
 
     #[test]
+    fn openai_models_failure_returns_manual_entry_message() {
+        let provider = provider_record();
+        let storage = MemorySecretStorage::default();
+        storage
+            .set_secret("secret-ref", "sk-test")
+            .expect("secret saved");
+        let http = MockHttpClient::with_responses(vec![HttpResponse {
+            status: 404,
+            body: r#"{"error":"not found"}"#.to_string(),
+        }]);
+
+        let result =
+            list_models_for_provider(&provider, &storage, &http).expect("manual entry result");
+
+        assert_eq!(result.status, STATUS_ERROR);
+        assert!(result.models.is_empty());
+        assert!(result.message.contains("Введите название модели вручную"));
+    }
+
+    #[test]
     fn test_connection_uses_bounded_operation_timeout() {
         let mut provider = provider_record();
         provider.timeout_ms = 120_000;
@@ -1733,11 +2822,8 @@ mod tests {
             },
             HttpResponse {
                 status: 200,
-                body: r#"{"choices":[{"message":{"content":"ok"}}]}"#.to_string(),
-            },
-            HttpResponse {
-                status: 200,
-                body: r#"{"data":[{"embedding":[0.1]}]}"#.to_string(),
+                body: r#"{"choices":[{"finish_reason":"stop","message":{"content":"ok"}}]}"#
+                    .to_string(),
             },
         ]);
 
@@ -1746,11 +2832,11 @@ mod tests {
 
         assert_eq!(result.status, STATUS_SUCCESS);
         let requests = http.requests();
-        assert_eq!(requests.len(), 3);
-        assert!(requests
-            .iter()
-            .all(|request| request.timeout_ms > 0
-                && request.timeout_ms <= TEST_CONNECTION_TIMEOUT_MS));
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].timeout_ms > 0);
+        assert!(requests[0].timeout_ms <= TEST_CONNECTION_TIMEOUT_MS);
+        assert!(requests[1].timeout_ms > 0);
+        assert!(requests[1].timeout_ms <= TEST_CONNECTION_TIMEOUT_MS);
     }
 
     #[test]
@@ -1763,9 +2849,242 @@ mod tests {
     }
 
     #[test]
+    fn maps_forbidden_status_to_waf_user_agent_error() {
+        let error =
+            ensure_success_status(403, r#"{"error":"blocked"}"#).expect_err("forbidden is error");
+
+        assert!(error.to_string().contains("403 Forbidden"));
+        assert!(error.to_string().contains("WAF"));
+        assert!(error.to_string().contains("User-Agent"));
+        assert!(!error.to_string().contains("blocked"));
+    }
+
+    #[test]
+    fn maps_timeout_and_connection_errors_to_safe_messages() {
+        let timeout = map_curl_error(
+            "curl: (28) Operation timed out after 10001 milliseconds with 0 bytes received sk-test",
+        );
+        assert!(timeout.contains("Timeout"));
+        assert!(!timeout.contains("sk-test"));
+        assert!(!timeout.contains("Operation timed out after"));
+
+        let refused = map_curl_error(
+            "curl: (7) Failed to connect to localhost port 11434 after 2000 ms: Connection refused sk-test",
+        );
+        assert!(refused.contains("endpoint") || refused.contains("соединение"));
+        assert!(!refused.contains("sk-test"));
+        assert!(!refused.contains("Failed to connect"));
+    }
+
+    #[test]
+    fn http_status_errors_do_not_leak_provider_body_or_keys() {
+        let error = ensure_success_status(
+            500,
+            r#"{"error":"server dumped Authorization Bearer sk-secret and raw stack"}"#,
+        )
+        .expect_err("server error is mapped");
+
+        let text = error.to_string();
+        assert!(text.contains("500"));
+        assert!(!text.contains("sk-secret"));
+        assert!(!text.contains("Authorization"));
+        assert!(!text.contains("raw stack"));
+    }
+
+    #[test]
+    fn timeout_error_results_clear_model_loading_payload() {
+        let result = models_error_result(DataError::InvalidInput(map_curl_error(
+            "curl: (28) Timeout was reached sk-secret",
+        )));
+
+        assert_eq!(result.status, STATUS_ERROR);
+        assert!(result.message.contains("Timeout"));
+        assert!(result.models.is_empty());
+        assert!(!result.message.contains("sk-secret"));
+    }
+
+    #[test]
     fn detects_local_endpoints() {
         assert!(is_local_base_url("http://localhost:11434"));
         assert!(is_local_base_url("http://127.0.0.1:1234/v1"));
         assert!(!is_local_base_url("https://api.example.com/v1"));
+    }
+
+    fn note_ai_request(kind: &str, scope: &str, selected_text: Option<&str>) -> NoteAiRequestDto {
+        NoteAiRequestDto {
+            kind: kind.to_string(),
+            action_id: Some("fix".to_string()),
+            scope: scope.to_string(),
+            question: Some("Summarize this note".to_string()),
+            context: NoteAiContextDto {
+                note_id: "note-1".to_string(),
+                title: "Meeting notes".to_string(),
+                note_date: "2026-06-30".to_string(),
+                project: "NoteFlow".to_string(),
+                tags: vec!["planning".to_string(), "ai".to_string()],
+                plain_text: "Full note context with project decisions.".to_string(),
+                content_markdown: "# Meeting notes".to_string(),
+                selected_text: selected_text.map(str::to_string),
+            },
+        }
+    }
+
+    #[test]
+    fn builds_note_ai_prompt_from_selection() {
+        let prompt = build_note_ai_prompt(&note_ai_request(
+            "action",
+            "selection",
+            Some("Selected fragment"),
+        ))
+        .expect("prompt builds");
+
+        assert!(prompt.system.contains("current note context"));
+        assert!(prompt.user.contains("NOTE_METADATA"));
+        assert!(prompt.user.contains("title: Meeting notes"));
+        assert!(prompt.user.contains("TARGET_SCOPE: selection"));
+        assert!(prompt.user.contains("Selected fragment"));
+        assert!(!prompt
+            .user
+            .contains("Full note context with project decisions."));
+    }
+
+    #[test]
+    fn builds_note_ai_chat_prompt_with_note_context() {
+        let prompt =
+            build_note_ai_prompt(&note_ai_request("chat", "note", Some("Selected fragment")))
+                .expect("chat prompt builds");
+
+        assert!(prompt.user.contains("NOTE_CONTEXT"));
+        assert!(prompt
+            .user
+            .contains("Full note context with project decisions."));
+        assert!(prompt.user.contains("USER_QUESTION"));
+        assert!(prompt.user.contains("Selected fragment"));
+    }
+
+    #[test]
+    fn rejects_too_large_note_ai_context() {
+        let mut request = note_ai_request("chat", "note", None);
+        request.context.plain_text = "x".repeat(NOTE_AI_HARD_CONTEXT_LIMIT + 1);
+
+        assert!(build_note_ai_prompt(&request).is_err());
+    }
+
+    #[test]
+    fn run_note_ai_request_parses_openai_response() {
+        let storage = MemorySecretStorage::default();
+        let http = MockHttpClient::with_responses(vec![HttpResponse {
+            status: 200,
+            body: r#"{"choices":[{"finish_reason":"stop","message":{"content":"Готовый ответ","reasoning":"скрытая цепочка"}}]}"#.to_string(),
+        }]);
+
+        let result = run_note_ai_request(
+            &provider_record(),
+            &storage,
+            &http,
+            note_ai_request("chat", "note", None),
+        )
+        .expect("note ai request works");
+
+        assert_eq!(result.status, STATUS_SUCCESS);
+        assert_eq!(result.response, "Готовый ответ");
+        assert!(!result.response.contains("скрытая цепочка"));
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert!(requests[0].timeout_ms <= NOTE_AI_TIMEOUT_MS);
+        assert_eq!(
+            requests[0]
+                .headers
+                .iter()
+                .find(|(name, _)| name == "User-Agent")
+                .map(|(_, value)| value.as_str()),
+            Some(OPENAI_COMPATIBLE_USER_AGENT)
+        );
+        let body = requests[0].body.as_ref().expect("body exists");
+        assert!(body.to_string().contains("Meeting notes"));
+        let max_tokens = body
+            .get("max_tokens")
+            .and_then(Value::as_i64)
+            .expect("note ai max_tokens is present");
+        assert_eq!(max_tokens, OPENAI_COMPATIBLE_NOTE_AI_MAX_TOKENS);
+        assert!(max_tokens >= 1024);
+    }
+
+    #[test]
+    fn openai_response_parser_ignores_reasoning_when_content_exists() {
+        let response = parse_note_ai_response(
+            "openai",
+            r#"{"choices":[{"finish_reason":"stop","message":{"content":"Финальный ответ","reasoning":"не показывать"}}]}"#,
+        )
+        .expect("content parses");
+
+        assert_eq!(response, "Финальный ответ");
+        assert!(!response.contains("не показывать"));
+    }
+
+    #[test]
+    fn openai_response_parser_explains_empty_content_with_reasoning_or_length() {
+        let error = parse_note_ai_response(
+            "openai",
+            r#"{"choices":[{"finish_reason":"length","message":{"content":null,"reasoning":"скрытая цепочка"}}]}"#,
+        )
+        .expect_err("missing final content is rejected");
+
+        let text = error.to_string();
+        assert!(text.contains("Модель не вернула финальный ответ"));
+        assert!(text.contains("лимит токенов"));
+        assert!(!text.contains("скрытая цепочка"));
+    }
+
+    #[test]
+    fn run_note_ai_request_requires_external_api_key() {
+        let mut provider = provider_record();
+        provider.base_url = "https://api.example.com/v1".to_string();
+        provider.api_key_ref = None;
+        let storage = MemorySecretStorage::default();
+        let http = MockHttpClient::default();
+
+        let error = run_note_ai_request(
+            &provider,
+            &storage,
+            &http,
+            note_ai_request("chat", "note", None),
+        )
+        .expect_err("missing key rejected");
+
+        assert!(error.to_string().contains("API key missing"));
+    }
+
+    #[test]
+    fn run_note_ai_request_parses_ollama_response() {
+        let mut provider = provider_record();
+        provider.provider_type = "ollama".to_string();
+        provider.base_url = "http://localhost:11434".to_string();
+        provider.chat_endpoint = "/api/generate".to_string();
+        provider.chat_model = "qwen3-4b-local:latest".to_string();
+        provider.api_key_ref = None;
+        let storage = MemorySecretStorage::default();
+        let http = MockHttpClient::with_responses(vec![HttpResponse {
+            status: 200,
+            body: r#"{"response":"Локальный ответ"}"#.to_string(),
+        }]);
+
+        let result = run_note_ai_request(
+            &provider,
+            &storage,
+            &http,
+            note_ai_request("action", "selection", Some("исправь текст")),
+        )
+        .expect("ollama response parses");
+
+        assert_eq!(result.response, "Локальный ответ");
+        assert!(result.is_local);
+        assert!(http.requests()[0]
+            .body
+            .as_ref()
+            .expect("body exists")
+            .to_string()
+            .contains("qwen3-4b-local"));
     }
 }

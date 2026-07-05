@@ -85,6 +85,7 @@ export function AppShell() {
   const [query, setQuery] = useState("");
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [editorSelectionText, setEditorSelectionText] = useState("");
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isNewNoteModalOpen, setIsNewNoteModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
@@ -1020,6 +1021,7 @@ export function AppShell() {
               activateSection("settings");
             }}
             onRenameNote={renameNote}
+            onSelectionTextChange={setEditorSelectionText}
             onStoreAttachment={storeAttachment}
             onTogglePin={toggleNotePin}
             onToast={showToast}
@@ -1040,12 +1042,18 @@ export function AppShell() {
           <NoteChatPanel
             note={activeNote}
             onClose={() => setIsChatOpen(false)}
+            onOpenAiSettings={() => {
+              setIsChatOpen(false);
+              activateSection("settings");
+            }}
             onResetWidth={() => updateUiSettings({ chatWidth: 380 })}
             onResize={(deltaX) =>
               updateUiSettings((currentSettings) => ({
                 chatWidth: clamp(currentSettings.chatWidth + deltaX, 300, 620),
               }))
             }
+            selectedText={editorSelectionText}
+            onToast={showToast}
           />
         ) : null}
       </div>

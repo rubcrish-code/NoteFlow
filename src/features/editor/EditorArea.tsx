@@ -16,6 +16,7 @@ import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import type { EditorDocument, Note, NoteAttachment, SaveStatus } from "../../app/types";
+import { acceptNoteAiPrivacy, createNoteAiContext, getNoteAiStatus, runNoteAi, type NoteAiActionId, type NoteAiScope, type NoteAiStatus } from "../../services/noteAiService";
 import { Icon } from "../../shared/Icon";
 import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNodeView";
 import { ImageEditorModal } from "../imageEditor/ImageEditorModal";
@@ -47,6 +48,7 @@ interface EditorAreaProps {
   onOpenNote: (noteId: string) => void;
   onOpenSettingsModels: () => void;
   onRenameNote: (noteId: string, title: string) => void;
+  onSelectionTextChange: (text: string) => void;
   onStoreAttachment: (
     file: File,
     kind: "file" | "image",
@@ -58,6 +60,41 @@ interface EditorAreaProps {
   projectOptions: string[];
   saveStatus: SaveStatus;
 }
+
+interface AiSelectionSnapshot {
+  from: number;
+  noteId: string;
+  text: string;
+  to: number;
+}
+
+interface AiPreviewState {
+  actionId: NoteAiActionId;
+  actionLabel: string;
+  id: number;
+  isStale: boolean;
+  result: string;
+  scope: NoteAiScope;
+  selection: AiSelectionSnapshot;
+}
+
+interface AiPendingAction {
+  actionId: NoteAiActionId;
+  scope: NoteAiScope;
+  selection: AiSelectionSnapshot;
+}
+
+const aiActionLabels: Record<NoteAiActionId, string> = {
+  ask: "Спросить по этому тексту",
+  expand: "Развернуть подробнее",
+  explain: "Объяснить простыми словами",
+  fix: "Исправить ошибки",
+  improve: "Улучшить текст",
+  shorten: "Сократить",
+  tasks: "Сделать список задач",
+  tone: "Изменить тон",
+  translate: "Перевести",
+};
 
 function createEditorExtensions(options: { onEditImage: (target: EditableImageTarget) => void; onToast: (message: string) => void }) {
   return [
@@ -123,6 +160,7 @@ export function EditorArea({
   onOpenNote,
   onOpenSettingsModels,
   onRenameNote,
+  onSelectionTextChange,
   onStoreAttachment,
   onTogglePin,
   onToggleFocus,
@@ -133,7 +171,15 @@ export function EditorArea({
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
   const [isNoteMenuOpen, setIsNoteMenuOpen] = useState(false);
   const [imageEditTarget, setImageEditTarget] = useState<EditableImageTarget | null>(null);
+  const [aiStatus, setAiStatus] = useState<NoteAiStatus | null>(null);
+  const [aiScopeChoice, setAiScopeChoice] = useState<AiPendingAction | null>(null);
+  const [aiPrivacyAction, setAiPrivacyAction] = useState<AiPendingAction | null>(null);
+  const [aiPreview, setAiPreview] = useState<AiPreviewState | null>(null);
+  const [pendingAiActionId, setPendingAiActionId] = useState<NoteAiActionId | undefined>();
+  const [isAiPrivacyAccepting, setIsAiPrivacyAccepting] = useState(false);
   const editorRef = useRef<Editor | null>(null);
+  const aiRequestIdRef = useRef(0);
+  const isMountedRef = useRef(false);
   const loadedNoteIdRef = useRef<string | null>(null);
   const noteIdRef = useRef(note.id);
   const onOpenNoteRef = useRef(onOpenNote);
@@ -189,8 +235,36 @@ export function EditorArea({
   }, [editor]);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     onOpenNoteRef.current = onOpenNote;
   }, [onOpenNote]);
+
+  useEffect(() => {
+    void refreshAiStatus();
+  }, [note.id]);
+
+  useEffect(() => {
+    if (!editor) {
+      onSelectionTextChange("");
+      return;
+    }
+
+    function updateSelectionText() {
+      onSelectionTextChange(createAiSelectionSnapshot(editor, note.id).text);
+    }
+
+    editor.on("selectionUpdate", updateSelectionText);
+    updateSelectionText();
+    return () => {
+      editor.off("selectionUpdate", updateSelectionText);
+    };
+  }, [editor, note.id, onSelectionTextChange]);
 
   useEffect(() => {
     noteIdRef.current = note.id;
@@ -202,6 +276,163 @@ export function EditorArea({
     editor.commands.setContent(note.editorDocument, { emitUpdate: false });
     loadedNoteIdRef.current = note.id;
   }, [editor, note.editorDocument, note.id]);
+
+  async function refreshAiStatus() {
+    try {
+      const status = await getNoteAiStatus();
+      if (isMountedRef.current) {
+        setAiStatus(status);
+      }
+      return status;
+    } catch (error) {
+      if (isMountedRef.current) {
+        setAiStatus({
+          hasProvider: false,
+          isLocal: true,
+          privacyScope: "local",
+          privacyAccepted: false,
+          privacyNotice: "",
+          canUse: false,
+          message: String(error),
+        });
+      }
+      return null;
+    }
+  }
+
+  function handleAiAction(actionId: NoteAiActionId) {
+    const selection = createAiSelectionSnapshot(editor, note.id);
+    if (!selection.text) {
+      setAiScopeChoice({ actionId, scope: "note", selection });
+      return;
+    }
+    void startAiAction({ actionId, scope: "selection", selection });
+  }
+
+  async function startAiAction(action: AiPendingAction) {
+    const status = aiStatus ?? (await refreshAiStatus());
+    if (!status?.hasProvider) {
+      onToast("Сначала выберите default LLM provider в настройках моделей");
+      onOpenSettingsModels();
+      return;
+    }
+    if (!status.privacyAccepted) {
+      setAiPrivacyAction(action);
+      return;
+    }
+    if (!status.canUse) {
+      onToast(status.message);
+      return;
+    }
+    await runAiAction(action);
+  }
+
+  async function acceptPrivacyAndContinue() {
+    const action = aiPrivacyAction;
+    const status = aiStatus;
+    if (!action || !status) {
+      return;
+    }
+
+    setIsAiPrivacyAccepting(true);
+    try {
+      const acceptedStatus = await acceptNoteAiPrivacy(status.privacyScope);
+      if (!isMountedRef.current) {
+        return;
+      }
+      setAiStatus(acceptedStatus);
+      setAiPrivacyAction(null);
+      await runAiAction(action);
+    } catch (error) {
+      onToast(`Не удалось сохранить подтверждение AI privacy: ${String(error)}`);
+    } finally {
+      if (isMountedRef.current) {
+        setIsAiPrivacyAccepting(false);
+      }
+    }
+  }
+
+  async function runAiAction(action: AiPendingAction) {
+    if (!editor) {
+      return;
+    }
+
+    const requestId = ++aiRequestIdRef.current;
+    setPendingAiActionId(action.actionId);
+    setAiPreview(null);
+
+    try {
+      const result = await runNoteAi({
+        kind: "action",
+        actionId: action.actionId,
+        scope: action.scope,
+        context: createNoteAiContext(note, action.scope === "selection" ? action.selection.text : undefined),
+      });
+      if (!isMountedRef.current || requestId !== aiRequestIdRef.current || noteIdRef.current !== action.selection.noteId) {
+        return;
+      }
+      setAiPreview({
+        actionId: action.actionId,
+        actionLabel: aiActionLabels[action.actionId],
+        id: requestId,
+        isStale: action.scope === "selection" && !selectionStillMatches(editor, action.selection),
+        result: result.response,
+        scope: action.scope,
+        selection: action.selection,
+      });
+    } catch (error) {
+      if (isMountedRef.current && requestId === aiRequestIdRef.current) {
+        onToast(`AI-действие не выполнено: ${String(error)}`);
+      }
+    } finally {
+      if (isMountedRef.current && requestId === aiRequestIdRef.current) {
+        setPendingAiActionId(undefined);
+      }
+    }
+  }
+
+  function applyAiPreview(mode: "copy" | "insert-below" | "insert-cursor" | "replace-note" | "replace-selection") {
+    const currentEditor = editor;
+    const preview = aiPreview;
+    if (!currentEditor || !preview) {
+      return;
+    }
+
+    if (mode === "copy") {
+      void navigator.clipboard.writeText(preview.result).then(
+        () => onToast("Ответ AI скопирован"),
+        () => onToast("Не удалось скопировать ответ AI"),
+      );
+      return;
+    }
+
+    const content = markdownToTiptapDoc(preview.result).content ?? [];
+    if (mode === "replace-selection") {
+      if (preview.scope !== "selection" || preview.isStale) {
+        onToast("Выделение изменилось. Вставьте результат ниже или в позицию курсора.");
+        return;
+      }
+      currentEditor.chain().focus().insertContentAt({ from: preview.selection.from, to: preview.selection.to }, content).run();
+      setAiPreview(null);
+      return;
+    }
+
+    if (mode === "replace-note") {
+      currentEditor.commands.setContent(markdownToTiptapDoc(preview.result), { emitUpdate: true });
+      setAiPreview(null);
+      return;
+    }
+
+    if (mode === "insert-below") {
+      const insertAt = preview.scope === "selection" ? Math.min(preview.selection.to, currentEditor.state.doc.content.size) : currentEditor.state.doc.content.size;
+      currentEditor.chain().focus().insertContentAt(insertAt, content).run();
+      setAiPreview(null);
+      return;
+    }
+
+    currentEditor.chain().focus().insertContent(content).run();
+    setAiPreview(null);
+  }
 
   const isEmptyNote = note.contentMarkdown.trim().length === 0;
 
@@ -290,7 +521,14 @@ export function EditorArea({
         </div>
       )}
 
-      <FormattingToolbar editor={editor} onOpenAiSettings={onOpenSettingsModels} onToast={onToast} />
+      <FormattingToolbar
+        aiStatus={aiStatus}
+        editor={editor}
+        onAiAction={handleAiAction}
+        onOpenAiSettings={onOpenSettingsModels}
+        onToast={onToast}
+        pendingAiActionId={pendingAiActionId}
+      />
 
       <div className="ed-scroll" ref={editorPageLayout.viewportRef}>
         <div className={`ed-page-frame ${editorPageLayout.isResizing ? "resizing" : ""}`} ref={editorPageLayout.pageRef} style={editorPageLayout.pageStyle}>
@@ -317,6 +555,40 @@ export function EditorArea({
         </div>
       </div>
 
+      {aiScopeChoice ? (
+        <AiScopeChoicePanel
+          actionLabel={aiActionLabels[aiScopeChoice.actionId]}
+          onApplyToNote={() => {
+            const action = { ...aiScopeChoice, scope: "note" as const };
+            setAiScopeChoice(null);
+            void startAiAction(action);
+          }}
+          onClose={() => setAiScopeChoice(null)}
+        />
+      ) : null}
+
+      {aiPrivacyAction && aiStatus ? (
+        <AiPrivacyPanel
+          isAccepting={isAiPrivacyAccepting}
+          isLocal={aiStatus.isLocal}
+          notice={aiStatus.privacyNotice}
+          onAccept={() => void acceptPrivacyAndContinue()}
+          onClose={() => setAiPrivacyAction(null)}
+        />
+      ) : null}
+
+      {aiPreview ? (
+        <AiPreviewPanel
+          preview={aiPreview}
+          onCancel={() => setAiPreview(null)}
+          onCopy={() => applyAiPreview("copy")}
+          onInsertBelow={() => applyAiPreview("insert-below")}
+          onInsertCursor={() => applyAiPreview("insert-cursor")}
+          onReplaceNote={() => applyAiPreview("replace-note")}
+          onReplaceSelection={() => applyAiPreview("replace-selection")}
+        />
+      ) : null}
+
       {imageEditTarget ? (
         <ImageEditorModal
           mode={imageEditTarget.mode}
@@ -341,6 +613,153 @@ export function EditorArea({
 function countWords(text: string) {
   const normalizedText = text.replace(/\s+/g, " ").trim();
   return normalizedText.length > 0 ? normalizedText.split(" ").length : 0;
+}
+
+function createAiSelectionSnapshot(editor: Editor | null, noteId: string): AiSelectionSnapshot {
+  if (!editor || editor.state.selection.empty) {
+    return {
+      from: 0,
+      noteId,
+      text: "",
+      to: 0,
+    };
+  }
+  const { from, to } = editor.state.selection;
+  return {
+    from,
+    noteId,
+    text: editor.state.doc.textBetween(from, to, "\n").trim(),
+    to,
+  };
+}
+
+function selectionStillMatches(editor: Editor, selection: AiSelectionSnapshot) {
+  if (!selection.text) {
+    return false;
+  }
+  const docSize = editor.state.doc.content.size;
+  if (selection.from < 0 || selection.to > docSize || selection.from >= selection.to) {
+    return false;
+  }
+  return editor.state.doc.textBetween(selection.from, selection.to, "\n").trim() === selection.text;
+}
+
+function AiScopeChoicePanel({
+  actionLabel,
+  onApplyToNote,
+  onClose,
+}: {
+  actionLabel: string;
+  onApplyToNote: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="ai-editor-panel ai-scope-panel">
+      <div className="ai-editor-panel-head">
+        <b>{actionLabel}</b>
+        <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
+          <Icon name="x" />
+        </button>
+      </div>
+      <p>Фрагмент не выделен. Можно применить действие ко всей заметке или сначала выделить нужный текст.</p>
+      <div className="ai-editor-panel-actions">
+        <button className="secondary-btn" onClick={onClose} type="button">
+          Сначала выделить
+        </button>
+        <button className="primary-btn" onClick={onApplyToNote} type="button">
+          Ко всей заметке
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AiPrivacyPanel({
+  isAccepting,
+  isLocal,
+  notice,
+  onAccept,
+  onClose,
+}: {
+  isAccepting: boolean;
+  isLocal: boolean;
+  notice: string;
+  onAccept: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="ai-editor-panel ai-privacy-panel">
+      <div className="ai-editor-panel-head">
+        <b>{isLocal ? "Локальная модель" : "Внешний AI provider"}</b>
+        <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
+          <Icon name="x" />
+        </button>
+      </div>
+      <p>{notice}</p>
+      <div className="ai-editor-panel-actions">
+        <button className="secondary-btn" onClick={onClose} type="button">
+          Отмена
+        </button>
+        <button className="primary-btn" disabled={isAccepting} onClick={onAccept} type="button">
+          {isAccepting ? <span className="button-spinner" /> : null}
+          Подтвердить
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AiPreviewPanel({
+  onCancel,
+  onCopy,
+  onInsertBelow,
+  onInsertCursor,
+  onReplaceNote,
+  onReplaceSelection,
+  preview,
+}: {
+  onCancel: () => void;
+  onCopy: () => void;
+  onInsertBelow: () => void;
+  onInsertCursor: () => void;
+  onReplaceNote: () => void;
+  onReplaceSelection: () => void;
+  preview: AiPreviewState;
+}) {
+  return (
+    <div className="ai-editor-panel ai-preview-panel">
+      <div className="ai-editor-panel-head">
+        <b>{preview.actionLabel}</b>
+        <button aria-label="Закрыть" className="editor-popover-close" onClick={onCancel} type="button">
+          <Icon name="x" />
+        </button>
+      </div>
+      {preview.isStale ? <div className="ai-preview-warning">Выделение изменилось. Замена выделения отключена, но результат можно вставить или скопировать.</div> : null}
+      <div className="ai-preview-result">{preview.result}</div>
+      <div className="ai-editor-panel-actions wrap">
+        <button className="secondary-btn" disabled={preview.scope !== "selection" || preview.isStale} onClick={onReplaceSelection} type="button">
+          Заменить выделение
+        </button>
+        <button className="secondary-btn" onClick={onInsertBelow} type="button">
+          Вставить ниже
+        </button>
+        <button className="secondary-btn" onClick={onInsertCursor} type="button">
+          Вставить в курсор
+        </button>
+        {preview.scope === "note" ? (
+          <button className="danger-btn" onClick={onReplaceNote} type="button">
+            Заменить всю заметку
+          </button>
+        ) : null}
+        <button className="secondary-btn" onClick={onCopy} type="button">
+          Скопировать
+        </button>
+        <button className="secondary-btn" onClick={onCancel} type="button">
+          Отмена
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function NewNoteHelper() {

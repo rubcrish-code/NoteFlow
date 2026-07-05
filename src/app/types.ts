@@ -90,7 +90,9 @@ export interface ArchiveItem {
 }
 
 export interface ChatMessage {
+  createdAt?: string;
   id: string;
   role: "user" | "assistant";
   text: string;
+  status?: "error" | "loading";
 }

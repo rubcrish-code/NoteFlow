@@ -53,6 +53,22 @@ export interface SaveLlmProviderInput {
   isDefault: boolean;
 }
 
+export interface DraftLlmProviderInput {
+  providerType: LlmProviderType;
+  baseUrl: string;
+  apiKey?: string;
+  chatModel: string;
+  embeddingModel: string;
+  modelsEndpoint: string;
+  chatEndpoint: string;
+  embeddingsEndpoint: string;
+  timeoutMs: number;
+  contextSize: number;
+  temperature: number;
+  streamingEnabled: boolean;
+  customHeadersJson: string;
+}
+
 export interface LlmKeyStatus {
   hasApiKey: boolean;
 }
@@ -71,6 +87,13 @@ export interface LlmConnectionTestResult {
   chatOk: boolean;
   embeddingsOk: boolean;
   isLocal: boolean;
+}
+
+export interface LlmNetworkTraceContext {
+  operationId?: number;
+  targetId?: string;
+  draftId?: string;
+  fingerprint?: string;
 }
 
 interface LlmProviderDto {
@@ -115,7 +138,47 @@ interface LlmConnectionTestResultDto {
   isLocal: boolean;
 }
 
+type LlmDiagnosticValue = string | number | boolean | null | undefined;
+
 const providerTypes: readonly LlmProviderType[] = ["openai", "ollama", "lmstudio", "custom"];
+
+function safeUrlForDiagnostics(url: string) {
+  try {
+    const parsed = new URL(url);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return url.split("?")[0]?.split("#")[0] ?? "";
+  }
+}
+
+function diagnosticProviderInput(input: DraftLlmProviderInput | SaveLlmProviderInput) {
+  return {
+    providerType: input.providerType,
+    baseUrl: safeUrlForDiagnostics(input.baseUrl),
+    modelsEndpoint: input.modelsEndpoint,
+    chatEndpoint: input.chatEndpoint,
+    embeddingsEndpoint: input.embeddingsEndpoint,
+    chatModel: input.chatModel,
+    embeddingModel: input.embeddingModel,
+    hasApiKey: Boolean(input.apiKey?.trim()),
+    timeoutMs: input.timeoutMs,
+  };
+}
+
+export function logLlmDiagnostic(event: string, fields: Record<string, LlmDiagnosticValue> = {}) {
+  if (!import.meta.env.DEV) {
+    return;
+  }
+  console.debug("[NoteFlow LLM]", event, fields);
+}
+
+function safeErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
 
 function normalizeProviderType(value: string): LlmProviderType {
   return providerTypes.includes(value as LlmProviderType) ? (value as LlmProviderType) : "openai";
@@ -127,6 +190,47 @@ function normalizeProviderStatus(value: string): LlmProviderStatus {
 
 function normalizeActionStatus(value: string): LlmActionStatus {
   return value === "success" ? "success" : "error";
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function validateModelsResultDto(value: unknown): LlmModelsResultDto {
+  const dto = value as Partial<LlmModelsResultDto> | null;
+  if (!dto || typeof dto.status !== "string" || typeof dto.message !== "string" || !isStringArray(dto.models)) {
+    throw new Error("LLM provider returned an unexpected models DTO.");
+  }
+  return {
+    status: dto.status,
+    message: dto.message,
+    models: dto.models,
+  };
+}
+
+function validateConnectionTestResultDto(value: unknown): LlmConnectionTestResultDto {
+  const dto = value as Partial<LlmConnectionTestResultDto> | null;
+  if (
+    !dto ||
+    typeof dto.status !== "string" ||
+    typeof dto.message !== "string" ||
+    typeof dto.checkedAt !== "string" ||
+    !isStringArray(dto.models) ||
+    typeof dto.chatOk !== "boolean" ||
+    typeof dto.embeddingsOk !== "boolean" ||
+    typeof dto.isLocal !== "boolean"
+  ) {
+    throw new Error("LLM provider returned an unexpected connection-test DTO.");
+  }
+  return {
+    status: dto.status,
+    message: dto.message,
+    checkedAt: dto.checkedAt,
+    models: dto.models,
+    chatOk: dto.chatOk,
+    embeddingsOk: dto.embeddingsOk,
+    isLocal: dto.isLocal,
+  };
 }
 
 function mapProvider(dto: LlmProviderDto): LlmProvider {
@@ -157,7 +261,8 @@ function mapProvider(dto: LlmProviderDto): LlmProvider {
   };
 }
 
-function mapModelsResult(dto: LlmModelsResultDto): LlmModelsResult {
+function mapModelsResult(value: unknown): LlmModelsResult {
+  const dto = validateModelsResultDto(value);
   return {
     status: normalizeActionStatus(dto.status),
     message: dto.message,
@@ -165,7 +270,8 @@ function mapModelsResult(dto: LlmModelsResultDto): LlmModelsResult {
   };
 }
 
-function mapTestResult(dto: LlmConnectionTestResultDto): LlmConnectionTestResult {
+function mapTestResult(value: unknown): LlmConnectionTestResult {
+  const dto = validateConnectionTestResultDto(value);
   return {
     status: normalizeActionStatus(dto.status),
     message: dto.message,
@@ -181,10 +287,24 @@ function timeoutError(message: string) {
   return new Error(message);
 }
 
-function withInvokeTimeout<T>(request: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+function withInvokeTimeout<T>(
+  request: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  trace?: LlmNetworkTraceContext,
+  command = "unknown",
+): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((_, reject) => {
-    timeoutId = setTimeout(() => reject(timeoutError(message)), timeoutMs);
+    timeoutId = setTimeout(() => {
+      logLlmDiagnostic("tauri_invoke_timed_out", {
+        command,
+        operationId: trace?.operationId,
+        targetId: trace?.targetId,
+        timeoutMs,
+      });
+      reject(timeoutError(message));
+    }, timeoutMs);
   });
 
   return Promise.race([request, timeout]).finally(() => {
@@ -192,6 +312,35 @@ function withInvokeTimeout<T>(request: Promise<T>, timeoutMs: number, message: s
       clearTimeout(timeoutId);
     }
   });
+}
+
+function traceInvoke<T>(command: string, args: Record<string, unknown>, trace?: LlmNetworkTraceContext) {
+  logLlmDiagnostic("tauri_invoke_started", {
+    command,
+    operationId: trace?.operationId,
+    targetId: trace?.targetId,
+    draftId: trace?.draftId,
+  });
+  return invoke<T>(command, args)
+    .then((result) => {
+      logLlmDiagnostic("tauri_invoke_resolved", {
+        command,
+        operationId: trace?.operationId,
+        targetId: trace?.targetId,
+        draftId: trace?.draftId,
+      });
+      return result;
+    })
+    .catch((error: unknown) => {
+      logLlmDiagnostic("tauri_invoke_rejected", {
+        command,
+        operationId: trace?.operationId,
+        targetId: trace?.targetId,
+        draftId: trace?.draftId,
+        error: safeErrorMessage(error, "invoke rejected"),
+      });
+      throw error;
+    });
 }
 
 export async function listLlmProviders() {
@@ -241,20 +390,90 @@ export async function checkLlmProviderKey(providerId: string) {
   return await invoke<LlmKeyStatus>("check_llm_provider_key", { providerId });
 }
 
-export async function listLlmModels(providerId: string) {
+export async function listLlmModels(providerId: string, trace?: LlmNetworkTraceContext) {
+  const command = "list_llm_models";
+  logLlmDiagnostic("frontend_service_called", {
+    command,
+    providerId,
+    operationId: trace?.operationId,
+    targetId: trace?.targetId,
+  });
   return mapModelsResult(
     await withInvokeTimeout(
-      invoke<LlmModelsResultDto>("list_llm_models", { providerId }),
+      traceInvoke<LlmModelsResultDto>(command, { providerId }, trace),
       LLM_MODEL_LIST_TIMEOUT_MS,
       "Timeout: список моделей не был получен за 15 секунд. Проверьте Base URL, endpoint и состояние локального сервера.",
     ),
   );
 }
 
-export async function testLlmProvider(providerId: string) {
+function draftRequest(input: DraftLlmProviderInput) {
+  return {
+    providerType: input.providerType,
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey?.trim() ? input.apiKey : null,
+    chatModel: input.chatModel,
+    embeddingModel: input.embeddingModel,
+    modelsEndpoint: input.modelsEndpoint,
+    chatEndpoint: input.chatEndpoint,
+    embeddingsEndpoint: input.embeddingsEndpoint,
+    timeoutMs: input.timeoutMs,
+    contextSize: input.contextSize,
+    temperature: input.temperature,
+    streamingEnabled: input.streamingEnabled,
+    customHeadersJson: input.customHeadersJson,
+  };
+}
+
+export async function listLlmModelsForDraft(input: DraftLlmProviderInput, trace?: LlmNetworkTraceContext) {
+  const command = "list_llm_models_for_draft";
+  logLlmDiagnostic("frontend_service_called", {
+    command,
+    operationId: trace?.operationId,
+    targetId: trace?.targetId,
+    draftId: trace?.draftId,
+    fingerprint: trace?.fingerprint,
+    ...diagnosticProviderInput(input),
+  });
+  return mapModelsResult(
+    await withInvokeTimeout(
+      traceInvoke<LlmModelsResultDto>(command, { request: draftRequest(input) }, trace),
+      LLM_MODEL_LIST_TIMEOUT_MS,
+      "Timeout: список моделей не был получен за 15 секунд. Проверьте Base URL, endpoint и состояние локального сервера.",
+    ),
+  );
+}
+
+export async function testLlmProvider(providerId: string, trace?: LlmNetworkTraceContext) {
+  const command = "test_llm_provider";
+  logLlmDiagnostic("frontend_service_called", {
+    command,
+    providerId,
+    operationId: trace?.operationId,
+    targetId: trace?.targetId,
+  });
   return mapTestResult(
     await withInvokeTimeout(
-      invoke<LlmConnectionTestResultDto>("test_llm_provider", { providerId }),
+      traceInvoke<LlmConnectionTestResultDto>(command, { providerId }, trace),
+      LLM_TEST_CONNECTION_TIMEOUT_MS,
+      "Timeout: проверка подключения не завершилась за 10 секунд. Проверьте, запущена ли локальная модель и доступен ли endpoint.",
+    ),
+  );
+}
+
+export async function testLlmProviderDraft(input: DraftLlmProviderInput, trace?: LlmNetworkTraceContext) {
+  const command = "test_llm_provider_draft";
+  logLlmDiagnostic("frontend_service_called", {
+    command,
+    operationId: trace?.operationId,
+    targetId: trace?.targetId,
+    draftId: trace?.draftId,
+    fingerprint: trace?.fingerprint,
+    ...diagnosticProviderInput(input),
+  });
+  return mapTestResult(
+    await withInvokeTimeout(
+      traceInvoke<LlmConnectionTestResultDto>(command, { request: draftRequest(input) }, trace),
       LLM_TEST_CONNECTION_TIMEOUT_MS,
       "Timeout: проверка подключения не завершилась за 10 секунд. Проверьте, запущена ли локальная модель и доступен ли endpoint.",
     ),

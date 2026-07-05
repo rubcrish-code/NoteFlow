@@ -17,6 +17,7 @@ export type IconName =
   | "code"
   | "codeBlock"
   | "color"
+  | "copy"
   | "date"
   | "divider"
   | "doc"
@@ -158,6 +159,13 @@ export function Icon({ name, ...props }: IconProps) {
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
           <path d="M5 19h14M8 15l4-10 4 10M9.2 12h5.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "copy":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
+          <rect x="8" y="8" width="11" height="11" rx="2" />
+          <path d="M5 15V7a2 2 0 0 1 2-2h8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "date":

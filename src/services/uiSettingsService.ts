@@ -41,8 +41,16 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   theme: "light",
 };
 
+function finiteOrFallback(value: number, fallback: number) {
+  return Number.isFinite(value) ? value : fallback;
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function clampInteger(value: number, min: number, max: number, fallback: number) {
+  return Math.round(clamp(finiteOrFallback(value, fallback), min, max));
 }
 
 function normalizeChoice<T extends string>(value: string, allowedValues: readonly T[], fallback: T): T {
@@ -52,17 +60,17 @@ function normalizeChoice<T extends string>(value: string, allowedValues: readonl
 export function normalizeUiSettings(settings: UiSettings): UiSettings {
   return {
     appZoomPercent: normalizeAppZoom(settings.appZoomPercent),
-    chatWidth: clamp(settings.chatWidth, 300, 620),
+    chatWidth: clampInteger(settings.chatWidth, 300, 620, DEFAULT_UI_SETTINGS.chatWidth),
     editorContentOffset: clampEditorContentOffset(settings.editorContentOffset),
     editorContentWidth: clampEditorContentWidth(settings.editorContentWidth),
     language: normalizeChoice(settings.language, appLanguages, DEFAULT_UI_SETTINGS.language),
     lastSection: normalizeChoice(settings.lastSection, appSections, DEFAULT_UI_SETTINGS.lastSection),
-    listWidth: clamp(settings.listWidth, 260, 560),
-    ragConversationWidth: clamp(settings.ragConversationWidth, 220, 380),
+    listWidth: clampInteger(settings.listWidth, 260, 560, DEFAULT_UI_SETTINGS.listWidth),
+    ragConversationWidth: clampInteger(settings.ragConversationWidth, 220, 380, DEFAULT_UI_SETTINGS.ragConversationWidth),
     ragSourcesCollapsed: settings.ragSourcesCollapsed,
-    ragSourcesWidth: clamp(settings.ragSourcesWidth, 260, 460),
+    ragSourcesWidth: clampInteger(settings.ragSourcesWidth, 260, 460, DEFAULT_UI_SETTINGS.ragSourcesWidth),
     sidebarCollapsed: settings.sidebarCollapsed,
-    sidebarWidth: clamp(settings.sidebarWidth, 190, 360),
+    sidebarWidth: clampInteger(settings.sidebarWidth, 190, 360, DEFAULT_UI_SETTINGS.sidebarWidth),
     theme: normalizeChoice(settings.theme, themeModes, DEFAULT_UI_SETTINGS.theme),
   };
 }

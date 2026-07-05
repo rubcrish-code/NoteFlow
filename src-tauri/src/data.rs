@@ -19,6 +19,8 @@ pub(crate) type DataResult<T> = Result<T, DataError>;
 const DATABASE_FILE: &str = "database.sqlite";
 const CURRENT_BACKUP_VERSION: u32 = 2;
 const UI_SETTINGS_KEY: &str = "ui.settings.v1";
+const NOTE_AI_PRIVACY_LOCAL_KEY: &str = "ai.note.privacy.local.v1";
+const NOTE_AI_PRIVACY_EXTERNAL_KEY: &str = "ai.note.privacy.external.v1";
 
 #[derive(Debug)]
 pub enum DataError {
@@ -258,6 +260,16 @@ impl UiSettingsDto {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteChatMessageDto {
+    pub id: String,
+    pub note_id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateNoteRequest {
@@ -342,6 +354,14 @@ pub struct StoreAttachmentRequest {
 pub struct ImportBackupRequest {
     pub file_name: String,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveNoteChatMessageRequest {
+    pub note_id: String,
+    pub role: String,
+    pub content: String,
 }
 
 #[derive(Debug)]
@@ -647,6 +667,144 @@ impl DataStore {
 
     fn get_llm_provider_record(&self, provider_id: &str) -> DataResult<llm::LlmProviderRecord> {
         llm::get_provider_record(&self.conn, provider_id)
+    }
+
+    fn get_default_llm_provider_record(&self) -> DataResult<Option<llm::LlmProviderRecord>> {
+        llm::get_default_provider_record(&self.conn)
+    }
+
+    fn get_note_ai_privacy_accepted(&self, privacy_scope: &str) -> DataResult<bool> {
+        let key = note_ai_privacy_key(privacy_scope)?;
+        Ok(self
+            .get_setting(key)?
+            .and_then(|value| {
+                value
+                    .get("accepted")
+                    .and_then(Value::as_bool)
+                    .or_else(|| value.as_bool())
+            })
+            .unwrap_or(false))
+    }
+
+    fn accept_note_ai_privacy(&mut self, privacy_scope: &str) -> DataResult<()> {
+        let key = note_ai_privacy_key(privacy_scope)?;
+        let transaction = self.conn.transaction()?;
+        set_setting_tx(
+            &transaction,
+            key,
+            json!({
+                "accepted": true,
+                "acceptedAt": now_iso(),
+                "scope": privacy_scope
+            }),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn note_ai_status<S: llm::SecretStorage>(
+        &self,
+        storage: &S,
+    ) -> DataResult<llm::NoteAiStatusDto> {
+        let provider = self.get_default_llm_provider_record()?;
+        let privacy_scope = provider
+            .as_ref()
+            .map(llm::privacy_scope_for_provider)
+            .unwrap_or("local");
+        let privacy_accepted = self.get_note_ai_privacy_accepted(privacy_scope)?;
+        llm::note_ai_status(provider.as_ref(), privacy_accepted, storage)
+    }
+
+    fn list_note_chat_messages(&self, note_id: &str) -> DataResult<Vec<NoteChatMessageDto>> {
+        let normalized_note_id = normalize_required_text(note_id, "note_id")?;
+        let note_exists = self
+            .conn
+            .query_row(
+                "SELECT id FROM notes WHERE id = ?1 AND deleted_at IS NULL",
+                params![normalized_note_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .is_some();
+        if !note_exists {
+            return Ok(Vec::new());
+        }
+
+        let mut statement = self.conn.prepare(
+            "SELECT m.id, COALESCE(c.note_id, ''), m.role, m.content, m.created_at
+             FROM ai_messages m
+             INNER JOIN ai_chats c ON c.id = m.chat_id
+             WHERE c.scope = 'note' AND c.note_id = ?1
+             ORDER BY m.created_at ASC, m.id ASC",
+        )?;
+        let rows = statement.query_map(params![normalized_note_id], |row| {
+            Ok(NoteChatMessageDto {
+                id: row.get(0)?,
+                note_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn save_note_chat_message(
+        &mut self,
+        request: SaveNoteChatMessageRequest,
+    ) -> DataResult<NoteChatMessageDto> {
+        let note_id = normalize_required_text(&request.note_id, "note_id")?;
+        let role = normalize_note_chat_role(&request.role)?;
+        let content = normalize_required_text(&request.content, "Сообщение чата")?;
+        let note_title = self
+            .conn
+            .query_row(
+                "SELECT title FROM notes WHERE id = ?1 AND deleted_at IS NULL",
+                params![note_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| DataError::NotFound("Заметка для AI-чата не найдена".to_string()))?;
+        let chat_title = normalize_note_chat_title(&note_title);
+        let now = now_iso();
+        let message_id = Uuid::new_v4().to_string();
+        let transaction = self.conn.transaction()?;
+        let existing_chat_id = transaction
+            .query_row(
+                "SELECT id FROM ai_chats WHERE scope = 'note' AND note_id = ?1",
+                params![note_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let chat_id = if let Some(chat_id) = existing_chat_id {
+            transaction.execute(
+                "UPDATE ai_chats SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                params![chat_title, now, chat_id],
+            )?;
+            chat_id
+        } else {
+            let chat_id = Uuid::new_v4().to_string();
+            transaction.execute(
+                "INSERT INTO ai_chats (id, scope, note_id, title, created_at, updated_at)
+                 VALUES (?1, 'note', ?2, ?3, ?4, ?4)",
+                params![chat_id, note_id, chat_title, now],
+            )?;
+            chat_id
+        };
+        transaction.execute(
+            "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, '[]', ?5)",
+            params![message_id, chat_id, role, content, now],
+        )?;
+        transaction.commit()?;
+
+        Ok(NoteChatMessageDto {
+            id: message_id,
+            note_id,
+            role,
+            content,
+            created_at: now,
+        })
     }
 
     fn update_llm_provider_status(
@@ -2283,6 +2441,35 @@ struct SeedNote {
     markdown: &'static str,
 }
 
+fn note_ai_privacy_key(privacy_scope: &str) -> DataResult<&'static str> {
+    match privacy_scope {
+        "local" => Ok(NOTE_AI_PRIVACY_LOCAL_KEY),
+        "external" => Ok(NOTE_AI_PRIVACY_EXTERNAL_KEY),
+        _ => Err(DataError::InvalidInput(
+            "Некорректный тип privacy confirmation для AI".to_string(),
+        )),
+    }
+}
+
+fn normalize_note_chat_role(role: &str) -> DataResult<String> {
+    match role.trim() {
+        "user" => Ok("user".to_string()),
+        "assistant" => Ok("assistant".to_string()),
+        _ => Err(DataError::InvalidInput(
+            "Роль сообщения AI-чата должна быть user или assistant".to_string(),
+        )),
+    }
+}
+
+fn normalize_note_chat_title(title: &str) -> String {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        "Без названия".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn set_setting_tx(transaction: &Transaction<'_>, key: &str, value: Value) -> DataResult<()> {
     transaction.execute(
         "INSERT INTO app_settings (key, value_json, updated_at)
@@ -2704,6 +2891,147 @@ pub fn check_llm_provider_key(
 }
 
 #[tauri::command]
+pub async fn list_llm_models_for_draft(
+    request: llm::DraftLlmProviderRequest,
+) -> Result<llm::LlmModelsResultDto, String> {
+    llm::log_llm_diagnostic(
+        "rust_command_entered",
+        &[
+            ("command", "list_llm_models_for_draft".to_string()),
+            ("providerType", request.provider_type.clone()),
+            ("baseUrl", llm::diagnostic_url(&request.base_url)),
+            ("modelsEndpoint", request.models_endpoint.clone()),
+        ],
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let http = llm::CurlHttpClient;
+        let result = match llm::list_models_for_draft(request, &http) {
+            Ok(result) => result,
+            Err(error) => llm::models_error_result(error),
+        };
+        llm::log_llm_diagnostic(
+            "rust_command_returned",
+            &[
+                ("command", "list_llm_models_for_draft".to_string()),
+                ("status", result.status.clone()),
+                ("modelsCount", result.models.len().to_string()),
+            ],
+        );
+        result
+    })
+    .await
+    .map_err(|error| format!("Получение списка моделей было прервано: {error}"))
+}
+
+#[tauri::command]
+pub async fn test_llm_provider_draft(
+    request: llm::DraftLlmProviderRequest,
+) -> Result<llm::LlmConnectionTestResultDto, String> {
+    let base_url = request.base_url.clone();
+    llm::log_llm_diagnostic(
+        "rust_command_entered",
+        &[
+            ("command", "test_llm_provider_draft".to_string()),
+            ("providerType", request.provider_type.clone()),
+            ("baseUrl", llm::diagnostic_url(&request.base_url)),
+            ("modelsEndpoint", request.models_endpoint.clone()),
+        ],
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let http = llm::CurlHttpClient;
+        let result = match llm::test_draft_provider_connection(request, &http) {
+            Ok(result) => result,
+            Err(error) => llm::connection_error_result_for_base_url(&base_url, error),
+        };
+        llm::log_llm_diagnostic(
+            "rust_command_returned",
+            &[
+                ("command", "test_llm_provider_draft".to_string()),
+                ("status", result.status.clone()),
+                ("modelsCount", result.models.len().to_string()),
+                ("chatOk", result.chat_ok.to_string()),
+                ("embeddingsOk", result.embeddings_ok.to_string()),
+            ],
+        );
+        result
+    })
+    .await
+    .map_err(|error| format!("Проверка подключения была прервана: {error}"))
+}
+
+#[tauri::command]
+pub fn get_note_ai_status(state: State<'_, AppState>) -> Result<llm::NoteAiStatusDto, String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| store.note_ai_status(&storage))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn accept_note_ai_privacy(
+    privacy_scope: String,
+    state: State<'_, AppState>,
+) -> Result<llm::NoteAiStatusDto, String> {
+    let storage = llm::SystemSecretStorage;
+    state
+        .with_store(|store| {
+            store.accept_note_ai_privacy(&privacy_scope)?;
+            store.note_ai_status(&storage)
+        })
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_note_chat_messages(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<NoteChatMessageDto>, String> {
+    state
+        .with_store(|store| store.list_note_chat_messages(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn save_note_chat_message(
+    request: SaveNoteChatMessageRequest,
+    state: State<'_, AppState>,
+) -> Result<NoteChatMessageDto, String> {
+    state
+        .with_store(|store| store.save_note_chat_message(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn run_note_ai(
+    request: llm::NoteAiRequestDto,
+    state: State<'_, AppState>,
+) -> Result<llm::NoteAiResponseDto, String> {
+    let provider = state
+        .with_store(|store| {
+            let provider = store.get_default_llm_provider_record()?.ok_or_else(|| {
+                DataError::InvalidInput("Default LLM provider не выбран".to_string())
+            })?;
+            let privacy_scope = llm::privacy_scope_for_provider(&provider);
+            if !store.get_note_ai_privacy_accepted(privacy_scope)? {
+                return Err(DataError::InvalidInput(
+                    "Перед отправкой текста подтвердите предупреждение AI privacy".to_string(),
+                ));
+            }
+            Ok(provider)
+        })
+        .map_err(command_error)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let storage = llm::SystemSecretStorage;
+        let http = llm::CurlHttpClient;
+        llm::run_note_ai_request(&provider, &storage, &http, request)
+    })
+    .await
+    .map_err(|error| format!("AI-запрос был прерван: {error}"))?
+    .map_err(command_error)
+}
+
+#[tauri::command]
 pub async fn list_llm_models(
     provider_id: String,
     state: State<'_, AppState>,
@@ -2711,13 +3039,32 @@ pub async fn list_llm_models(
     let provider = state
         .with_store(|store| store.get_llm_provider_record(&provider_id))
         .map_err(command_error)?;
+    llm::log_llm_diagnostic(
+        "rust_command_entered",
+        &[
+            ("command", "list_llm_models".to_string()),
+            ("providerId", provider_id.clone()),
+            ("providerType", provider.provider_type.clone()),
+            ("baseUrl", llm::diagnostic_url(&provider.base_url)),
+            ("modelsEndpoint", provider.models_endpoint.clone()),
+        ],
+    );
     tauri::async_runtime::spawn_blocking(move || {
         let storage = llm::SystemSecretStorage;
         let http = llm::CurlHttpClient;
-        match llm::list_models_for_provider(&provider, &storage, &http) {
+        let result = match llm::list_models_for_provider(&provider, &storage, &http) {
             Ok(result) => result,
             Err(error) => llm::models_error_result(error),
-        }
+        };
+        llm::log_llm_diagnostic(
+            "rust_command_returned",
+            &[
+                ("command", "list_llm_models".to_string()),
+                ("status", result.status.clone()),
+                ("modelsCount", result.models.len().to_string()),
+            ],
+        );
+        result
     })
     .await
     .map_err(|error| format!("Получение списка моделей было прервано: {error}"))
@@ -2731,13 +3078,34 @@ pub async fn test_llm_provider(
     let provider = state
         .with_store(|store| store.get_llm_provider_record(&provider_id))
         .map_err(command_error)?;
+    llm::log_llm_diagnostic(
+        "rust_command_entered",
+        &[
+            ("command", "test_llm_provider".to_string()),
+            ("providerId", provider_id.clone()),
+            ("providerType", provider.provider_type.clone()),
+            ("baseUrl", llm::diagnostic_url(&provider.base_url)),
+            ("modelsEndpoint", provider.models_endpoint.clone()),
+        ],
+    );
     let result = tauri::async_runtime::spawn_blocking(move || {
         let storage = llm::SystemSecretStorage;
         let http = llm::CurlHttpClient;
-        match llm::test_provider_connection(&provider, &storage, &http) {
+        let result = match llm::test_provider_connection(&provider, &storage, &http) {
             Ok(result) => result,
             Err(error) => llm::connection_error_result(&provider, error),
-        }
+        };
+        llm::log_llm_diagnostic(
+            "rust_command_returned",
+            &[
+                ("command", "test_llm_provider".to_string()),
+                ("status", result.status.clone()),
+                ("modelsCount", result.models.len().to_string()),
+                ("chatOk", result.chat_ok.to_string()),
+                ("embeddingsOk", result.embeddings_ok.to_string()),
+            ],
+        );
+        result
     })
     .await
     .map_err(|error| format!("Проверка подключения была прервана: {error}"))?;
@@ -3087,6 +3455,213 @@ mod tests {
         assert_eq!(settings.editor_content_offset, -720);
     }
 
+    #[test]
+    fn note_ai_privacy_consent_is_stored_in_app_settings() {
+        let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));
+        {
+            let mut store = DataStore::open(dir.clone()).expect("store opens");
+            assert!(!store
+                .get_note_ai_privacy_accepted("external")
+                .expect("privacy setting reads"));
+            store
+                .accept_note_ai_privacy("external")
+                .expect("privacy accepted");
+            assert!(store
+                .get_note_ai_privacy_accepted("external")
+                .expect("privacy setting reads"));
+
+            let stored_key: String = store
+                .conn
+                .query_row(
+                    "SELECT key FROM app_settings WHERE key = ?1",
+                    params![NOTE_AI_PRIVACY_EXTERNAL_KEY],
+                    |row| row.get(0),
+                )
+                .expect("privacy key exists");
+            assert_eq!(stored_key, NOTE_AI_PRIVACY_EXTERNAL_KEY);
+        }
+
+        let reopened_store = DataStore::open(dir).expect("store reopens");
+        assert!(reopened_store
+            .get_note_ai_privacy_accepted("external")
+            .expect("privacy persisted"));
+    }
+
+    #[test]
+    fn note_ai_status_uses_default_provider_and_privacy_setting() {
+        let mut store = temp_store();
+        let storage = llm::MemorySecretStorage::default();
+        let provider = store
+            .save_llm_provider(
+                &storage,
+                llm::SaveLlmProviderRequest {
+                    provider_type: "ollama".to_string(),
+                    base_url: "http://localhost:11434".to_string(),
+                    api_key: None,
+                    chat_model: "qwen3-4b-local:latest".to_string(),
+                    embedding_model: String::new(),
+                    models_endpoint: "/api/tags".to_string(),
+                    chat_endpoint: "/api/generate".to_string(),
+                    embeddings_endpoint: "/api/embeddings".to_string(),
+                    is_default: true,
+                    ..llm_provider_request(None, "Ollama local", None)
+                },
+            )
+            .expect("save provider");
+        assert!(provider.is_default);
+
+        let pending_status = store.note_ai_status(&storage).expect("status reads");
+        assert!(pending_status.has_provider);
+        assert!(!pending_status.privacy_accepted);
+        assert!(!pending_status.can_use);
+
+        store
+            .accept_note_ai_privacy("local")
+            .expect("privacy accepted");
+        let ready_status = store.note_ai_status(&storage).expect("status reads again");
+        assert!(ready_status.privacy_accepted);
+        assert!(ready_status.can_use);
+        assert_eq!(ready_status.model.as_deref(), Some("qwen3-4b-local:latest"));
+    }
+
+    #[test]
+    fn note_chat_history_is_lazy_scoped_and_persistent() {
+        let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));
+        let (note_a_id, note_b_id) = {
+            let mut store = DataStore::open(dir.clone()).expect("store opens");
+            let note_a = store
+                .create_note(CreateNoteRequest {
+                    title: "AI chat note A".to_string(),
+                    note_date: "2026-06-18".to_string(),
+                })
+                .expect("create note A");
+            let note_b = store
+                .create_note(CreateNoteRequest {
+                    title: "AI chat note B".to_string(),
+                    note_date: "2026-06-18".to_string(),
+                })
+                .expect("create note B");
+
+            assert!(store
+                .list_note_chat_messages(&note_a.id)
+                .expect("empty history reads")
+                .is_empty());
+            let chat_count_before: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ai_chats WHERE scope = 'note'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("count note chats");
+            assert_eq!(chat_count_before, 0);
+
+            store
+                .save_note_chat_message(SaveNoteChatMessageRequest {
+                    note_id: note_a.id.clone(),
+                    role: "user".to_string(),
+                    content: "Explain this note".to_string(),
+                })
+                .expect("save note A user message");
+            store
+                .save_note_chat_message(SaveNoteChatMessageRequest {
+                    note_id: note_a.id.clone(),
+                    role: "assistant".to_string(),
+                    content: "**Summary**\n\n- item".to_string(),
+                })
+                .expect("save note A assistant message");
+            store
+                .save_note_chat_message(SaveNoteChatMessageRequest {
+                    note_id: note_b.id.clone(),
+                    role: "user".to_string(),
+                    content: "Different note question".to_string(),
+                })
+                .expect("save note B user message");
+
+            let note_a_history = store
+                .list_note_chat_messages(&note_a.id)
+                .expect("note A history loads");
+            let note_b_history = store
+                .list_note_chat_messages(&note_b.id)
+                .expect("note B history loads");
+
+            assert_eq!(note_a_history.len(), 2);
+            assert_eq!(note_b_history.len(), 1);
+            assert!(note_a_history
+                .iter()
+                .all(|message| message.note_id == note_a.id));
+            assert!(note_b_history
+                .iter()
+                .all(|message| message.note_id == note_b.id));
+            assert_eq!(note_a_history[0].role, "user");
+            assert_eq!(note_a_history[1].role, "assistant");
+            assert_eq!(note_a_history[1].content, "**Summary**\n\n- item");
+
+            (note_a.id, note_b.id)
+        };
+
+        let reopened_store = DataStore::open(dir).expect("store reopens");
+        let note_a_history = reopened_store
+            .list_note_chat_messages(&note_a_id)
+            .expect("persisted note A history loads");
+        let note_b_history = reopened_store
+            .list_note_chat_messages(&note_b_id)
+            .expect("persisted note B history loads");
+
+        assert_eq!(note_a_history.len(), 2);
+        assert_eq!(note_b_history.len(), 1);
+        assert!(note_a_history
+            .iter()
+            .all(|message| message.note_id == note_a_id));
+        assert!(note_b_history
+            .iter()
+            .all(|message| message.note_id == note_b_id));
+    }
+
+    #[test]
+    fn note_chat_history_handles_archived_deleted_and_missing_notes() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "AI chat archived note".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create note");
+        store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: note.id.clone(),
+                role: "assistant".to_string(),
+                content: "Archived notes still load chat history".to_string(),
+            })
+            .expect("save message");
+
+        store.archive_note(&note.id).expect("archive note");
+        assert_eq!(
+            store
+                .list_note_chat_messages(&note.id)
+                .expect("archived note history loads")
+                .len(),
+            1
+        );
+
+        store.delete_note(&note.id).expect("soft delete note");
+        assert!(store
+            .list_note_chat_messages(&note.id)
+            .expect("deleted note history does not break")
+            .is_empty());
+        assert!(store
+            .list_note_chat_messages("missing-note-id")
+            .expect("missing note history does not break")
+            .is_empty());
+        assert!(store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: "missing-note-id".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+            })
+            .is_err());
+    }
+
     fn llm_provider_request(
         id: Option<String>,
         name: &str,
@@ -3183,6 +3758,42 @@ mod tests {
                 .expect("secret removed"),
             None
         );
+    }
+
+    #[test]
+    fn llm_provider_status_update_after_delete_does_not_recreate_provider() {
+        let mut store = temp_store();
+        let storage = llm::MemorySecretStorage::default();
+        let saved = store
+            .save_llm_provider(
+                &storage,
+                llm_provider_request(None, "Temporary provider", None),
+            )
+            .expect("save provider");
+
+        store
+            .delete_llm_provider(&storage, &saved.id)
+            .expect("delete provider");
+        store
+            .update_llm_provider_status(
+                &saved.id,
+                &llm::LlmConnectionTestResultDto {
+                    status: "success".to_string(),
+                    message: "stale result".to_string(),
+                    checked_at: now_iso(),
+                    models: vec!["stale-model".to_string()],
+                    chat_ok: true,
+                    embeddings_ok: false,
+                    is_local: true,
+                },
+            )
+            .expect("stale status update is harmless");
+
+        let providers = store
+            .list_llm_providers(&storage)
+            .expect("providers list reads");
+        assert!(providers.iter().all(|provider| provider.id != saved.id));
+        assert!(store.get_llm_provider_record(&saved.id).is_err());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useEditorState, type Editor } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
+import type { NoteAiActionId, NoteAiStatus } from "../../services/noteAiService";
 import { Icon, type IconName } from "../../shared/Icon";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
 import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
@@ -43,9 +44,12 @@ interface ToolbarTool {
 }
 
 interface FormattingToolbarProps {
+  aiStatus: NoteAiStatus | null;
   editor: Editor | null;
+  onAiAction: (actionId: NoteAiActionId) => void;
   onOpenAiSettings: () => void;
   onToast: (message: string) => void;
+  pendingAiActionId?: NoteAiActionId;
 }
 
 const toolbarTools: ToolbarTool[] = [
@@ -79,20 +83,35 @@ const toolbarTools: ToolbarTool[] = [
 
 const deferredTools = new Set<ToolId>();
 
-const aiActionGroups = [
+interface AiActionItem {
+  id: NoteAiActionId;
+  label: string;
+}
+
+const aiActionGroups: Array<{ id: string; items: AiActionItem[] }> = [
   {
     id: "rewrite",
-    items: ["Улучшить текст", "Исправить ошибки", "Сократить", "Развернуть подробнее"],
+    items: [
+      { id: "improve", label: "Улучшить текст" },
+      { id: "fix", label: "Исправить ошибки" },
+      { id: "shorten", label: "Сократить" },
+      { id: "expand", label: "Развернуть подробнее" },
+    ],
   },
   {
     id: "transform",
-    items: ["Изменить тон", "Сделать список задач", "Перевести", "Объяснить простыми словами"],
+    items: [
+      { id: "tone", label: "Изменить тон" },
+      { id: "tasks", label: "Сделать список задач" },
+      { id: "translate", label: "Перевести" },
+      { id: "explain", label: "Объяснить простыми словами" },
+    ],
   },
   {
     id: "knowledge",
-    items: ["Найти связанные заметки", "Спросить по этому тексту"],
+    items: [{ id: "ask", label: "Спросить по этому тексту" }],
   },
-] as const;
+];
 
 interface ToolbarRuntimeState {
   active: Partial<Record<ToolId, boolean>>;
@@ -110,7 +129,7 @@ const emptyToolbarState: ToolbarRuntimeState = {
   fontSize: "",
 };
 
-export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: FormattingToolbarProps) {
+export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettings, onToast, pendingAiActionId }: FormattingToolbarProps) {
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
   const [fontDraft, setFontDraft] = useState<FontFormatDraft>({ fontFamily: "", fontSize: "" });
@@ -439,9 +458,15 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
               <Icon name="x" />
             </button>
           </div>
-          <div className="ai-disconnected-state">
-            <b>ИИ-модель не подключена</b>
-            <span>Подключите локальную или OpenAI-совместимую модель, чтобы использовать действия для выделения и текущей заметки.</span>
+          <div className={`ai-disconnected-state ${aiStatus?.canUse ? "connected" : ""}`}>
+            <b>{aiStatus?.canUse ? `${aiStatus.providerName ?? "LLM"} · ${aiStatus.model ?? "model"}` : "ИИ-модель не подключена"}</b>
+            <span>
+              {aiStatus?.canUse
+                ? selectedText
+                  ? "Действие будет применено к выделенному фрагменту."
+                  : "Выделите фрагмент или примените действие ко всей заметке после подтверждения."
+                : aiStatus?.message ?? "Подключите локальную или OpenAI-совместимую модель, чтобы использовать действия для выделения и текущей заметки."}
+            </span>
           </div>
           <div className="ai-menu-groups">
             {aiActionGroups.map((group) => (
@@ -449,12 +474,25 @@ export function FormattingToolbar({ editor, onOpenAiSettings, onToast }: Formatt
                 {group.items.map((item) => (
                   <button
                     className="ai-action-item"
-                    key={item}
-                    onClick={() => onToast("ИИ-действия будут доступны после подключения модели")}
+                    disabled={pendingAiActionId !== undefined}
+                    key={item.id}
+                    onClick={() => {
+                      if (!aiStatus?.hasProvider) {
+                        setIsAiMenuOpen(false);
+                        onOpenAiSettings();
+                        return;
+                      }
+                      if (pendingAiActionId !== undefined) {
+                        return;
+                      }
+                      setIsAiMenuOpen(false);
+                      onAiAction(item.id);
+                    }}
                     role="menuitem"
                     type="button"
                   >
-                    {item}
+                    {pendingAiActionId === item.id ? <span className="button-spinner" /> : null}
+                    {item.label}
                   </button>
                 ))}
               </div>
