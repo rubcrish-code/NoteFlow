@@ -35,6 +35,8 @@ describe("production data layer contract", () => {
     assert.match(source, /invoke<WorkspaceSnapshotDto>\("load_workspace"/);
     assert.match(source, /invoke<NoteDto>\("update_note_content"/);
     assert.match(source, /invoke<ExportResultDto>\("create_backup"/);
+    assert.match(source, /contentSidecars: note\.contentSidecars\?\.map\(mapNoteContentSidecar\) \?\? \[\]/);
+    assert.match(source, /editorDocument: note\.contentJson/);
     assert.doesNotMatch(source, /localStorage/);
 
     assert.match(uiSettingsSource, /from "@tauri-apps\/api\/core"/);

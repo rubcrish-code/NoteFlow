@@ -17,10 +17,11 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 pub(crate) type DataResult<T> = Result<T, DataError>;
 
 const DATABASE_FILE: &str = "database.sqlite";
-const CURRENT_BACKUP_VERSION: u32 = 2;
+const CURRENT_BACKUP_VERSION: u32 = 3;
 const UI_SETTINGS_KEY: &str = "ui.settings.v1";
 const NOTE_AI_PRIVACY_LOCAL_KEY: &str = "ai.note.privacy.local.v1";
 const NOTE_AI_PRIVACY_EXTERNAL_KEY: &str = "ai.note.privacy.external.v1";
+const LEGACY_TIPTAP_SIDECAR_KIND: &str = "legacy_tiptap_json";
 
 #[derive(Debug)]
 pub enum DataError {
@@ -106,6 +107,7 @@ pub struct NoteDto {
     pub content_markdown: String,
     pub content_html: String,
     pub plain_text: String,
+    pub content_sidecars: Vec<NoteContentSidecarDto>,
     pub project_id: Option<String>,
     pub project: String,
     pub is_favorite: bool,
@@ -119,6 +121,16 @@ pub struct NoteDto {
     pub tags: Vec<NoteTagDto>,
     pub attachments: Vec<AttachmentDto>,
     pub word_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteContentSidecarDto {
+    pub kind: String,
+    pub schema_version: i64,
+    pub payload_json: Value,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -285,6 +297,21 @@ pub struct UpdateNoteContentRequest {
     pub content_markdown: String,
     pub content_html: String,
     pub plain_text: String,
+    #[serde(default)]
+    pub content_sidecars: Vec<NoteContentSidecarInput>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteContentSidecarInput {
+    pub kind: String,
+    #[serde(default = "default_sidecar_schema_version")]
+    pub schema_version: i64,
+    pub payload_json: Value,
+}
+
+fn default_sidecar_schema_version() -> i64 {
+    1
 }
 
 #[derive(Debug, Deserialize)]
@@ -400,6 +427,12 @@ struct BackupData {
     projects: Vec<ProjectBackup>,
     tags: Vec<TagBackup>,
     notes: Vec<NoteBackup>,
+    #[serde(default)]
+    note_revisions: Vec<NoteRevisionBackup>,
+    #[serde(default)]
+    note_content_sidecars: Vec<NoteContentSidecarBackup>,
+    #[serde(default)]
+    note_revision_sidecars: Vec<NoteRevisionSidecarBackup>,
     note_tags: Vec<NoteTagBackup>,
     attachments: Vec<AttachmentBackup>,
     #[serde(default)]
@@ -451,6 +484,36 @@ struct NoteBackup {
     updated_at: String,
     archived_at: Option<String>,
     deleted_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NoteRevisionBackup {
+    id: String,
+    note_id: String,
+    content_json: Value,
+    content_markdown: String,
+    content_html: String,
+    plain_text: String,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NoteContentSidecarBackup {
+    note_id: String,
+    kind: String,
+    schema_version: i64,
+    payload_json: Value,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NoteRevisionSidecarBackup {
+    revision_id: String,
+    kind: String,
+    schema_version: i64,
+    payload_json: Value,
+    created_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -930,11 +993,178 @@ impl DataStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    fn get_note_content_sidecars(&self, note_id: &str) -> DataResult<Vec<NoteContentSidecarDto>> {
+        let mut statement = self.conn.prepare(
+            "SELECT kind, schema_version, payload_json, created_at, updated_at
+             FROM note_content_sidecars
+             WHERE note_id = ?1
+             ORDER BY kind",
+        )?;
+        let rows = statement.query_map(params![note_id], |row| {
+            let payload_json: String = row.get(2)?;
+            Ok(NoteContentSidecarDto {
+                kind: row.get(0)?,
+                schema_version: row.get(1)?,
+                payload_json: serde_json::from_str(&payload_json).unwrap_or(Value::Null),
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn upsert_note_content_sidecar(
+        &self,
+        note_id: &str,
+        kind: &str,
+        schema_version: i64,
+        payload_json: &Value,
+        created_at: &str,
+        updated_at: &str,
+    ) -> DataResult<()> {
+        self.conn.execute(
+            "INSERT INTO note_content_sidecars (
+                note_id, kind, schema_version, payload_json, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(note_id, kind) DO UPDATE SET
+                schema_version = excluded.schema_version,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at",
+            params![
+                note_id,
+                kind,
+                schema_version.max(1),
+                payload_json.to_string(),
+                created_at,
+                updated_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn persist_note_content_sidecars(
+        &self,
+        note_id: &str,
+        content_json: &Value,
+        sidecars: &[NoteContentSidecarInput],
+        timestamp: &str,
+    ) -> DataResult<()> {
+        self.upsert_note_content_sidecar(
+            note_id,
+            LEGACY_TIPTAP_SIDECAR_KIND,
+            1,
+            content_json,
+            timestamp,
+            timestamp,
+        )?;
+
+        for sidecar in sidecars {
+            let kind = sidecar.kind.trim();
+            if kind.is_empty() || kind == LEGACY_TIPTAP_SIDECAR_KIND {
+                continue;
+            }
+            self.upsert_note_content_sidecar(
+                note_id,
+                kind,
+                sidecar.schema_version,
+                &sidecar.payload_json,
+                timestamp,
+                timestamp,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn copy_note_content_sidecars(
+        &self,
+        source_note_id: &str,
+        target_note_id: &str,
+        fallback_payload: &Value,
+        timestamp: &str,
+    ) -> DataResult<()> {
+        let sidecars = self.get_note_content_sidecars(source_note_id)?;
+        if sidecars.is_empty() {
+            return self.upsert_note_content_sidecar(
+                target_note_id,
+                LEGACY_TIPTAP_SIDECAR_KIND,
+                1,
+                fallback_payload,
+                timestamp,
+                timestamp,
+            );
+        }
+
+        for sidecar in sidecars {
+            self.upsert_note_content_sidecar(
+                target_note_id,
+                &sidecar.kind,
+                sidecar.schema_version,
+                &sidecar.payload_json,
+                timestamp,
+                timestamp,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn insert_note_revision_sidecar(
+        &self,
+        revision_id: &str,
+        kind: &str,
+        schema_version: i64,
+        payload_json: &Value,
+        created_at: &str,
+    ) -> DataResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO note_revision_sidecars (
+                revision_id, kind, schema_version, payload_json, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                revision_id,
+                kind,
+                schema_version.max(1),
+                payload_json.to_string(),
+                created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn snapshot_note_sidecars_for_revision(
+        &self,
+        revision_id: &str,
+        note_sidecars: &[NoteContentSidecarDto],
+        fallback_payload: &Value,
+        created_at: &str,
+    ) -> DataResult<()> {
+        if note_sidecars.is_empty() {
+            return self.insert_note_revision_sidecar(
+                revision_id,
+                LEGACY_TIPTAP_SIDECAR_KIND,
+                1,
+                fallback_payload,
+                created_at,
+            );
+        }
+
+        for sidecar in note_sidecars {
+            self.insert_note_revision_sidecar(
+                revision_id,
+                &sidecar.kind,
+                sidecar.schema_version,
+                &sidecar.payload_json,
+                created_at,
+            )?;
+        }
+        Ok(())
+    }
+
     fn note_dto_from_row(&self, row: NoteRow) -> DataResult<NoteDto> {
         let content_json =
             serde_json::from_str(&row.content_json).unwrap_or_else(|_| empty_document());
         let tags = self.get_note_tags(&row.id)?;
         let attachments = self.get_note_attachments(&row.id)?;
+        let content_sidecars = self.get_note_content_sidecars(&row.id)?;
         let word_count = count_words(&row.plain_text);
 
         Ok(NoteDto {
@@ -945,6 +1175,7 @@ impl DataStore {
             content_markdown: row.content_markdown,
             content_html: row.content_html,
             plain_text: row.plain_text,
+            content_sidecars,
             project_id: row.project_id,
             project: row.project,
             is_favorite: row.is_favorite,
@@ -1017,6 +1248,7 @@ impl DataStore {
         let note_id = Uuid::new_v4().to_string();
         let default_tag_id = self.ensure_tag("новая", "blue")?;
         let project_id = self.ensure_project("Входящие", "Быстрые заметки без проекта")?;
+        let content_json = empty_document();
 
         self.conn.execute(
             "INSERT INTO notes (
@@ -1027,11 +1259,12 @@ impl DataStore {
                 note_id,
                 title,
                 request.note_date,
-                empty_document().to_string(),
+                content_json.to_string(),
                 project_id,
                 now
             ],
         )?;
+        self.persist_note_content_sidecars(&note_id, &content_json, &[], &now)?;
         self.conn.execute(
             "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
             params![note_id, default_tag_id],
@@ -1043,12 +1276,15 @@ impl DataStore {
     fn update_note_content(&mut self, request: UpdateNoteContentRequest) -> DataResult<NoteDto> {
         let current = self.get_note(&request.note_id)?;
         let now = now_iso();
+        let revision_id = Uuid::new_v4().to_string();
+        let current_content_json = current.content_json.clone();
+        let current_sidecars = current.content_sidecars.clone();
         self.conn.execute(
             "INSERT INTO note_revisions (
                 id, note_id, content_json, content_markdown, content_html, plain_text, created_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                Uuid::new_v4().to_string(),
+                revision_id,
                 request.note_id,
                 current.content_json.to_string(),
                 current.content_markdown,
@@ -1056,6 +1292,12 @@ impl DataStore {
                 current.plain_text,
                 now
             ],
+        )?;
+        self.snapshot_note_sidecars_for_revision(
+            &revision_id,
+            &current_sidecars,
+            &current_content_json,
+            &now,
         )?;
         self.conn.execute(
             "UPDATE notes
@@ -1069,6 +1311,12 @@ impl DataStore {
                 now,
                 request.note_id
             ],
+        )?;
+        self.persist_note_content_sidecars(
+            &request.note_id,
+            &request.content_json,
+            &request.content_sidecars,
+            &now,
         )?;
         self.refresh_note_search_index(&request.note_id)?;
         self.get_note(&request.note_id)
@@ -1114,6 +1362,7 @@ impl DataStore {
             )?;
         }
 
+        self.copy_note_content_sidecars(note_id, &new_id, &source.content_json, &now)?;
         self.refresh_note_search_index(&new_id)?;
         self.get_note(&new_id)
     }
@@ -1690,6 +1939,8 @@ impl DataStore {
         }
 
         let transaction = self.conn.transaction()?;
+        transaction.execute("DELETE FROM note_revision_sidecars", [])?;
+        transaction.execute("DELETE FROM note_content_sidecars", [])?;
         transaction.execute("DELETE FROM note_tags", [])?;
         transaction.execute("DELETE FROM attachments", [])?;
         transaction.execute("DELETE FROM note_revisions", [])?;
@@ -1759,6 +2010,51 @@ impl DataStore {
                     note.updated_at,
                     note.archived_at,
                     note.deleted_at
+                ],
+            )?;
+        }
+        for revision in &backup_data.note_revisions {
+            transaction.execute(
+                "INSERT INTO note_revisions (
+                    id, note_id, content_json, content_markdown, content_html, plain_text, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    revision.id,
+                    revision.note_id,
+                    revision.content_json.to_string(),
+                    revision.content_markdown,
+                    revision.content_html,
+                    revision.plain_text,
+                    revision.created_at
+                ],
+            )?;
+        }
+        for sidecar in &backup_data.note_content_sidecars {
+            transaction.execute(
+                "INSERT OR REPLACE INTO note_content_sidecars (
+                    note_id, kind, schema_version, payload_json, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    sidecar.note_id,
+                    sidecar.kind,
+                    sidecar.schema_version.max(1),
+                    sidecar.payload_json.to_string(),
+                    sidecar.created_at,
+                    sidecar.updated_at
+                ],
+            )?;
+        }
+        for sidecar in &backup_data.note_revision_sidecars {
+            transaction.execute(
+                "INSERT OR REPLACE INTO note_revision_sidecars (
+                    revision_id, kind, schema_version, payload_json, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    sidecar.revision_id,
+                    sidecar.kind,
+                    sidecar.schema_version.max(1),
+                    sidecar.payload_json.to_string(),
+                    sidecar.created_at
                 ],
             )?;
         }
@@ -1845,6 +2141,9 @@ impl DataStore {
             projects: self.collect_projects_backup()?,
             tags: self.collect_tags_backup()?,
             notes: self.collect_notes_backup()?,
+            note_revisions: self.collect_note_revisions_backup()?,
+            note_content_sidecars: self.collect_note_content_sidecars_backup()?,
+            note_revision_sidecars: self.collect_note_revision_sidecars_backup()?,
             note_tags: self.collect_note_tags_backup()?,
             attachments: self.collect_attachments_backup()?,
             llm_providers: llm::collect_provider_backups(&self.conn)?,
@@ -1918,6 +2217,67 @@ impl DataStore {
                 updated_at: row.get(14)?,
                 archived_at: row.get(15)?,
                 deleted_at: row.get(16)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_note_revisions_backup(&self) -> DataResult<Vec<NoteRevisionBackup>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, note_id, content_json, content_markdown, content_html, plain_text, created_at
+             FROM note_revisions
+             ORDER BY created_at",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let content_json: String = row.get(2)?;
+            Ok(NoteRevisionBackup {
+                id: row.get(0)?,
+                note_id: row.get(1)?,
+                content_json: serde_json::from_str(&content_json)
+                    .unwrap_or_else(|_| empty_document()),
+                content_markdown: row.get(3)?,
+                content_html: row.get(4)?,
+                plain_text: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_note_content_sidecars_backup(&self) -> DataResult<Vec<NoteContentSidecarBackup>> {
+        let mut statement = self.conn.prepare(
+            "SELECT note_id, kind, schema_version, payload_json, created_at, updated_at
+             FROM note_content_sidecars
+             ORDER BY note_id, kind",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let payload_json: String = row.get(3)?;
+            Ok(NoteContentSidecarBackup {
+                note_id: row.get(0)?,
+                kind: row.get(1)?,
+                schema_version: row.get(2)?,
+                payload_json: serde_json::from_str(&payload_json).unwrap_or(Value::Null),
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    fn collect_note_revision_sidecars_backup(&self) -> DataResult<Vec<NoteRevisionSidecarBackup>> {
+        let mut statement = self.conn.prepare(
+            "SELECT revision_id, kind, schema_version, payload_json, created_at
+             FROM note_revision_sidecars
+             ORDER BY revision_id, kind",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let payload_json: String = row.get(3)?;
+            Ok(NoteRevisionSidecarBackup {
+                revision_id: row.get(0)?,
+                kind: row.get(1)?,
+                schema_version: row.get(2)?,
+                payload_json: serde_json::from_str(&payload_json).unwrap_or(Value::Null),
+                created_at: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -2224,6 +2584,60 @@ fn migrations() -> Vec<Migration> {
             name: "llm_providers",
             sql: llm::LLM_PROVIDER_SCHEMA_SQL,
         },
+        Migration {
+            version: 7,
+            name: "markdown_first_sidecars",
+            sql: "
+                CREATE TABLE IF NOT EXISTS note_content_sidecars (
+                    note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL DEFAULT 1,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (note_id, kind)
+                );
+
+                CREATE TABLE IF NOT EXISTS note_revision_sidecars (
+                    revision_id TEXT NOT NULL REFERENCES note_revisions(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL DEFAULT 1,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (revision_id, kind)
+                );
+
+                INSERT OR IGNORE INTO note_content_sidecars (
+                    note_id, kind, schema_version, payload_json, created_at, updated_at
+                )
+                SELECT
+                    id,
+                    'legacy_tiptap_json',
+                    1,
+                    content_json,
+                    created_at,
+                    updated_at
+                FROM notes
+                WHERE trim(content_json) <> '';
+
+                INSERT OR IGNORE INTO note_revision_sidecars (
+                    revision_id, kind, schema_version, payload_json, created_at
+                )
+                SELECT
+                    id,
+                    'legacy_tiptap_json',
+                    1,
+                    content_json,
+                    created_at
+                FROM note_revisions
+                WHERE trim(content_json) <> '';
+
+                UPDATE notes
+                SET content_markdown = plain_text
+                WHERE trim(content_markdown) = ''
+                  AND trim(plain_text) <> '';
+            ",
+        },
     ]
 }
 
@@ -2417,6 +2831,17 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
                 pinned_at,
                 now,
                 archived_at
+            ],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO note_content_sidecars (
+                note_id, kind, schema_version, payload_json, created_at, updated_at
+             ) VALUES (?1, ?2, 1, ?3, ?4, ?4)",
+            params![
+                note.id,
+                LEGACY_TIPTAP_SIDECAR_KIND,
+                content_json.to_string(),
+                now
             ],
         )?;
 
@@ -3384,6 +3809,138 @@ mod tests {
         DataStore::open(dir).expect("store opens")
     }
 
+    fn temp_store_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()))
+    }
+
+    fn create_v6_database_with_notes(dir: &Path) {
+        ensure_storage_dirs(dir).expect("storage dirs");
+        let mut conn = Connection::open(dir.join(DATABASE_FILE)).expect("open sqlite");
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .expect("foreign keys");
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );",
+        )
+        .expect("schema migrations table");
+
+        for migration in migrations()
+            .into_iter()
+            .filter(|migration| migration.version <= 6)
+        {
+            let transaction = conn.transaction().expect("migration transaction");
+            transaction
+                .execute_batch(migration.sql)
+                .expect("apply pre-sidecar migration");
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                    params![migration.version, migration.name, now_iso()],
+                )
+                .expect("record migration");
+            transaction.commit().expect("commit migration");
+        }
+
+        let now = now_iso();
+        conn.execute(
+            "INSERT INTO notes (
+                id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                project_id, is_favorite, is_pinned, pinned_at, icon, icon_key, created_at, updated_at, archived_at, deleted_at
+             ) VALUES (?1, ?2, '2026-06-18', ?3, ?4, ?5, ?6, NULL, 0, 0, NULL, 'doc', NULL, ?7, ?7, NULL, NULL)",
+            params![
+                "v6-note-preserved",
+                "V6 preserved markdown",
+                document_from_text("legacy preserved json").to_string(),
+                "Существующий **Markdown**".to_string(),
+                "<p>legacy preserved json</p>".to_string(),
+                "legacy preserved json".to_string(),
+                now
+            ],
+        )
+        .expect("insert preserved v6 note");
+        conn.execute(
+            "INSERT INTO notes (
+                id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                project_id, is_favorite, is_pinned, pinned_at, icon, icon_key, created_at, updated_at, archived_at, deleted_at
+             ) VALUES (?1, ?2, '2026-06-18', ?3, '', ?4, ?5, NULL, 0, 0, NULL, 'doc', NULL, ?6, ?6, NULL, NULL)",
+            params![
+                "v6-note-fallback",
+                "V6 fallback markdown",
+                document_from_text("legacy fallback json").to_string(),
+                "<p>fallback marker text</p>".to_string(),
+                "fallback marker text".to_string(),
+                now
+            ],
+        )
+        .expect("insert fallback v6 note");
+    }
+
+    fn note_sidecar_payload(store: &DataStore, note_id: &str, kind: &str) -> Value {
+        let payload_json: String = store
+            .conn
+            .query_row(
+                "SELECT payload_json FROM note_content_sidecars WHERE note_id = ?1 AND kind = ?2",
+                params![note_id, kind],
+                |row| row.get(0),
+            )
+            .expect("note sidecar payload exists");
+        serde_json::from_str(&payload_json).expect("payload is json")
+    }
+
+    fn sidecar_count_for_note(store: &DataStore, note_id: &str) -> i64 {
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM note_content_sidecars WHERE note_id = ?1",
+                params![note_id],
+                |row| row.get(0),
+            )
+            .expect("count sidecars")
+    }
+
+    fn old_backup_without_sidecars_bytes() -> Vec<u8> {
+        let note_json = document_from_text("old backup text");
+        let backup_json = json!({
+            "version": 2,
+            "exportedAt": now_iso(),
+            "projects": [],
+            "tags": [],
+            "notes": [{
+                "id": "old-backup-note",
+                "title": "Old backup note",
+                "note_date": "2026-06-18",
+                "content_json": note_json,
+                "content_markdown": "old backup markdown",
+                "content_html": "<p>old backup text</p>",
+                "plain_text": "old backup text",
+                "project_id": null,
+                "is_favorite": false,
+                "is_pinned": false,
+                "pinned_at": null,
+                "icon": "doc",
+                "icon_key": null,
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+                "archived_at": null,
+                "deleted_at": null
+            }],
+            "noteTags": [],
+            "attachments": [],
+            "llmProviders": [],
+            "appSettings": []
+        })
+        .to_string();
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("noteflow-backup.json", zip_options())
+            .expect("start backup json");
+        std::io::copy(&mut Cursor::new(backup_json.into_bytes()), &mut zip)
+            .expect("write backup json");
+        zip.finish().expect("finish zip").into_inner()
+    }
+
     #[test]
     fn migrations_seed_only_once() {
         let mut store = temp_store();
@@ -3399,6 +3956,149 @@ mod tests {
 
         assert_eq!(first_count, second_count);
         assert!(first_count > 0);
+    }
+
+    #[test]
+    fn markdown_first_sidecar_migration_preserves_legacy_content() {
+        let dir = temp_store_dir();
+        create_v6_database_with_notes(&dir);
+
+        let store = DataStore::open(dir).expect("store upgrades to v7");
+        let note_sidecar_table_exists: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'note_content_sidecars'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("note sidecar table exists");
+        let revision_sidecar_table_exists: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'note_revision_sidecars'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("revision sidecar table exists");
+        assert_eq!(note_sidecar_table_exists, 1);
+        assert_eq!(revision_sidecar_table_exists, 1);
+
+        let preserved_markdown: String = store
+            .conn
+            .query_row(
+                "SELECT content_markdown FROM notes WHERE id = 'v6-note-preserved'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("preserved markdown");
+        let fallback_markdown: String = store
+            .conn
+            .query_row(
+                "SELECT content_markdown FROM notes WHERE id = 'v6-note-fallback'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fallback markdown");
+
+        assert_eq!(preserved_markdown, "Существующий **Markdown**");
+        assert_eq!(fallback_markdown, "fallback marker text");
+        assert_eq!(
+            note_sidecar_payload(&store, "v6-note-preserved", LEGACY_TIPTAP_SIDECAR_KIND),
+            document_from_text("legacy preserved json")
+        );
+        assert_eq!(
+            note_sidecar_payload(&store, "v6-note-fallback", LEGACY_TIPTAP_SIDECAR_KIND),
+            document_from_text("legacy fallback json")
+        );
+
+        let search_results = store
+            .list_notes(Some("fallback marker".to_string()), false)
+            .expect("search migrated note");
+        assert!(search_results
+            .iter()
+            .any(|note| note.id == "v6-note-fallback"));
+    }
+
+    #[test]
+    fn note_sidecars_duplicate_and_cascade_delete_work() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Sidecar source".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create note");
+        let updated = store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("sidecar source text"),
+                content_markdown: "sidecar source text".to_string(),
+                content_html: "<p>sidecar source text</p>".to_string(),
+                content_sidecars: vec![],
+                plain_text: "sidecar source text".to_string(),
+            })
+            .expect("save note");
+        let duplicate = store.duplicate_note(&updated.id).expect("duplicate note");
+
+        assert_eq!(
+            note_sidecar_payload(&store, &duplicate.id, LEGACY_TIPTAP_SIDECAR_KIND),
+            document_from_text("sidecar source text")
+        );
+
+        store
+            .delete_note_permanently(&duplicate.id)
+            .expect("delete duplicate permanently");
+        assert_eq!(sidecar_count_for_note(&store, &duplicate.id), 0);
+    }
+
+    #[test]
+    fn note_revisions_snapshot_sidecars() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Revision sidecar".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create note");
+        store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("first revision text"),
+                content_markdown: "first revision text".to_string(),
+                content_html: "<p>first revision text</p>".to_string(),
+                content_sidecars: vec![],
+                plain_text: "first revision text".to_string(),
+            })
+            .expect("first save");
+        store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("second revision text"),
+                content_markdown: "second revision text".to_string(),
+                content_html: "<p>second revision text</p>".to_string(),
+                content_sidecars: vec![],
+                plain_text: "second revision text".to_string(),
+            })
+            .expect("second save");
+
+        let revision_payload: String = store
+            .conn
+            .query_row(
+                "SELECT nrs.payload_json
+                 FROM note_revision_sidecars nrs
+                 INNER JOIN note_revisions nr ON nr.id = nrs.revision_id
+                 WHERE nr.note_id = ?1
+                   AND nr.plain_text = 'first revision text'
+                   AND nrs.kind = ?2",
+                params![note.id, LEGACY_TIPTAP_SIDECAR_KIND],
+                |row| row.get(0),
+            )
+            .expect("revision sidecar exists");
+
+        assert_eq!(
+            serde_json::from_str::<Value>(&revision_payload).expect("payload json"),
+            document_from_text("first revision text")
+        );
     }
 
     #[test]
@@ -3856,6 +4556,7 @@ mod tests {
                 content_json: document_from_text("Текст"),
                 content_markdown: "Текст".to_string(),
                 content_html: "<p>Текст</p>".to_string(),
+                content_sidecars: vec![],
                 plain_text: "Текст".to_string(),
             })
             .expect("update note");
@@ -3994,6 +4695,7 @@ mod tests {
                 content_json: document_from_text("уникальный маркер"),
                 content_markdown: "уникальный маркер".to_string(),
                 content_html: "<p>уникальный маркер</p>".to_string(),
+                content_sidecars: vec![],
                 plain_text: "уникальный маркер".to_string(),
             })
             .expect("update note");
@@ -4043,6 +4745,16 @@ mod tests {
             })
             .expect("create pinned note");
         store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: pinned_note.id.clone(),
+                content_json: document_from_text("backup sidecar text"),
+                content_markdown: "backup sidecar text".to_string(),
+                content_html: "<p>backup sidecar text</p>".to_string(),
+                content_sidecars: vec![],
+                plain_text: "backup sidecar text".to_string(),
+            })
+            .expect("save note content");
+        store
             .toggle_note_pin(&pinned_note.id)
             .expect("pin note for backup");
         let backup = store.create_backup().expect("create backup");
@@ -4062,5 +4774,42 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.title == "backup pinned note" && note.is_pinned));
+        let imported_note = snapshot
+            .notes
+            .iter()
+            .find(|note| note.title == "backup pinned note")
+            .expect("imported note exists");
+        assert!(imported_note
+            .content_sidecars
+            .iter()
+            .any(|sidecar| sidecar.kind == LEGACY_TIPTAP_SIDECAR_KIND));
+        assert_eq!(
+            note_sidecar_payload(
+                &imported_store,
+                &imported_note.id,
+                LEGACY_TIPTAP_SIDECAR_KIND
+            ),
+            document_from_text("backup sidecar text")
+        );
+    }
+
+    #[test]
+    fn old_backup_without_sidecars_imports_without_creating_sidecars() {
+        let mut store = temp_store();
+        let snapshot = store
+            .import_backup(ImportBackupRequest {
+                file_name: "old-backup.zip".to_string(),
+                bytes: old_backup_without_sidecars_bytes(),
+            })
+            .expect("old backup imports");
+        let imported_note = snapshot
+            .notes
+            .iter()
+            .find(|note| note.id == "old-backup-note")
+            .expect("old backup note exists");
+
+        assert_eq!(imported_note.content_markdown, "old backup markdown");
+        assert!(imported_note.content_sidecars.is_empty());
+        assert_eq!(sidecar_count_for_note(&store, "old-backup-note"), 0);
     }
 }

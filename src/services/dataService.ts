@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ArchiveItem, EditorDocument, Note, NoteAttachment, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
+import type { ArchiveItem, EditorDocument, Note, NoteAttachment, NoteContentSidecar, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
 import { createNotePreview } from "../features/notes/notePreview";
 import { normalizeNoteIconKey } from "../shared/noteIconRegistry";
 
@@ -54,6 +54,7 @@ interface NoteDto {
   contentHtml: string;
   contentJson: EditorDocument;
   contentMarkdown: string;
+  contentSidecars?: NoteContentSidecarDto[];
   createdAt: string;
   deletedAt?: string | null;
   iconKey?: string | null;
@@ -69,6 +70,14 @@ interface NoteDto {
   title: string;
   updatedAt: string;
   wordCount: number;
+}
+
+interface NoteContentSidecarDto {
+  createdAt: string;
+  kind: string;
+  payloadJson: unknown;
+  schemaVersion: number;
+  updatedAt: string;
 }
 
 interface ProjectDto {
@@ -154,6 +163,16 @@ function mapAttachment(attachment: AttachmentDto): NoteAttachment {
   };
 }
 
+function mapNoteContentSidecar(sidecar: NoteContentSidecarDto): NoteContentSidecar {
+  return {
+    createdAt: sidecar.createdAt,
+    kind: sidecar.kind,
+    payloadJson: sidecar.payloadJson,
+    schemaVersion: sidecar.schemaVersion,
+    updatedAt: sidecar.updatedAt,
+  };
+}
+
 function getFallbackTag(): NoteTag {
   return {
     color: "blue",
@@ -189,6 +208,7 @@ function mapNote(note: NoteDto): Note {
     attachments: note.attachments.map(mapAttachment),
     contentHtml: note.contentHtml,
     contentMarkdown: note.contentMarkdown,
+    contentSidecars: note.contentSidecars?.map(mapNoteContentSidecar) ?? [],
     createdAt: note.createdAt,
     dateLabel: formatDateLabel(note.updatedAt, note.noteDate),
     editorDocument: note.contentJson,

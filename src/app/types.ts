@@ -37,10 +37,21 @@ export interface NoteAttachment {
   storageRelPath: string;
 }
 
+export interface EditorContentSidecar {
+  kind: string;
+  schemaVersion: number;
+  payloadJson: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NoteContentSidecar = EditorContentSidecar;
+
 export interface Note {
   attachments: NoteAttachment[];
   contentHtml: string;
   contentMarkdown: string;
+  contentSidecars: NoteContentSidecar[];
   id: string;
   editorDocument: EditorDocument;
   createdAt: string;

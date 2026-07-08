@@ -7,6 +7,7 @@ export function createEditorStateFromMarkdown(markdown: string) {
   return {
     contentHtml: tiptapJsonToHtml(editorDocument),
     contentMarkdown: tiptapJsonToMarkdown(editorDocument),
+    contentSidecars: [],
     editorDocument,
     plainText: tiptapJsonToPlainText(editorDocument),
   };
