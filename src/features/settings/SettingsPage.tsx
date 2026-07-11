@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppLanguage, AppSection, SettingsPanel, ThemeMode } from "../../app/types";
+import { Icon } from "../../shared/Icon";
 import { PageShell } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
 import * as llmProviderService from "../../services/llmProviderService";
@@ -1320,18 +1321,36 @@ function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProj
       <div className="settings-title">Данные и экспорт</div>
       <div className="settings-subtitle">Выгрузите одну заметку, проект или всю базу.</div>
       <div className="settings-card export-card">
-        <button className="tb wide" onClick={onExportCurrentNote} type="button">
-          Экспорт текущей заметки
-        </button>
-        <button className="tb wide" onClick={onExportCurrentProject} type="button">
-          Экспорт проекта
-        </button>
-        <button className="tb wide" onClick={onBackupCreate} type="button">
-          Экспорт всей базы и вложений
-        </button>
-        <button className="tb wide" onClick={() => importInputRef.current?.click()} type="button">
-          Импорт резервной копии
-        </button>
+        <div className="export-action-group">
+          <div className="export-action-head">
+            <b>Экспорт</b>
+            <span>Выберите объём данных</span>
+          </div>
+          <div className="export-action-list">
+            <button className="export-action primary" onClick={onExportCurrentNote} type="button">
+              <Icon name="doc" />
+              Текущая заметка
+            </button>
+            <button className="export-action secondary" onClick={onExportCurrentProject} type="button">
+              <Icon name="folder" />
+              Проект
+            </button>
+            <button className="export-action secondary" onClick={onBackupCreate} type="button">
+              <Icon name="archive" />
+              Вся база и вложения
+            </button>
+          </div>
+        </div>
+        <div className="export-action-group recovery">
+          <div className="export-action-head">
+            <b>Импорт и восстановление</b>
+            <span>Резервная копия NoteFlow в формате ZIP</span>
+          </div>
+          <button className="export-action secondary" onClick={() => importInputRef.current?.click()} type="button">
+            <Icon name="attach" />
+            Импорт резервной копии
+          </button>
+        </div>
         <input
           accept=".zip,application/zip"
           hidden

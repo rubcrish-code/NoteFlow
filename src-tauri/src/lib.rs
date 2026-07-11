@@ -104,6 +104,7 @@ pub fn run() {
             data::rename_tag,
             data::restore_archive_item,
             data::restore_note,
+            data::resolve_attachment_path,
             data::save_llm_provider,
             data::set_default_llm_provider,
             data::store_attachment,

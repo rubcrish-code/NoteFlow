@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ArchiveItem, EditorDocument, Note, NoteAttachment, NoteContentSidecar, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import type { ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, NoteContentSidecar, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
+import { buildEditorDocumentFromStoredNoteContent } from "../features/editor/editorContentSerializer";
 import { createNotePreview } from "../features/notes/notePreview";
 import { normalizeNoteIconKey } from "../shared/noteIconRegistry";
 
@@ -78,6 +80,12 @@ interface NoteContentSidecarDto {
   payloadJson: unknown;
   schemaVersion: number;
   updatedAt: string;
+}
+
+interface NoteContentSidecarInputDto {
+  kind: string;
+  payloadJson: unknown;
+  schemaVersion: number;
 }
 
 interface ProjectDto {
@@ -204,14 +212,24 @@ function formatDateLabel(updatedAt: string, noteDate: string) {
 function mapNote(note: NoteDto): Note {
   const tags = note.tags.map(mapTag);
   const plainText = note.plainText.trim();
+  const contentSidecars = note.contentSidecars?.map(mapNoteContentSidecar) ?? [];
+  const editorContent = buildEditorDocumentFromStoredNoteContent({
+    contentJson: note.contentJson,
+    contentMarkdown: note.contentMarkdown,
+    contentSidecars,
+    noteId: note.id,
+    plainText: note.plainText,
+  });
   return {
     attachments: note.attachments.map(mapAttachment),
     contentHtml: note.contentHtml,
     contentMarkdown: note.contentMarkdown,
-    contentSidecars: note.contentSidecars?.map(mapNoteContentSidecar) ?? [],
+    contentSidecars,
     createdAt: note.createdAt,
     dateLabel: formatDateLabel(note.updatedAt, note.noteDate),
-    editorDocument: note.contentJson,
+    editorDocument: editorContent.editorDocument,
+    editorLoadFallbackReason: editorContent.fallbackReason,
+    editorLoadSource: editorContent.source,
     iconKey: normalizeNoteIconKey(note.iconKey),
     id: note.id,
     noteDate: note.noteDate,
@@ -308,13 +326,31 @@ export async function createNote(title: string, noteDate: string) {
   return mapNote(await invoke<NoteDto>("create_note", { request: { noteDate, title } }));
 }
 
-export async function updateNoteContent(note: Pick<Note, "contentHtml" | "contentMarkdown" | "editorDocument" | "id" | "plainText">) {
+export interface UpdateNoteContentInput {
+  contentHtml: string;
+  contentMarkdown: string;
+  contentSidecars: EditorContentSidecarInput[];
+  editorDocument: EditorDocument;
+  id: string;
+  plainText: string;
+}
+
+function mapNoteContentSidecarInput(sidecar: EditorContentSidecarInput): NoteContentSidecarInputDto {
+  return {
+    kind: sidecar.kind,
+    payloadJson: sidecar.payloadJson,
+    schemaVersion: sidecar.schemaVersion,
+  };
+}
+
+export async function updateNoteContent(note: UpdateNoteContentInput) {
   return mapNote(
     await invoke<NoteDto>("update_note_content", {
       request: {
         contentHtml: note.contentHtml,
         contentJson: note.editorDocument,
         contentMarkdown: note.contentMarkdown,
+        contentSidecars: note.contentSidecars.map(mapNoteContentSidecarInput),
         noteId: note.id,
         plainText: note.plainText,
       },
@@ -428,8 +464,22 @@ export async function storeAttachment(noteId: string, file: File, kind: "file" |
   );
 }
 
+export async function openAttachment(attachmentId: string) {
+  const path = await invoke<string>("resolve_attachment_path", { attachmentId });
+  await openPath(path);
+}
+
+export async function revealAttachment(attachmentId: string) {
+  const path = await invoke<string>("resolve_attachment_path", { attachmentId });
+  await revealItemInDir(path);
+}
+
 export async function exportNoteMarkdown(noteId: string) {
   return mapExportResult(await invoke<ExportResultDto>("export_note_markdown", { noteId }));
+}
+
+export async function revealExportedItem(path: string) {
+  await revealItemInDir(path);
 }
 
 export async function exportNoteZip(noteId: string) {

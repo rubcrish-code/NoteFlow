@@ -1241,6 +1241,26 @@ impl DataStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    fn resolve_attachment_path(&self, attachment_id: &str) -> DataResult<String> {
+        let attachment_id = normalize_required_text(attachment_id, "Идентификатор вложения")?;
+        let storage_rel_path = self
+            .conn
+            .query_row(
+                "SELECT storage_rel_path FROM attachments WHERE id = ?1",
+                params![attachment_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| DataError::NotFound("Вложение не найдено".to_string()))?;
+        let path = self.resolve_storage_path(&storage_rel_path)?;
+        if !path.is_file() {
+            return Err(DataError::NotFound(
+                "Файл вложения недоступен. Возможно, он был перемещён или удалён".to_string(),
+            ));
+        }
+        Ok(fs::canonicalize(path)?.to_string_lossy().into_owned())
+    }
+
     fn create_note(&mut self, request: CreateNoteRequest) -> DataResult<NoteDto> {
         let title = normalize_required_text(&request.title, "Название заметки")?;
         validate_iso_date(&request.note_date)?;
@@ -3753,6 +3773,16 @@ pub fn store_attachment(
 }
 
 #[tauri::command]
+pub fn resolve_attachment_path(
+    attachment_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    state
+        .with_store(|store| store.resolve_attachment_path(&attachment_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
 pub fn export_note_markdown(
     note_id: String,
     state: State<'_, AppState>,
@@ -4034,15 +4064,51 @@ mod tests {
                 content_json: document_from_text("sidecar source text"),
                 content_markdown: "sidecar source text".to_string(),
                 content_html: "<p>sidecar source text</p>".to_string(),
-                content_sidecars: vec![],
+                content_sidecars: vec![NoteContentSidecarInput {
+                    kind: "editor_node_attrs_v1".to_string(),
+                    schema_version: 1,
+                    payload_json: json!({
+                        "version": 1,
+                        "images": [],
+                        "fileAttachments": [],
+                        "detailsBlocks": [],
+                        "callouts": [],
+                        "blocks": [],
+                        "textMarks": []
+                    }),
+                }],
                 plain_text: "sidecar source text".to_string(),
             })
             .expect("save note");
         let duplicate = store.duplicate_note(&updated.id).expect("duplicate note");
 
         assert_eq!(
+            note_sidecar_payload(&store, &updated.id, "editor_node_attrs_v1"),
+            json!({
+                "version": 1,
+                "images": [],
+                "fileAttachments": [],
+                "detailsBlocks": [],
+                "callouts": [],
+                "blocks": [],
+                "textMarks": []
+            })
+        );
+        assert_eq!(
             note_sidecar_payload(&store, &duplicate.id, LEGACY_TIPTAP_SIDECAR_KIND),
             document_from_text("sidecar source text")
+        );
+        assert_eq!(
+            note_sidecar_payload(&store, &duplicate.id, "editor_node_attrs_v1"),
+            json!({
+                "version": 1,
+                "images": [],
+                "fileAttachments": [],
+                "detailsBlocks": [],
+                "callouts": [],
+                "blocks": [],
+                "textMarks": []
+            })
         );
 
         store
@@ -4733,6 +4799,39 @@ mod tests {
 
         assert!(path.exists());
         assert!(!stored.attachment.storage_rel_path.contains(".."));
+    }
+
+    #[test]
+    fn attachment_path_resolves_only_existing_managed_files() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Открытие вложения".to_string(),
+                note_date: "2026-06-18".to_string(),
+            })
+            .expect("create note");
+        let stored = store
+            .store_attachment(StoreAttachmentRequest {
+                note_id: note.id,
+                kind: "file".to_string(),
+                original_name: "brief.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                original_attachment_id: None,
+                edit_metadata: None,
+                bytes: b"hello".to_vec(),
+            })
+            .expect("store attachment");
+
+        let resolved = store
+            .resolve_attachment_path(&stored.attachment.id)
+            .expect("resolve attachment path");
+        assert!(Path::new(&resolved).is_file());
+
+        fs::remove_file(&resolved).expect("remove attachment file");
+        let error = store
+            .resolve_attachment_path(&stored.attachment.id)
+            .expect_err("missing attachment must fail");
+        assert!(error.to_string().contains("Файл вложения недоступен"));
     }
 
     #[test]

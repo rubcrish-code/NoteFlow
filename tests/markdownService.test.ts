@@ -34,6 +34,71 @@ describe("markdownService.isMarkdownLike", () => {
   it("detects highlighted text", () => {
     assert.equal(isMarkdownLike("Текст с ==подсветкой== внутри абзаца"), true);
   });
+  it("converts pasted multiline Markdown headings immediately", () => {
+    const document = markdownToTiptapDoc("# Заголовок\n\n## Подзаголовок\n\n**Жирный текст**\n\n- пункт 1\n- пункт 2\n\n- [ ] задача");
+
+    assert.deepEqual(document.content?.map((node) => node.type), ["heading", "heading", "paragraph", "bulletList", "taskList"]);
+    assert.equal(document.content?.[0]?.attrs?.level, 1);
+    assert.equal(document.content?.[1]?.attrs?.level, 2);
+  });
+
+  it("keeps task list Markdown round-trippable", () => {
+    const markdown = "- [ ] task\n- [x] done";
+    const document = markdownToTiptapDoc(markdown);
+    const exported = tiptapJsonToMarkdown(document);
+
+    assert.equal(document.content?.[0]?.type, "taskList");
+    assert.match(exported, /- \[ \] task/);
+    assert.match(exported, /- \[x\] done/);
+  });
+
+  it("does not export image filename or alignment attrs into Markdown", () => {
+    const document: EditorDocument = {
+      type: "doc",
+      content: [{ type: "image", attrs: { alignment: "right", alt: "Схема", src: "noteflow-image://scheme", title: "scheme.png" } }],
+    };
+
+    const markdown = tiptapJsonToMarkdown(document);
+    const html = tiptapJsonToHtml(document);
+
+    assert.equal(markdown, "![Схема](noteflow-image://scheme)");
+    assert.doesNotMatch(markdown, /scheme\.png|data-image-align/);
+    assert.match(html, /data-image-align="right"/);
+  });
+
+  it("keeps table cell color out of Markdown while preserving HTML cache", () => {
+    const document: EditorDocument = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] },
+                { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "B" }] }] },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableCell", attrs: { backgroundColor: "#e8f0ff" }, content: [{ type: "paragraph", content: [{ type: "text", text: "1" }] }] },
+                { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "2" }] }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const markdown = tiptapJsonToMarkdown(document);
+    const html = tiptapJsonToHtml(document);
+
+    assert.doesNotMatch(markdown, /#e8f0ff|data-cell-background|<td/);
+    assert.match(markdown, /\|\s*A\s*\|\s*B\s*\|/);
+    assert.match(html, /data-cell-background="#e8f0ff"/);
+  });
 });
 
 describe("markdownService conversion", () => {
@@ -91,7 +156,7 @@ describe("markdownService conversion", () => {
     assert.match(markdown, /\$a\+b\$/);
   });
 
-  it("keeps non-standard font family and size through inline HTML export", () => {
+  it("keeps non-standard font family and size out of clean Markdown while preserving HTML cache", () => {
     const document: EditorDocument = {
       type: "doc",
       content: [
@@ -111,7 +176,23 @@ describe("markdownService conversion", () => {
     const markdown = tiptapJsonToMarkdown(document);
     const html = tiptapJsonToHtml(document);
 
-    assert.match(markdown, /<span style="font-family: Georgia, serif; font-size: 20px">Акцент<\/span>/);
+    assert.equal(markdown, "Акцент");
     assert.match(html, /<span style="font-family: Georgia, serif; font-size: 20px">Акцент<\/span>/);
+  });
+
+  it("round-trips image and file attachment blocks through clean Markdown", () => {
+    const document: EditorDocument = {
+      type: "doc",
+      content: [
+        { type: "image", attrs: { alt: "Схема", height: 180, src: "noteflow-image://scheme", width: 320 } },
+        { type: "fileAttachment", attrs: { name: "brief.pdf", size: "12 KB", storageId: "file-1", type: "application/pdf" } },
+      ],
+    };
+
+    const markdown = tiptapJsonToMarkdown(document);
+    const roundTripDocument = markdownToTiptapDoc(markdown);
+
+    assert.equal(markdown, "![Схема](noteflow-image://scheme)\n\n[file:brief.pdf](noteflow-file://file-1)");
+    assert.deepEqual(roundTripDocument.content?.map((node) => node.type), ["image", "fileAttachment"]);
   });
 });

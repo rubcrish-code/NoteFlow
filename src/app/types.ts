@@ -47,6 +47,12 @@ export interface EditorContentSidecar {
 
 export type NoteContentSidecar = EditorContentSidecar;
 
+export interface EditorContentSidecarInput {
+  kind: string;
+  schemaVersion: number;
+  payloadJson: unknown;
+}
+
 export interface Note {
   attachments: NoteAttachment[];
   contentHtml: string;
@@ -54,6 +60,8 @@ export interface Note {
   contentSidecars: NoteContentSidecar[];
   id: string;
   editorDocument: EditorDocument;
+  editorLoadFallbackReason?: string;
+  editorLoadSource?: "contentJson" | "markdown";
   createdAt: string;
   updatedAt: string;
   title: string;

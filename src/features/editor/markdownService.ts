@@ -83,6 +83,63 @@ function isTableStart(lines: string[], index: number) {
   return Boolean(lines[index + 1] && hasTablePipe(lines[index]) && isTableSeparator(lines[index + 1]));
 }
 
+function getMarkdownImage(line: string): EditorNode | null {
+  const match = /^!\[([^\]\n]*)\]\((\S+?)(?:\s+"([^"\n]+)")?\)\s*$/.exec(line.trim());
+  if (!match) {
+    return null;
+  }
+  return {
+    type: "image",
+    attrs: {
+      alignment: "left",
+      alt: match[1],
+      src: match[2],
+      title: match[3] ?? null,
+    },
+  };
+}
+
+function getHtmlImage(line: string): EditorNode | null {
+  const trimmedLine = line.trim();
+  if (!/^<img\s+[^>]*>\s*$/i.test(trimmedLine)) {
+    return null;
+  }
+  const src = readHtmlAttribute(trimmedLine, "src");
+  if (!src) {
+    return null;
+  }
+  const width = parseImageDimension(readHtmlAttribute(trimmedLine, "data-image-width") ?? readHtmlAttribute(trimmedLine, "width"));
+  const height = parseImageDimension(readHtmlAttribute(trimmedLine, "data-image-height") ?? readHtmlAttribute(trimmedLine, "height"));
+  const alignment = readHtmlAttribute(trimmedLine, "data-image-align");
+  return {
+    type: "image",
+    attrs: {
+      alignment: alignment === "center" || alignment === "right" ? alignment : "left",
+      alt: readHtmlAttribute(trimmedLine, "alt") ?? "",
+      height,
+      src,
+      title: readHtmlAttribute(trimmedLine, "title") ?? null,
+      width,
+    },
+  };
+}
+
+function getFileAttachment(line: string): EditorNode | null {
+  const match = /^\[file:([^\]\n]+)\]\(noteflow-file:\/\/([^)]+)\)\s*$/.exec(line.trim());
+  if (!match) {
+    return null;
+  }
+  return {
+    type: "fileAttachment",
+    attrs: {
+      name: match[1],
+      size: "",
+      storageId: match[2],
+      type: "application/octet-stream",
+    },
+  };
+}
+
 function splitTableRow(line: string) {
   return line
     .trim()
@@ -95,6 +152,7 @@ function splitTableRow(line: string) {
 function tableCell(type: "tableCell" | "tableHeader", value: string): EditorNode {
   return {
     type,
+    attrs: {},
     content: [paragraph(value)],
   };
 }
@@ -105,7 +163,10 @@ function isSpecialBlockStart(lines: string[], index: number) {
     isBlank(line) ||
     line.startsWith("```") ||
     line.trim() === "$$" ||
+    getFileAttachment(line) !== null ||
     getHeading(line) !== null ||
+    getHtmlImage(line) !== null ||
+    getMarkdownImage(line) !== null ||
     isCalloutStart(line) ||
     isDetailsStart(line) ||
     isHorizontalRule(line) ||
@@ -148,6 +209,20 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
     const line = lines[index];
 
     if (isBlank(line)) {
+      index += 1;
+      continue;
+    }
+
+    const imageNode = getMarkdownImage(line) ?? getHtmlImage(line);
+    if (imageNode) {
+      content.push(imageNode);
+      index += 1;
+      continue;
+    }
+
+    const fileAttachmentNode = getFileAttachment(line);
+    if (fileAttachmentNode) {
+      content.push(fileAttachmentNode);
       index += 1;
       continue;
     }
@@ -385,21 +460,19 @@ function inlineToMarkdown(nodes: EditorNode[] | undefined) {
           return `==${value}==`;
         }
         if (mark.type === "underline") {
-          return `<u>${value}</u>`;
+          return value;
         }
         if (mark.type === "superscript") {
-          return `<sup>${value}</sup>`;
+          return value;
         }
         if (mark.type === "subscript") {
-          return `<sub>${value}</sub>`;
+          return value;
         }
         if (mark.type === "textStyle") {
-          const color = typeof mark.attrs?.color === "string" ? mark.attrs.color : "";
-          return color ? `<span style="color: ${color}">${value}</span>` : value;
+          return value;
         }
         if (mark.type === "fontFormat") {
-          const style = getFontFormatStyle(mark.attrs);
-          return style ? `<span style="${style}">${value}</span>` : value;
+          return value;
         }
         if (mark.type === "link") {
           return `[${value}](${String(mark.attrs?.href ?? "")})`;
@@ -498,15 +571,6 @@ export function tiptapJsonToMarkdown(document: EditorDocument): string {
       if (node.type === "image") {
         const alt = String(node.attrs?.alt ?? "");
         const src = String(node.attrs?.src ?? "");
-        const title = String(node.attrs?.title ?? "");
-        const height = typeof node.attrs?.height === "number" ? node.attrs.height : null;
-        const width = typeof node.attrs?.width === "number" ? node.attrs.width : null;
-        if (width || height || title) {
-          const titleAttribute = title ? ` title="${escapeHtmlAttribute(title)}"` : "";
-          const heightAttribute = height ? ` height="${height}"` : "";
-          const widthAttribute = width ? ` width="${width}"` : "";
-          return `<img src="${escapeHtmlAttribute(src)}" alt="${escapeHtmlAttribute(alt)}"${titleAttribute}${widthAttribute}${heightAttribute}>`;
-        }
         return `![${alt}](${src})`;
       }
       if (node.type === "noteMention") {
@@ -548,6 +612,25 @@ function escapeHtmlAttribute(value: string) {
   return escapeHtml(value).replace(/"/g, "&quot;");
 }
 
+function decodeHtmlAttribute(value: string) {
+  return value.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+}
+
+function readHtmlAttribute(source: string, name: string) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(source);
+  const value = match?.[1] ?? match?.[2] ?? match?.[3];
+  return value ? decodeHtmlAttribute(value) : null;
+}
+
+function parseImageDimension(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  const dimension = Number.parseInt(value, 10);
+  return Number.isFinite(dimension) && dimension > 0 ? dimension : null;
+}
+
 function normalizeFontSize(fontSize: string) {
   const trimmedSize = fontSize.trim();
   return /^\d+$/.test(trimmedSize) ? `${trimmedSize}px` : trimmedSize;
@@ -567,6 +650,11 @@ function getFontFormatStyle(attrs: Record<string, unknown> | undefined) {
 function formatDate(value: string) {
   const [year, month, day] = value.split("-");
   return year && month && day ? `${day}.${month}.${year}` : value;
+}
+
+function tableCellStyleAttributes(node: EditorNode) {
+  const backgroundColor = typeof node.attrs?.backgroundColor === "string" && /^#[0-9a-fA-F]{6}$/.test(node.attrs.backgroundColor) ? node.attrs.backgroundColor : "";
+  return backgroundColor ? ` data-cell-background="${backgroundColor}" style="background-color: ${backgroundColor}"` : "";
 }
 
 function inlineToHtml(nodes: EditorNode[] | undefined) {
@@ -651,7 +739,8 @@ function nodeToHtml(node: EditorNode): string {
   }
   if (node.type === "taskItem") {
     const checked = node.attrs?.checked ? " checked" : "";
-    return `<li data-type="taskItem"><label><input type="checkbox"${checked}> ${node.content?.map(nodeToHtml).join("") ?? ""}</label></li>`;
+    const checkedAttribute = node.attrs?.checked ? " data-checked=\"true\"" : " data-checked=\"false\"";
+    return `<li data-type="taskItem"${checkedAttribute}><label><input type="checkbox"${checked}><span></span></label><div>${node.content?.map(nodeToHtml).join("") ?? ""}</div></li>`;
   }
   if (node.type === "table") {
     return `<table><tbody>${(node.content ?? []).map(nodeToHtml).join("")}</tbody></table>`;
@@ -660,16 +749,18 @@ function nodeToHtml(node: EditorNode): string {
     return `<tr>${(node.content ?? []).map(nodeToHtml).join("")}</tr>`;
   }
   if (node.type === "tableHeader") {
-    return `<th>${(node.content ?? []).map(nodeToHtml).join("")}</th>`;
+    return `<th${tableCellStyleAttributes(node)}>${(node.content ?? []).map(nodeToHtml).join("")}</th>`;
   }
   if (node.type === "tableCell") {
-    return `<td>${(node.content ?? []).map(nodeToHtml).join("")}</td>`;
+    return `<td${tableCellStyleAttributes(node)}>${(node.content ?? []).map(nodeToHtml).join("")}</td>`;
   }
   if (node.type === "image") {
     const height = typeof node.attrs?.height === "number" ? node.attrs.height : null;
     const width = typeof node.attrs?.width === "number" ? node.attrs.width : null;
     const title = String(node.attrs?.title ?? "");
+    const alignment = node.attrs?.alignment === "center" || node.attrs?.alignment === "right" ? String(node.attrs.alignment) : "";
     const titleAttribute = title ? ` title="${escapeHtmlAttribute(title)}"` : "";
+    const alignmentAttribute = alignment ? ` data-image-align="${alignment}"` : "";
     const dataWidthAttribute = width ? ` data-image-width="${width}"` : "";
     const dataHeightAttribute = height ? ` data-image-height="${height}"` : "";
     const style = [
@@ -680,7 +771,7 @@ function nodeToHtml(node: EditorNode): string {
     ]
       .filter(Boolean)
       .join("; ");
-    return `<img src="${escapeHtmlAttribute(String(node.attrs?.src ?? ""))}" alt="${escapeHtmlAttribute(String(node.attrs?.alt ?? ""))}"${titleAttribute}${dataWidthAttribute}${dataHeightAttribute} style="${style}">`;
+    return `<img src="${escapeHtmlAttribute(String(node.attrs?.src ?? ""))}" alt="${escapeHtmlAttribute(String(node.attrs?.alt ?? ""))}"${titleAttribute}${alignmentAttribute}${dataWidthAttribute}${dataHeightAttribute} style="${style}">`;
   }
   if (node.type === "callout") {
     const variant = escapeHtml(String(node.attrs?.variant ?? "info"));

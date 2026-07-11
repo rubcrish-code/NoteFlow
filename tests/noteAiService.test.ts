@@ -133,6 +133,10 @@ describe("current note AI contract", () => {
 
     assert.match(formattingToolbarSource, /onAiAction\(item\.id\)/);
     assert.match(formattingToolbarSource, /pendingAiActionId/);
+    assert.match(formattingToolbarSource, /aiActionWasPendingRef/);
+    assert.match(formattingToolbarSource, /ai-menu-progress/);
+    assert.match(formattingToolbarSource, /ИИ обрабатывает запрос/);
+    assert.doesNotMatch(formattingToolbarSource, /setIsAiMenuOpen\(false\);\s*onAiAction\(item\.id\)/);
     assert.doesNotMatch(formattingToolbarSource, /Найти связанные заметки/);
     assert.doesNotMatch(formattingToolbarSource, /RAG-чат|ragChat|rag_action|search_all_notes/i);
   });
@@ -145,8 +149,8 @@ describe("current note AI contract", () => {
     assert.match(editorAreaSource, /AiPreviewPanel/);
     assert.match(editorAreaSource, /replace-selection/);
     assert.match(editorAreaSource, /insert-below/);
-    assert.match(editorAreaSource, /insert-cursor/);
     assert.match(editorAreaSource, /replace-note/);
+    assert.doesNotMatch(editorAreaSource, /insert-cursor|Вставить в курсор/);
     assert.match(editorAreaSource, /navigator\.clipboard\.writeText/);
     assert.match(editorAreaSource, /preview\.isStale/);
     assert.match(editorAreaSource, /runNoteAi/);

@@ -4,28 +4,29 @@ import Highlight from "@tiptap/extension-highlight";
 import Link from "@tiptap/extension-link";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
-import { Table } from "@tiptap/extension-table";
-import TableCell from "@tiptap/extension-table-cell";
-import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
-import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import type { EditorDocument, Note, NoteAttachment, SaveStatus } from "../../app/types";
+import type { EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, SaveStatus } from "../../app/types";
 import { acceptNoteAiPrivacy, createNoteAiContext, getNoteAiStatus, runNoteAi, type NoteAiActionId, type NoteAiScope, type NoteAiStatus } from "../../services/noteAiService";
 import { Icon } from "../../shared/Icon";
 import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNodeView";
 import { ImageEditorModal } from "../imageEditor/ImageEditorModal";
 import { createEditedImageFileName, dataUrlToFile, type ImageEditMode, type ImageEditMetadata } from "../imageEditor/imageEditService";
 import { BlockInsertMenu } from "./BlockInsertMenu";
+import { InteractiveFileAttachment } from "./FileAttachmentNodeView";
 import { FormattingToolbar } from "./FormattingToolbar";
 import { NoteMenuPopover } from "./NoteMenuPopover";
-import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FileAttachment, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
-import { isMarkdownLike, markdownToTiptapDoc, tiptapJsonToMarkdown } from "./markdownService";
+import { TableToolsPopover } from "./TableToolsPopover";
+import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
+import { serializeEditorDocumentForStorage } from "./editorContentSerializer";
+import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
+import { NoteFlowTable, NoteFlowTableCell, NoteFlowTableHeader, NoteFlowTableView, TableToolsAnchor } from "./tableExtensions";
+import { NoteFlowTaskItem } from "./taskExtensions";
 import { useEditorPageLayout } from "./useEditorPageLayout";
 import type { EditorPageLayoutSettings } from "../../shared/editorPageLayout";
 
@@ -35,7 +36,15 @@ interface EditorAreaProps {
   isFocusMode: boolean;
   note: Note;
   notes: Note[];
-  onEditorChange: (noteId: string, editorDocument: EditorDocument, contentHtml: string, contentMarkdown: string, plainText: string, wordCount: number) => void;
+  onEditorChange: (
+    noteId: string,
+    editorDocument: EditorDocument,
+    contentHtml: string,
+    contentMarkdown: string,
+    plainText: string,
+    wordCount: number,
+    contentSidecars: EditorContentSidecarInput[],
+  ) => void;
   onArchiveNote: (noteId: string) => void;
   onDeleteNote: (noteId: string) => void;
   onDuplicateNote: (noteId: string) => void;
@@ -45,9 +54,11 @@ interface EditorAreaProps {
   onExportMarkdown: (noteId: string) => void;
   onMoveNote: (noteId: string, project: string) => void;
   onOpenChat: () => void;
+  onOpenAttachment: (attachmentId: string) => Promise<void>;
   onOpenNote: (noteId: string) => void;
   onOpenSettingsModels: () => void;
   onRenameNote: (noteId: string, title: string) => void;
+  onRevealAttachment: (attachmentId: string) => Promise<void>;
   onSelectionTextChange: (text: string) => void;
   onStoreAttachment: (
     file: File,
@@ -96,7 +107,12 @@ const aiActionLabels: Record<NoteAiActionId, string> = {
   translate: "Перевести",
 };
 
-function createEditorExtensions(options: { onEditImage: (target: EditableImageTarget) => void; onToast: (message: string) => void }) {
+function createEditorExtensions(options: {
+  onEditImage: (target: EditableImageTarget) => void;
+  onOpenAttachment: (attachmentId: string) => Promise<void>;
+  onRevealAttachment: (attachmentId: string) => Promise<void>;
+  onToast: (message: string) => void;
+}) {
   return [
     StarterKit.configure({
       heading: {
@@ -111,11 +127,12 @@ function createEditorExtensions(options: { onEditImage: (target: EditableImageTa
     Superscript,
     Subscript,
     TaskList,
-    TaskItem.configure({ nested: true }),
-    Table.configure({ resizable: true }),
+    NoteFlowTaskItem.configure({ nested: true }),
+    NoteFlowTable.configure({ resizable: true, View: NoteFlowTableView }),
     TableRow,
-    TableHeader,
-    TableCell,
+    NoteFlowTableHeader,
+    NoteFlowTableCell,
+    TableToolsAnchor,
     TextAlign.configure({
       types: ["heading", "paragraph"],
     }),
@@ -133,7 +150,11 @@ function createEditorExtensions(options: { onEditImage: (target: EditableImageTa
     DetailsBlock,
     DetailsSummary,
     DetailsContent,
-    FileAttachment,
+    InteractiveFileAttachment.configure({
+      onOpenAttachment: options.onOpenAttachment,
+      onRevealAttachment: options.onRevealAttachment,
+      onToast: options.onToast,
+    }),
     NoteMention,
     InlineDate,
     FormulaInline,
@@ -157,9 +178,11 @@ export function EditorArea({
   onExportMarkdown,
   onMoveNote,
   onOpenChat,
+  onOpenAttachment,
   onOpenNote,
   onOpenSettingsModels,
   onRenameNote,
+  onRevealAttachment,
   onSelectionTextChange,
   onStoreAttachment,
   onTogglePin,
@@ -183,7 +206,16 @@ export function EditorArea({
   const loadedNoteIdRef = useRef<string | null>(null);
   const noteIdRef = useRef(note.id);
   const onOpenNoteRef = useRef(onOpenNote);
-  const editorExtensions = useMemo(() => createEditorExtensions({ onEditImage: setImageEditTarget, onToast }), [onToast]);
+  const editorExtensions = useMemo(
+    () =>
+      createEditorExtensions({
+        onEditImage: setImageEditTarget,
+        onOpenAttachment,
+        onRevealAttachment,
+        onToast,
+      }),
+    [onOpenAttachment, onRevealAttachment, onToast],
+  );
   const editorPageLayout = useEditorPageLayout({
     editorContentOffset,
     editorContentWidth,
@@ -217,16 +249,23 @@ export function EditorArea({
         }
 
         event.preventDefault();
-        currentEditor.commands.insertContent(markdownToTiptapDoc(text).content ?? []);
+        currentEditor.chain().focus().insertContentAt(currentEditor.state.selection, markdownToTiptapDoc(text).content ?? []).run();
         return true;
       },
     },
     extensions: editorExtensions,
     onUpdate: ({ editor: currentEditor }) => {
       const editorDocument = currentEditor.getJSON() as EditorDocument;
-      const contentMarkdown = tiptapJsonToMarkdown(editorDocument);
-      const plainText = currentEditor.getText();
-      onEditorChange(noteIdRef.current, editorDocument, currentEditor.getHTML(), contentMarkdown, plainText, countWords(plainText));
+      const serializedContent = serializeEditorDocumentForStorage(editorDocument, currentEditor.getHTML());
+      onEditorChange(
+        noteIdRef.current,
+        serializedContent.editorDocument,
+        serializedContent.contentHtml,
+        serializedContent.contentMarkdown,
+        serializedContent.plainText,
+        serializedContent.wordCount,
+        serializedContent.contentSidecars,
+      );
     },
   });
 
@@ -391,7 +430,7 @@ export function EditorArea({
     }
   }
 
-  function applyAiPreview(mode: "copy" | "insert-below" | "insert-cursor" | "replace-note" | "replace-selection") {
+  function applyAiPreview(mode: "copy" | "insert-below" | "replace-note" | "replace-selection") {
     const currentEditor = editor;
     const preview = aiPreview;
     if (!currentEditor || !preview) {
@@ -430,8 +469,6 @@ export function EditorArea({
       return;
     }
 
-    currentEditor.chain().focus().insertContent(content).run();
-    setAiPreview(null);
   }
 
   const isEmptyNote = note.contentMarkdown.trim().length === 0;
@@ -547,6 +584,7 @@ export function EditorArea({
               </button>
             </div>
             <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
+              <TableToolsPopover editor={editor} onToast={onToast} />
               <EditorContent editor={editor} />
               {isEmptyNote ? <NewNoteHelper /> : null}
             </div>
@@ -583,7 +621,6 @@ export function EditorArea({
           onCancel={() => setAiPreview(null)}
           onCopy={() => applyAiPreview("copy")}
           onInsertBelow={() => applyAiPreview("insert-below")}
-          onInsertCursor={() => applyAiPreview("insert-cursor")}
           onReplaceNote={() => applyAiPreview("replace-note")}
           onReplaceSelection={() => applyAiPreview("replace-selection")}
         />
@@ -608,11 +645,6 @@ export function EditorArea({
       </div>
     </section>
   );
-}
-
-function countWords(text: string) {
-  const normalizedText = text.replace(/\s+/g, " ").trim();
-  return normalizedText.length > 0 ? normalizedText.split(" ").length : 0;
 }
 
 function createAiSelectionSnapshot(editor: Editor | null, noteId: string): AiSelectionSnapshot {
@@ -713,7 +745,6 @@ function AiPreviewPanel({
   onCancel,
   onCopy,
   onInsertBelow,
-  onInsertCursor,
   onReplaceNote,
   onReplaceSelection,
   preview,
@@ -721,7 +752,6 @@ function AiPreviewPanel({
   onCancel: () => void;
   onCopy: () => void;
   onInsertBelow: () => void;
-  onInsertCursor: () => void;
   onReplaceNote: () => void;
   onReplaceSelection: () => void;
   preview: AiPreviewState;
@@ -742,9 +772,6 @@ function AiPreviewPanel({
         </button>
         <button className="secondary-btn" onClick={onInsertBelow} type="button">
           Вставить ниже
-        </button>
-        <button className="secondary-btn" onClick={onInsertCursor} type="button">
-          Вставить в курсор
         </button>
         {preview.scope === "note" ? (
           <button className="danger-btn" onClick={onReplaceNote} type="button">

@@ -243,14 +243,14 @@ export function BlockInsertMenu({ editor, notes, onClose, onStoreAttachment, onT
           <Icon name="image" />
           <span>
             <b>Изображение</b>
-            <small>Локальный файл без абсолютного пути</small>
+            <small>Сохраняется локально во вложениях заметки</small>
           </span>
         </button>
         <button className="block-menu-item" onClick={() => fileInputRef.current?.click()} type="button">
           <Icon name="attach" />
           <span>
             <b>Файл</b>
-            <small>Мок-вложение для будущего managed storage</small>
+            <small>Открывается из локального хранилища NoteFlow</small>
           </span>
         </button>
       </div>
@@ -276,14 +276,19 @@ export function BlockInsertMenu({ editor, notes, onClose, onStoreAttachment, onT
 
       <div className="block-menu-inline">
         <label>
-          Формула LaTeX
-          <input onChange={(event) => setFormulaDraft(event.currentTarget.value)} value={formulaDraft} />
+          Формула
+          <input
+            aria-label="Выражение формулы"
+            onChange={(event) => setFormulaDraft(event.currentTarget.value)}
+            placeholder="Например: a^2 + b^2 = c^2"
+            value={formulaDraft}
+          />
         </label>
         <button className="secondary-btn" onClick={() => insertFormula(false)} type="button">
-          Inline
+          В строке
         </button>
         <button className="secondary-btn" onClick={() => insertFormula(true)} type="button">
-          Блок
+          Отдельным блоком
         </button>
       </div>
 

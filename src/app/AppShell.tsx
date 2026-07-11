@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppSection, ArchiveItem, EditorDocument, Note, ProjectCard, SaveStatus, TagColor, TagRow } from "./types";
+import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, ProjectCard, SaveStatus, TagColor, TagRow } from "./types";
 import * as dataService from "../services/dataService";
 import { ArchivePage } from "../features/archive/ArchivePage";
 import { EditorArea } from "../features/editor/EditorArea";
@@ -14,7 +14,7 @@ import { SettingsPage } from "../features/settings/SettingsPage";
 import { TagsPage } from "../features/tags/TagsPage";
 import { createNotePreview } from "../features/notes/notePreview";
 import { ResizeHandle } from "../shared/ResizeHandle";
-import { Toast } from "../shared/Toast";
+import { Toast, type ToastAction } from "../shared/Toast";
 import { TooltipPortal } from "../shared/TooltipPortal";
 import { useAppZoom } from "../shared/useAppZoom";
 import { clearLegacyUiSettings, migrateLegacyUiSettings } from "../services/legacyUiSettingsMigration";
@@ -35,6 +35,7 @@ type AppZoomStyle = CSSProperties & {
 interface PendingNoteSave {
   contentHtml: string;
   contentMarkdown: string;
+  contentSidecars: EditorContentSidecarInput[];
   editorDocument: EditorDocument;
   noteId: string;
   plainText: string;
@@ -89,6 +90,7 @@ export function AppShell() {
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isNewNoteModalOpen, setIsNewNoteModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
+  const [toastAction, setToastAction] = useState<ToastAction | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [uiSettings, setUiSettings] = useState<UiSettings>(DEFAULT_UI_SETTINGS);
   const saveTimeoutRef = useRef<number | null>(null);
@@ -238,9 +240,15 @@ export function AppShell() {
       return;
     }
 
-    const timeoutId = window.setTimeout(() => setToastMessage(null), 1900);
+    const timeoutId = window.setTimeout(
+      () => {
+        setToastMessage(null);
+        setToastAction(null);
+      },
+      toastAction ? 6500 : 1900,
+    );
     return () => window.clearTimeout(timeoutId);
-  }, [toastMessage]);
+  }, [toastAction, toastMessage]);
 
   useEffect(() => {
     return () => {
@@ -335,8 +343,9 @@ export function AppShell() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isChatOpen, isFocusMode, isNewNoteModalOpen]);
 
-  function showToast(message: string) {
+  function showToast(message: string, action?: ToastAction | null) {
     setToastMessage(message);
+    setToastAction(action ?? null);
   }
 
   function updateUiSettings(patch: Partial<UiSettings> | ((currentSettings: UiSettings) => Partial<UiSettings>)) {
@@ -444,6 +453,7 @@ export function AppShell() {
       .updateNoteContent({
         contentHtml: pendingSave.contentHtml,
         contentMarkdown: pendingSave.contentMarkdown,
+        contentSidecars: pendingSave.contentSidecars,
         editorDocument: pendingSave.editorDocument,
         id: pendingSave.noteId,
         plainText: pendingSave.plainText,
@@ -510,14 +520,32 @@ export function AppShell() {
     });
   }
 
-  function updateNoteEditor(noteId: string, editorDocument: EditorDocument, contentHtml: string, contentMarkdown: string, plainText: string, wordCount: number) {
+  function updateNoteEditor(
+    noteId: string,
+    editorDocument: EditorDocument,
+    contentHtml: string,
+    contentMarkdown: string,
+    plainText: string,
+    wordCount: number,
+    contentSidecars: EditorContentSidecarInput[],
+  ) {
+    const currentNote = notes.find((note) => note.id === noteId);
+    const shouldPreserveFallbackContent = Boolean(
+      currentNote?.editorLoadFallbackReason && !contentMarkdown.trim() && !plainText.trim() && currentNote.contentMarkdown.trim(),
+    );
+    const safeContentHtml = shouldPreserveFallbackContent && currentNote ? currentNote.contentHtml : contentHtml;
+    const safeContentMarkdown = shouldPreserveFallbackContent && currentNote ? currentNote.contentMarkdown : contentMarkdown;
+    const safeEditorDocument = shouldPreserveFallbackContent && currentNote ? currentNote.editorDocument : editorDocument;
+    const safePlainText = shouldPreserveFallbackContent && currentNote ? currentNote.plainText : plainText;
+    const safeWordCount = shouldPreserveFallbackContent && currentNote ? currentNote.wordCount : wordCount;
     pendingSaveRef.current = {
-      contentHtml,
-      contentMarkdown,
-      editorDocument,
+      contentHtml: safeContentHtml,
+      contentMarkdown: safeContentMarkdown,
+      contentSidecars,
+      editorDocument: safeEditorDocument,
       noteId,
-      plainText,
-      wordCount,
+      plainText: safePlainText,
+      wordCount: safeWordCount,
     };
 
     setNotes((currentNotes) =>
@@ -525,14 +553,17 @@ export function AppShell() {
         note.id === noteId
           ? {
               ...note,
-              contentHtml,
-              contentMarkdown,
-              editorDocument,
+              contentHtml: safeContentHtml,
+              contentMarkdown: safeContentMarkdown,
+              contentSidecars: mergeRuntimeSidecars(note.contentSidecars, contentSidecars),
+              editorDocument: safeEditorDocument,
+              editorLoadFallbackReason: undefined,
+              editorLoadSource: "markdown",
               isNew: false,
-              plainText,
-              summary: createNotePreview(plainText),
+              plainText: safePlainText,
+              summary: createNotePreview(safePlainText),
               updatedAt: new Date().toISOString(),
-              wordCount,
+              wordCount: safeWordCount,
             }
           : note,
       ),
@@ -545,6 +576,25 @@ export function AppShell() {
     saveTimeoutRef.current = window.setTimeout(() => {
       void flushPendingSave();
     }, 850);
+  }
+
+  function mergeRuntimeSidecars(currentSidecars: Note["contentSidecars"], nextSidecars: EditorContentSidecarInput[]): Note["contentSidecars"] {
+    const now = new Date().toISOString();
+    const nextSidecarMap = new Map(nextSidecars.map((sidecar) => [sidecar.kind, sidecar]));
+    const preservedSidecars = currentSidecars.filter((sidecar) => !nextSidecarMap.has(sidecar.kind));
+    return [
+      ...preservedSidecars,
+      ...nextSidecars.map((sidecar) => {
+        const currentSidecar = currentSidecars.find((item) => item.kind === sidecar.kind);
+        return {
+          createdAt: currentSidecar?.createdAt ?? now,
+          kind: sidecar.kind,
+          payloadJson: sidecar.payloadJson,
+          schemaVersion: sidecar.schemaVersion,
+          updatedAt: now,
+        };
+      }),
+    ];
   }
 
   function navigate(section: AppSection) {
@@ -663,7 +713,17 @@ export function AppShell() {
   function exportNoteMarkdown(noteId: string) {
     void flushPendingSave()
       .then(() => dataService.exportNoteMarkdown(noteId))
-      .then((result) => showToast(`${result.message}: ${result.relativePath}`))
+      .then((result) =>
+        showToast(`Markdown экспортирован: ${result.path}`, {
+          label: "Показать в проводнике",
+          onClick: () => {
+            void dataService
+              .revealExportedItem(result.path)
+              .then(() => showToast(`Открыт экспорт: ${result.relativePath}`))
+              .catch((error) => showToast(`Не удалось открыть папку экспорта: ${String(error)}`));
+          },
+        }),
+      )
       .catch((error) => showToast(`Не удалось экспортировать Markdown: ${String(error)}`));
   }
 
@@ -833,6 +893,7 @@ export function AppShell() {
       isNewNoteModalOpen={isNewNoteModalOpen}
       onCloseNewNote={() => setIsNewNoteModalOpen(false)}
       onCreateNote={createNote}
+      toastAction={toastAction}
       toastMessage={toastMessage}
     />
   );
@@ -1014,6 +1075,7 @@ export function AppShell() {
             }
             onMoveNote={moveNote}
             onOpenChat={() => setIsChatOpen(true)}
+            onOpenAttachment={dataService.openAttachment}
             onOpenNote={(noteId) => void openNote(noteId)}
             onOpenSettingsModels={() => {
               setIsFocusMode(false);
@@ -1021,6 +1083,7 @@ export function AppShell() {
               activateSection("settings");
             }}
             onRenameNote={renameNote}
+            onRevealAttachment={dataService.revealAttachment}
             onSelectionTextChange={setEditorSelectionText}
             onStoreAttachment={storeAttachment}
             onTogglePin={toggleNotePin}
@@ -1082,16 +1145,17 @@ function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFram
 
 interface SharedOverlaysProps {
   isNewNoteModalOpen: boolean;
+  toastAction: ToastAction | null;
   toastMessage: string | null;
   onCloseNewNote: () => void;
   onCreateNote: (title: string, noteDate: string) => void;
 }
 
-function SharedOverlays({ isNewNoteModalOpen, toastMessage, onCloseNewNote, onCreateNote }: SharedOverlaysProps) {
+function SharedOverlays({ isNewNoteModalOpen, toastAction, toastMessage, onCloseNewNote, onCreateNote }: SharedOverlaysProps) {
   return (
     <>
       <NewNoteModal isOpen={isNewNoteModalOpen} onClose={onCloseNewNote} onCreate={onCreateNote} />
-      <Toast message={toastMessage} />
+      <Toast action={toastAction} message={toastMessage} />
       <TooltipPortal />
     </>
   );

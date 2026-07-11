@@ -136,6 +136,7 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
   const [popoverMode, setPopoverMode] = useState<EditorCommandPopoverMode | null>(null);
   const aiButtonRef = useRef<HTMLButtonElement>(null);
   const aiMenuRef = useRef<HTMLDivElement>(null);
+  const aiActionWasPendingRef = useRef(false);
   const fontMenuRef = useRef<HTMLSpanElement>(null);
   const mouseCommandRef = useRef(false);
   const aiMenuStyle = useFloatingPopoverPosition({
@@ -190,6 +191,18 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
       document.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [isAiMenuOpen, isFontMenuOpen]);
+
+  useEffect(() => {
+    if (pendingAiActionId !== undefined) {
+      aiActionWasPendingRef.current = true;
+      return;
+    }
+
+    if (aiActionWasPendingRef.current) {
+      aiActionWasPendingRef.current = false;
+      setIsAiMenuOpen(false);
+    }
+  }, [pendingAiActionId]);
 
   function runCommand(toolId: ToolId) {
     if (toolId === "ai") {
@@ -473,7 +486,7 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
               <div className="ai-menu-group" key={group.id}>
                 {group.items.map((item) => (
                   <button
-                    className="ai-action-item"
+                    className={`ai-action-item ${pendingAiActionId === item.id ? "pending" : ""}`}
                     disabled={pendingAiActionId !== undefined}
                     key={item.id}
                     onClick={() => {
@@ -485,7 +498,6 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
                       if (pendingAiActionId !== undefined) {
                         return;
                       }
-                      setIsAiMenuOpen(false);
                       onAiAction(item.id);
                     }}
                     role="menuitem"
@@ -498,16 +510,24 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
               </div>
             ))}
           </div>
-          <button
-            className="ai-settings-link"
-            onClick={() => {
-              setIsAiMenuOpen(false);
-              onOpenAiSettings();
-            }}
-            type="button"
-          >
-            Подключить модель
-          </button>
+          {pendingAiActionId !== undefined ? (
+            <div aria-live="polite" className="ai-menu-progress" role="status">
+              <span className="button-spinner" />
+              <span>ИИ обрабатывает запрос...</span>
+            </div>
+          ) : null}
+          {aiStatus ? (
+            <button
+              className={`ai-settings-link ${aiStatus.hasProvider ? "model-settings" : ""}`}
+              onClick={() => {
+                setIsAiMenuOpen(false);
+                onOpenAiSettings();
+              }}
+              type="button"
+            >
+              {aiStatus.hasProvider ? "Настройки моделей" : "Подключить модель"}
+            </button>
+          ) : null}
         </div>
       ) : null}
 

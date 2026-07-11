@@ -1,10 +1,12 @@
 import Image from "@tiptap/extension-image";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { useEffect, useRef, useState, type PointerEvent, type CSSProperties } from "react";
+import { Icon } from "../../shared/Icon";
 import type { ImageEditMode } from "./imageEditService";
 import { getResizeCursor, resizeHandles, resizeImageBox, type ResizeHandle, type Size } from "./imageGeometry";
 
 export interface EditableImageAttributes {
+  alignment?: "center" | "left" | "right" | null;
   alt?: string | null;
   attachmentId?: string | null;
   editedAttachmentId?: string | null;
@@ -30,7 +32,9 @@ interface EditableImageOptions {
 }
 
 function readImageAttrs(attrs: Record<string, unknown>): EditableImageAttributes {
+  const alignment = attrs.alignment === "center" || attrs.alignment === "right" ? attrs.alignment : "left";
   return {
+    alignment,
     alt: typeof attrs.alt === "string" ? attrs.alt : null,
     attachmentId: typeof attrs.attachmentId === "string" ? attrs.attachmentId : null,
     editedAttachmentId: typeof attrs.editedAttachmentId === "string" ? attrs.editedAttachmentId : null,
@@ -78,6 +82,16 @@ function getFigureStyle(width: number | null, height: number | null): CSSPropert
     ...(width ? { width: `${width}px` } : {}),
     ...(height ? { "--image-node-height": `${height}px` } : {}),
   } as CSSProperties;
+}
+
+function getImageAlignmentLabel(alignment: EditableImageAttributes["alignment"]) {
+  if (alignment === "center") {
+    return "По центру";
+  }
+  if (alignment === "right") {
+    return "Справа";
+  }
+  return "Слева";
 }
 
 function ImageNodeView(props: NodeViewProps) {
@@ -184,10 +198,30 @@ function ImageNodeView(props: NodeViewProps) {
     options.onToast?.("Изображение сброшено к оригиналу");
   }
 
+  function setAlignment(alignment: NonNullable<EditableImageAttributes["alignment"]>) {
+    updateImageAttrs({ alignment });
+  }
+
+  const alignment = attrs.alignment ?? "left";
+
   return (
-    <NodeViewWrapper className={`note-image-node ${props.selected ? "selected" : ""} ${draftSize ? "resizing" : ""}`} data-drag-handle>
+    <NodeViewWrapper className={`note-image-node align-${alignment} ${props.selected ? "selected" : ""} ${draftSize ? "resizing" : ""}`} data-drag-handle>
       {props.selected ? (
         <div className="image-action-panel" contentEditable={false}>
+          <div className="image-align-actions" aria-label="Выравнивание изображения" role="group">
+            {(["left", "center", "right"] as const).map((item) => (
+              <button
+                aria-pressed={alignment === item}
+                className={alignment === item ? "active" : ""}
+                data-tooltip={getImageAlignmentLabel(item)}
+                key={item}
+                onClick={() => setAlignment(item)}
+                type="button"
+              >
+                <Icon name={item === "left" ? "alignLeft" : item === "center" ? "alignCenter" : "alignRight"} />
+              </button>
+            ))}
+          </div>
           <button onClick={() => options.onToast?.("Потяните маркеры по краям изображения")} type="button">
             Изменить размер
           </button>
@@ -227,7 +261,6 @@ function ImageNodeView(props: NodeViewProps) {
             ))}
           </div>
         ) : null}
-        {attrs.title ? <figcaption>{attrs.title}</figcaption> : null}
       </figure>
     </NodeViewWrapper>
   );
@@ -245,6 +278,17 @@ export const EditableImage = Image.extend<EditableImageOptions>({
   addAttributes() {
     return {
       ...this.parent?.(),
+      alignment: {
+        default: "left",
+        parseHTML: (element) => {
+          const value = element.getAttribute("data-image-align");
+          return value === "center" || value === "right" ? value : "left";
+        },
+        renderHTML: (attributes) => {
+          const alignment = attributes.alignment === "center" || attributes.alignment === "right" ? attributes.alignment : "left";
+          return alignment === "left" ? {} : { "data-image-align": alignment };
+        },
+      },
       attachmentId: {
         default: null,
         parseHTML: (element) => element.getAttribute("data-attachment-id"),

@@ -108,31 +108,30 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
       <div className="tags-table">
         {filteredTags.map((tag) => (
           <div className="tag-row" key={tag.id}>
-            <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagHex(tag) }} />
-            <div>
-              <b>{tag.name}</b>
-              <small>{tag.count} заметок</small>
+            <div className="tag-row-main">
+              <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagHex(tag) }} />
+              <div>
+                <b>{tag.name}</b>
+                <small>{tag.count} заметок</small>
+              </div>
             </div>
-            <button
-              onClick={() => {
-                onOpenTag(tag.name);
-              }}
-              type="button"
-            >
-              Открыть
-            </button>
-            <button onClick={() => renameTag(tag)} type="button">
+            <div className="tag-row-actions">
+              <button className="tag-action primary" onClick={() => onOpenTag(tag.name)} type="button">
+                Открыть
+              </button>
+            <button className="tag-action secondary" onClick={() => renameTag(tag)} type="button">
               Переименовать
             </button>
-            <button onClick={(event) => openColorPopover(tag.id, event)} type="button">
+            <button className="tag-action secondary" onClick={(event) => openColorPopover(tag.id, event)} type="button">
               Цвет
             </button>
-            <button onClick={() => mergeTag(tag)} type="button">
+            <button className="tag-action secondary" onClick={() => mergeTag(tag)} type="button">
               Объединить
             </button>
-            <button className="danger" onClick={() => onDeleteTag(tag.id)} type="button">
+            <button className="tag-action danger" onClick={() => onDeleteTag(tag.id)} type="button">
               Удалить
             </button>
+            </div>
           </div>
         ))}
       </div>
