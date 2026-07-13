@@ -17,7 +17,7 @@ import { Icon } from "../../shared/Icon";
 import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNodeView";
 import { ImageEditorModal } from "../imageEditor/ImageEditorModal";
 import { createEditedImageFileName, dataUrlToFile, type ImageEditMode, type ImageEditMetadata } from "../imageEditor/imageEditService";
-import { BlockInsertMenu } from "./BlockInsertMenu";
+import { BlockInsertMenu, type EditorInsertSelection, type EditorInsertTarget } from "./BlockInsertMenu";
 import { InteractiveFileAttachment } from "./FileAttachmentNodeView";
 import { FormattingToolbar } from "./FormattingToolbar";
 import { NoteMenuPopover } from "./NoteMenuPopover";
@@ -192,6 +192,8 @@ export function EditorArea({
   saveStatus,
 }: EditorAreaProps) {
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
+  const [blockInsertSelection, setBlockInsertSelection] = useState<EditorInsertSelection | null>(null);
+  const [blockInsertTarget, setBlockInsertTarget] = useState<EditorInsertTarget | null>(null);
   const [isNoteMenuOpen, setIsNoteMenuOpen] = useState(false);
   const [imageEditTarget, setImageEditTarget] = useState<EditableImageTarget | null>(null);
   const [aiStatus, setAiStatus] = useState<NoteAiStatus | null>(null);
@@ -227,7 +229,31 @@ export function EditorArea({
     content: note.editorDocument,
     editorProps: {
       handleClickOn: (_view, _pos, node, _nodePos, event, direct) => {
-        if (!direct || node.type.name !== "noteMention") {
+        if (!direct) {
+          return false;
+        }
+
+        if (node.type.name === "inlineDate") {
+          event.preventDefault();
+          setBlockInsertSelection(null);
+          setBlockInsertTarget({ kind: "date", position: _nodePos, value: String(node.attrs.value ?? "") });
+          setIsBlockMenuOpen(true);
+          return true;
+        }
+
+        if (node.type.name === "formulaInline" || node.type.name === "formulaBlock") {
+          event.preventDefault();
+          setBlockInsertSelection(null);
+          setBlockInsertTarget({
+            kind: node.type.name === "formulaBlock" ? "formula-block" : "formula-inline",
+            latex: String(node.attrs.latex ?? ""),
+            position: _nodePos,
+          });
+          setIsBlockMenuOpen(true);
+          return true;
+        }
+
+        if (node.type.name !== "noteMention") {
           return false;
         }
 
@@ -637,10 +663,38 @@ export function EditorArea({
       ) : null}
 
       <div className="ed-bottom">
-        <button className="ibtn" data-tooltip="Вставить сложный блок" onClick={() => setIsBlockMenuOpen((value) => !value)} type="button">
+        <button
+          className="ibtn"
+          data-tooltip="Вставить сложный блок"
+          onClick={() => {
+            if (isBlockMenuOpen) {
+              setIsBlockMenuOpen(false);
+              setBlockInsertTarget(null);
+              return;
+            }
+            const selection = editor?.state.selection;
+            setBlockInsertSelection(selection ? { from: selection.from, to: selection.to } : null);
+            setBlockInsertTarget(null);
+            setIsBlockMenuOpen(true);
+          }}
+          type="button"
+        >
           <Icon name="plus" />
         </button>
-        {isBlockMenuOpen ? <BlockInsertMenu editor={editor} notes={notes} onClose={() => setIsBlockMenuOpen(false)} onStoreAttachment={onStoreAttachment} onToast={onToast} /> : null}
+        {isBlockMenuOpen ? (
+          <BlockInsertMenu
+            editTarget={blockInsertTarget}
+            editor={editor}
+            notes={notes}
+            onClose={() => {
+              setIsBlockMenuOpen(false);
+              setBlockInsertTarget(null);
+            }}
+            onStoreAttachment={onStoreAttachment}
+            onToast={onToast}
+            selection={blockInsertSelection}
+          />
+        ) : null}
         <span className="words">{note.wordCount} слов</span>
       </div>
     </section>

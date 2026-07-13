@@ -5,6 +5,8 @@ import { PageShell } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
 import * as llmProviderService from "../../services/llmProviderService";
 import type { LlmProvider, LlmProviderType } from "../../services/llmProviderService";
+import * as knowledgeService from "../../services/knowledgeService";
+import type { KnowledgeIndexOperation, KnowledgeIndexStatus, KnowledgeIndexStatusCode } from "../../services/knowledgeService";
 import {
   createLlmNetworkOperation,
   getVisibleLlmNetworkAction,
@@ -156,7 +158,13 @@ export function SettingsPage({
           ) : null}
           {activePanel === "language" ? <LanguageSettings language={language} onLanguageChange={onLanguageChange} onToast={onToast} /> : null}
           {activePanel === "data" ? (
-            <DataSettings onBackupCreate={onBackupCreate} onExportCurrentNote={onExportCurrentNote} onExportCurrentProject={onExportCurrentProject} onImportBackup={onImportBackup} />
+            <DataSettings
+              onBackupCreate={onBackupCreate}
+              onExportCurrentNote={onExportCurrentNote}
+              onExportCurrentProject={onExportCurrentProject}
+              onImportBackup={onImportBackup}
+              onToast={onToast}
+            />
           ) : null}
           {activePanel === "shortcuts" ? <ShortcutsSettings /> : null}
         </section>
@@ -1311,15 +1319,153 @@ interface DataSettingsProps {
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
   onImportBackup: (file: File) => void;
+  onToast: (message: string) => void;
 }
 
-function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProject, onImportBackup }: DataSettingsProps) {
+const knowledgeStatusLabels: Record<KnowledgeIndexStatusCode, string> = {
+  current: "Актуальна",
+  failed: "Требует внимания",
+  needs_update: "Требует обновления",
+  pending: "Обновляется",
+};
+
+export function getKnowledgeStatusLabel(status: KnowledgeIndexStatusCode) {
+  return knowledgeStatusLabels[status];
+}
+
+export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()) {
+  if (!value) {
+    return "Ещё не проверялась";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return "Время проверки недоступно";
+  }
+  const isToday = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  const time = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(date);
+  return isToday
+    ? `сегодня, ${time}`
+    : new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProject, onImportBackup, onToast }: DataSettingsProps) {
   const importInputRef = useRef<HTMLInputElement>(null);
+  const knowledgeMoreRef = useRef<HTMLDetailsElement>(null);
+  const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeIndexStatus | null>(null);
+  const [knowledgeOperation, setKnowledgeOperation] = useState<KnowledgeIndexOperation | null>(null);
+  const [knowledgeMessage, setKnowledgeMessage] = useState("Загружаем состояние базы знаний…");
+  const [knowledgeHasError, setKnowledgeHasError] = useState(false);
+  const [isRebuildConfirmationOpen, setIsRebuildConfirmationOpen] = useState(false);
+
+  useEffect(() => {
+    let isActive = true;
+    void knowledgeService.getKnowledgeIndexStatus().then(
+      (status) => {
+        if (isActive) {
+          setKnowledgeStatus(status);
+          setKnowledgeMessage("");
+          setKnowledgeHasError(false);
+        }
+      },
+      () => {
+        if (isActive) {
+          setKnowledgeMessage("Не удалось получить состояние базы знаний");
+          setKnowledgeHasError(true);
+        }
+      },
+    );
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  async function updateKnowledgeIndex(operation: KnowledgeIndexOperation) {
+    if (knowledgeOperation !== null) {
+      return;
+    }
+    setKnowledgeOperation(operation);
+    setKnowledgeHasError(false);
+    setKnowledgeMessage(operation === "rebuild" ? "Заново обрабатываем все заметки…" : "Проверяем новые и изменённые заметки…");
+    try {
+      const result = await knowledgeService.runKnowledgeIndexOperation(operation);
+      const status = await knowledgeService.getKnowledgeIndexStatus();
+      setKnowledgeStatus(status);
+      const message =
+        result.errors > 0
+          ? "Не удалось обновить базу знаний полностью. Попробуйте ещё раз"
+          : operation === "rebuild"
+            ? `База знаний успешно пересоздана · Обработано заметок: ${result.processedNotes} · Создано фрагментов: ${result.createdChunks} · ${(result.durationMs / 1000).toFixed(1)} с`
+            : result.processedNotes === 0
+              ? "Всё уже актуально · изменений не найдено"
+              : `База знаний обновлена · Обновлено заметок: ${result.processedNotes} · Создано фрагментов: ${result.createdChunks}`;
+      setKnowledgeMessage(message);
+      setKnowledgeHasError(result.errors > 0);
+      onToast(message);
+    } catch {
+      setKnowledgeMessage("Не удалось обновить базу знаний. Попробуйте ещё раз");
+      setKnowledgeHasError(true);
+    } finally {
+      setKnowledgeOperation(null);
+    }
+  }
+
+  const visibleKnowledgeStatus: KnowledgeIndexStatusCode = knowledgeOperation
+    ? "pending"
+    : knowledgeStatus?.status ?? "needs_update";
 
   return (
     <div>
       <div className="settings-title">Данные и экспорт</div>
       <div className="settings-subtitle">Выгрузите одну заметку, проект или всю базу.</div>
+      <div className="settings-card knowledge-index-card">
+        <div className="settings-section-head knowledge-index-head">
+          <div>
+            <b>База знаний</b>
+            <span>Смысловые фрагменты заметок для будущего поиска и ответов</span>
+          </div>
+          <span className={`status-pill ${visibleKnowledgeStatus === "current" ? "ok" : visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
+            {knowledgeOperation ? <span aria-hidden="true" className="button-spinner" /> : null}
+            {getKnowledgeStatusLabel(visibleKnowledgeStatus)}
+          </span>
+        </div>
+        <div className="knowledge-index-metrics">
+          <div><span>Заметки</span><b>{knowledgeStatus?.indexedNotes ?? 0} из {knowledgeStatus?.totalNotes ?? 0}</b></div>
+          <div><span>Фрагменты</span><b>{knowledgeStatus?.chunkCount ?? 0}</b></div>
+          <div><span>Последняя проверка</span><b>{formatKnowledgeCheckedAt(knowledgeStatus?.lastCheckedAt)}</b></div>
+        </div>
+        <div aria-live="polite" className={`knowledge-index-message ${knowledgeHasError || visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
+          {knowledgeMessage || "Новые и изменённые заметки добавляются автоматически"}
+        </div>
+        <div className="knowledge-index-actions">
+          <div className="knowledge-primary-action">
+            <button
+              className="export-action primary"
+              disabled={knowledgeOperation !== null}
+              onClick={() => void updateKnowledgeIndex("reconcile")}
+              type="button"
+            >
+              {knowledgeOperation === "reconcile" ? <span aria-hidden="true" className="button-spinner" /> : <Icon name="redo" />}
+              {knowledgeOperation === "reconcile" ? "Проверяем…" : knowledgeHasError ? "Повторить" : "Обновить базу знаний"}
+            </button>
+            <span>Добавляет новые и изменённые заметки. Обычно занимает несколько секунд.</span>
+          </div>
+          <details className="knowledge-index-more" ref={knowledgeMoreRef}>
+            <summary>Дополнительные действия</summary>
+            <div className="knowledge-repair-action">
+              <b>Исправление проблем</b>
+              <span>Удаляет служебные данные базы знаний и создаёт их заново. Ваши заметки не изменятся.</span>
+              <button
+                className="export-action secondary"
+                disabled={knowledgeOperation !== null}
+                onClick={() => setIsRebuildConfirmationOpen(true)}
+                type="button"
+              >
+                Пересоздать базу знаний
+              </button>
+            </div>
+          </details>
+        </div>
+      </div>
       <div className="settings-card export-card">
         <div className="export-action-group">
           <div className="export-action-head">
@@ -1365,6 +1511,30 @@ function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProj
           type="file"
         />
       </div>
+      {isRebuildConfirmationOpen ? (
+        <div className="confirm-backdrop" onMouseDown={(event) => event.currentTarget === event.target && setIsRebuildConfirmationOpen(false)} role="presentation">
+          <div aria-labelledby="knowledge-rebuild-title" aria-modal="true" className="confirm-dialog" role="dialog">
+            <h2 id="knowledge-rebuild-title">Пересоздать базу знаний?</h2>
+            <p>NoteFlow заново обработает все заметки. Сами заметки и их форматирование не изменятся. Операция может занять некоторое время.</p>
+            <div className="new-note-actions">
+              <button className="cancel" onClick={() => setIsRebuildConfirmationOpen(false)} type="button">Отмена</button>
+              <button
+                className="primary"
+                onClick={() => {
+                  setIsRebuildConfirmationOpen(false);
+                  if (knowledgeMoreRef.current) {
+                    knowledgeMoreRef.current.open = false;
+                  }
+                  void updateKnowledgeIndex("rebuild");
+                }}
+                type="button"
+              >
+                Пересоздать
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

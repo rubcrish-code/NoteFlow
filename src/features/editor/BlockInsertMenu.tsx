@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { Editor } from "@tiptap/react";
 import type { Note, NoteAttachment } from "../../app/types";
 import { Icon, type IconName } from "../../shared/Icon";
@@ -11,6 +11,7 @@ type SimpleBlockCommand =
   | "table";
 
 interface BlockInsertMenuProps {
+  editTarget: EditorInsertTarget | null;
   editor: Editor | null;
   notes: Note[];
   onClose: () => void;
@@ -20,7 +21,17 @@ interface BlockInsertMenuProps {
     options?: { editMetadata?: Record<string, unknown>; originalAttachmentId?: string },
   ) => Promise<{ attachment: NoteAttachment; sizeLabel: string }>;
   onToast: (message: string) => void;
+  selection: EditorInsertSelection | null;
 }
+
+export interface EditorInsertSelection {
+  from: number;
+  to: number;
+}
+
+export type EditorInsertTarget =
+  | { kind: "date"; position: number; value: string }
+  | { kind: "formula-block" | "formula-inline"; latex: string; position: number };
 
 interface BlockMenuItem {
   command: SimpleBlockCommand;
@@ -44,7 +55,11 @@ const calloutVariants: Array<{ label: string; value: CalloutVariant }> = [
 ];
 
 function getTodayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function formatFileSize(size: number) {
@@ -72,12 +87,22 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
-export function BlockInsertMenu({ editor, notes, onClose, onStoreAttachment, onToast }: BlockInsertMenuProps) {
-  const [dateDraft, setDateDraft] = useState(getTodayIsoDate());
-  const [formulaDraft, setFormulaDraft] = useState("a^2 + b^2 = c^2");
+export function BlockInsertMenu({ editTarget, editor, notes, onClose, onStoreAttachment, onToast, selection }: BlockInsertMenuProps) {
+  const [dateDraft, setDateDraft] = useState(editTarget?.kind === "date" ? editTarget.value : getTodayIsoDate());
+  const [formulaDraft, setFormulaDraft] = useState(editTarget && editTarget.kind !== "date" ? editTarget.latex : "a^2 + b^2 = c^2");
+  const [insertError, setInsertError] = useState("");
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (editTarget?.kind === "date") {
+      setDateDraft(editTarget.value);
+    } else if (editTarget) {
+      setFormulaDraft(editTarget.latex);
+    }
+    setInsertError("");
+  }, [editTarget]);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -176,26 +201,72 @@ export function BlockInsertMenu({ editor, notes, onClose, onStoreAttachment, onT
     }
   }
 
+  function restoreInsertionSelection() {
+    if (!editor || editTarget || !selection) {
+      return editor?.chain().focus();
+    }
+    const maxPosition = editor.state.doc.content.size;
+    return editor
+      .chain()
+      .focus()
+      .setTextSelection({
+        from: Math.min(selection.from, maxPosition),
+        to: Math.min(selection.to, maxPosition),
+      });
+  }
+
   function insertDate() {
-    if (!editor || !dateDraft) {
+    const value = dateDraft.trim();
+    if (!editor || !value) {
       return;
     }
-    editor.chain().focus().insertInlineDate({ value: dateDraft }).run();
-    onClose();
+    setInsertError("");
+    const didRun = editTarget?.kind === "date"
+      ? editor
+          .chain()
+          .focus()
+          .setNodeSelection(editTarget.position)
+          .updateAttributes("inlineDate", { value })
+          .setTextSelection(Math.min(editTarget.position + 1, editor.state.doc.content.size))
+          .run()
+      : restoreInsertionSelection()?.insertInlineDate({ value }).run() ?? false;
+    if (didRun) {
+      onClose();
+    } else {
+      setInsertError("Не удалось вставить дату. Поставьте курсор в текст и повторите.");
+    }
   }
 
   function insertFormula(block: boolean) {
-    if (!editor) {
+    const latex = formulaDraft.trim();
+    if (!editor || !latex) {
       return;
     }
-    const latex = formulaDraft.trim() || "a^2 + b^2 = c^2";
-    const chain = editor.chain().focus();
-    if (block) {
-      chain.insertFormulaBlock({ latex }).run();
+    setInsertError("");
+    let didRun: boolean;
+    if (editTarget?.kind === "formula-inline" || editTarget?.kind === "formula-block") {
+      const isBlockTarget = editTarget.kind === "formula-block";
+      const cursorPosition = Math.min(editTarget.position + (isBlockTarget ? 2 : 1), editor.state.doc.content.size);
+      didRun = editor
+        .chain()
+        .focus()
+        .setNodeSelection(editTarget.position)
+        .updateAttributes(isBlockTarget ? "formulaBlock" : "formulaInline", { latex })
+        .setTextSelection(cursorPosition)
+        .run();
     } else {
-      chain.insertFormulaInline({ latex }).run();
+      const chain = restoreInsertionSelection();
+      didRun = block ? chain?.insertFormulaBlock({ latex }).run() ?? false : chain?.insertFormulaInline({ latex }).run() ?? false;
     }
-    onClose();
+    if (didRun) {
+      onClose();
+    } else {
+      setInsertError("Не удалось вставить формулу. Поставьте курсор в текст и повторите.");
+    }
+  }
+
+  function preserveEditorSelection(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
   }
 
   function insertCalloutVariant(variant: CalloutVariant) {
@@ -264,33 +335,47 @@ export function BlockInsertMenu({ editor, notes, onClose, onStoreAttachment, onT
         ))}
       </div>
 
-      <div className="block-menu-inline">
-        <label>
-          Дата
-          <input onChange={(event) => setDateDraft(event.currentTarget.value)} type="date" value={dateDraft} />
-        </label>
-        <button className="secondary-btn" onClick={insertDate} type="button">
-          Вставить дату
-        </button>
-      </div>
+      {!editTarget || editTarget.kind === "date" ? (
+        <div className="block-menu-inline">
+          <label>
+            Дата
+            <input onChange={(event) => setDateDraft(event.currentTarget.value)} type="date" value={dateDraft} />
+          </label>
+          <button className="secondary-btn" disabled={!dateDraft.trim()} onClick={insertDate} onMouseDown={preserveEditorSelection} type="button">
+            {editTarget?.kind === "date" ? "Сохранить дату" : "Вставить дату"}
+          </button>
+        </div>
+      ) : null}
 
-      <div className="block-menu-inline">
-        <label>
-          Формула
-          <input
-            aria-label="Выражение формулы"
-            onChange={(event) => setFormulaDraft(event.currentTarget.value)}
-            placeholder="Например: a^2 + b^2 = c^2"
-            value={formulaDraft}
-          />
-        </label>
-        <button className="secondary-btn" onClick={() => insertFormula(false)} type="button">
-          В строке
-        </button>
-        <button className="secondary-btn" onClick={() => insertFormula(true)} type="button">
-          Отдельным блоком
-        </button>
-      </div>
+      {!editTarget || editTarget.kind !== "date" ? (
+        <div className="block-menu-inline">
+          <label>
+            Формула
+            <input
+              aria-label="Выражение формулы"
+              onChange={(event) => setFormulaDraft(event.currentTarget.value)}
+              placeholder="Например: a^2 + b^2 = c^2"
+              value={formulaDraft}
+            />
+          </label>
+          {editTarget ? (
+            <button className="secondary-btn" disabled={!formulaDraft.trim()} onClick={() => insertFormula(editTarget.kind === "formula-block")} onMouseDown={preserveEditorSelection} type="button">
+              Сохранить формулу
+            </button>
+          ) : (
+            <>
+              <button className="secondary-btn" disabled={!formulaDraft.trim()} onClick={() => insertFormula(false)} onMouseDown={preserveEditorSelection} type="button">
+                В строке
+              </button>
+              <button className="secondary-btn" disabled={!formulaDraft.trim()} onClick={() => insertFormula(true)} onMouseDown={preserveEditorSelection} type="button">
+                Отдельным блоком
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {insertError ? <div aria-live="polite" className="block-menu-error">{insertError}</div> : null}
 
       <div className="block-menu-mentions">
         <div className="block-menu-section-title">Упоминание заметки</div>

@@ -1,4 +1,5 @@
 mod data;
+mod knowledge;
 mod llm;
 mod search;
 
@@ -99,8 +100,16 @@ pub fn run() {
             data::list_notes,
             data::search_notes,
             data::rebuild_search_index,
+            data::rebuild_knowledge_chunks,
+            data::reconcile_knowledge_chunks,
+            data::sync_knowledge_chunks_for_note,
             data::get_knowledge_documents,
             data::get_knowledge_document_by_note_id,
+            data::get_knowledge_chunk_state,
+            data::get_knowledge_chunks_by_note_id,
+            data::get_knowledge_chunks_by_note_ids,
+            data::get_knowledge_index_status,
+            data::get_neighbor_knowledge_chunks,
             data::list_projects,
             data::list_tags,
             data::load_workspace,

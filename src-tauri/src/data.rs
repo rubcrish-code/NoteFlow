@@ -1,4 +1,4 @@
-use crate::{llm, search};
+use crate::{knowledge, llm, search};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -593,13 +593,16 @@ impl DataStore {
         let mut conn = Connection::open(database_path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        Self::run_migrations(&mut conn)?;
+        let knowledge_migration_applied = Self::run_migrations(&mut conn)?;
         let mut store = Self { base_dir, conn };
         store.seed_demo_data_if_needed()?;
+        if knowledge_migration_applied {
+            knowledge::reconcile(&mut store.conn)?;
+        }
         Ok(store)
     }
 
-    fn run_migrations(conn: &mut Connection) -> DataResult<()> {
+    fn run_migrations(conn: &mut Connection) -> DataResult<bool> {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
@@ -614,6 +617,7 @@ impl DataStore {
             rows.collect::<Result<HashSet<_>, _>>()?
         };
 
+        let mut knowledge_migration_applied = false;
         for migration in migrations() {
             if applied_versions.contains(&migration.version) {
                 continue;
@@ -626,9 +630,12 @@ impl DataStore {
                 params![migration.version, migration.name, now_iso()],
             )?;
             transaction.commit()?;
+            if migration.version == 9 {
+                knowledge_migration_applied = true;
+            }
         }
 
-        Ok(())
+        Ok(knowledge_migration_applied)
     }
 
     fn seed_demo_data_if_needed(&mut self) -> DataResult<()> {
@@ -1296,6 +1303,7 @@ impl DataStore {
             "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
             params![note_id, default_tag_id],
         )?;
+        knowledge::sync_note_best_effort(&mut self.conn, &note_id);
         self.get_note(&note_id)
     }
 
@@ -1344,6 +1352,7 @@ impl DataStore {
             &request.content_sidecars,
             &now,
         )?;
+        knowledge::sync_note_best_effort(&mut self.conn, &request.note_id);
         self.get_note(&request.note_id)
     }
 
@@ -1459,6 +1468,7 @@ impl DataStore {
             )?;
         }
         transaction.commit()?;
+        knowledge::sync_note_best_effort(&mut self.conn, &request.note_id);
         self.get_note(&request.note_id)
     }
 
@@ -1502,6 +1512,7 @@ impl DataStore {
         }
 
         self.copy_note_content_sidecars(note_id, &new_id, &source.content_json, &now)?;
+        knowledge::sync_note_best_effort(&mut self.conn, &new_id);
         self.get_note(&new_id)
     }
 
@@ -1549,6 +1560,7 @@ impl DataStore {
             "UPDATE notes SET archived_at = NULL, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
             params![now_iso(), note_id],
         )?;
+        knowledge::sync_note_best_effort(&mut self.conn, note_id);
         self.get_note(note_id)
     }
 
@@ -1559,6 +1571,7 @@ impl DataStore {
         )?;
         self.conn
             .execute("DELETE FROM notes_fts WHERE note_id = ?1", params![note_id])?;
+        knowledge::remove_note_index(&mut self.conn, note_id)?;
         Ok(())
     }
 
@@ -2240,6 +2253,7 @@ impl DataStore {
         }
 
         self.rebuild_search_index()?;
+        knowledge::reconcile(&mut self.conn)?;
         self.load_workspace()
     }
 
@@ -2743,6 +2757,16 @@ fn migrations() -> Vec<Migration> {
             version: 8,
             name: "search_foundation_fts5",
             sql: search::SEARCH_MIGRATION_SQL,
+        },
+        Migration {
+            version: 9,
+            name: "knowledge_chunks",
+            sql: knowledge::KNOWLEDGE_MIGRATION_SQL,
+        },
+        Migration {
+            version: 10,
+            name: "knowledge_index_metadata",
+            sql: knowledge::KNOWLEDGE_METADATA_MIGRATION_SQL,
         },
     ]
 }
@@ -3323,6 +3347,14 @@ fn command_error(error: DataError) -> String {
     error.to_string()
 }
 
+fn open_background_connection(database_path: &Path) -> DataResult<Connection> {
+    let conn = Connection::open(database_path)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(conn)
+}
+
 #[tauri::command]
 pub fn load_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapshotDto, String> {
     state
@@ -3687,6 +3719,97 @@ pub fn get_knowledge_document_by_note_id(
     state
         .with_store(|store| store.get_knowledge_document_by_note_id(&note_id))
         .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn sync_knowledge_chunks_for_note(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<i64, String> {
+    state
+        .with_store(|store| knowledge::sync_note(&mut store.conn, &note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_knowledge_index_status(
+    state: State<'_, AppState>,
+) -> Result<knowledge::KnowledgeIndexStatusDto, String> {
+    state
+        .with_store(|store| knowledge::index_status(&store.conn))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_knowledge_chunks_by_note_id(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<knowledge::KnowledgeChunkDto>, String> {
+    state
+        .with_store(|store| knowledge::get_chunks_by_note_id(&store.conn, &note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_knowledge_chunks_by_note_ids(
+    request: knowledge::KnowledgeChunksByNoteIdsRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<knowledge::KnowledgeChunkDto>, String> {
+    state
+        .with_store(|store| knowledge::get_chunks_by_note_ids(&store.conn, &request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_neighbor_knowledge_chunks(
+    request: knowledge::KnowledgeChunkNeighborsRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<knowledge::KnowledgeChunkDto>, String> {
+    state
+        .with_store(|store| knowledge::get_neighbor_chunks(&store.conn, &request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_knowledge_chunk_state(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<knowledge::KnowledgeChunkStateDto>, String> {
+    state
+        .with_store(|store| knowledge::get_state(&store.conn, &note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn reconcile_knowledge_chunks(
+    state: State<'_, AppState>,
+) -> Result<knowledge::RebuildKnowledgeChunksResultDto, String> {
+    let database_path = state
+        .with_store(|store| Ok(store.base_dir.join(DATABASE_FILE)))
+        .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = open_background_connection(&database_path)?;
+        knowledge::reconcile(&mut conn)
+    })
+    .await
+    .map_err(|error| format!("Обновление базы знаний было прервано: {error}"))?
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn rebuild_knowledge_chunks(
+    state: State<'_, AppState>,
+) -> Result<knowledge::RebuildKnowledgeChunksResultDto, String> {
+    let database_path = state
+        .with_store(|store| Ok(store.base_dir.join(DATABASE_FILE)))
+        .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = open_background_connection(&database_path)?;
+        knowledge::rebuild(&mut conn)
+    })
+    .await
+    .map_err(|error| format!("Перестроение базы знаний было прервано: {error}"))?
+    .map_err(command_error)
 }
 
 #[tauri::command]
@@ -5187,5 +5310,200 @@ mod tests {
         assert_eq!(imported_note.content_markdown, "old backup markdown");
         assert!(imported_note.content_sidecars.is_empty());
         assert_eq!(sidecar_count_for_note(&store, "old-backup-note"), 0);
+    }
+
+    #[test]
+    fn knowledge_migration_backfills_an_existing_v8_database() {
+        let dir = temp_store_dir();
+        {
+            let store = DataStore::open(dir.clone()).expect("initial store");
+            store
+                .conn
+                .execute("DELETE FROM schema_migrations WHERE version = 9", [])
+                .expect("remove migration marker");
+            store
+                .conn
+                .execute_batch(
+                    "DROP TABLE knowledge_chunk_state;
+                     DROP TABLE knowledge_chunks;",
+                )
+                .expect("remove derived index");
+        }
+
+        let reopened = DataStore::open(dir).expect("v8 database migrates");
+        let migration_count: i64 = reopened
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 9",
+                [],
+                |row| row.get(0),
+            )
+            .expect("migration marker");
+        let status = knowledge::index_status(&reopened.conn).expect("knowledge status");
+        assert_eq!(migration_count, 1);
+        assert_eq!(status.status, "current");
+        assert_eq!(status.indexed_notes, status.total_notes);
+        assert!(status.chunk_count > 0);
+    }
+
+    #[test]
+    fn knowledge_metadata_migration_upgrades_an_existing_v9_database() {
+        let dir = temp_store_dir();
+        {
+            let store = DataStore::open(dir.clone()).expect("initial store");
+            store
+                .conn
+                .execute("DELETE FROM schema_migrations WHERE version = 10", [])
+                .expect("remove metadata migration marker");
+            store
+                .conn
+                .execute("DROP TABLE knowledge_index_metadata", [])
+                .expect("remove knowledge metadata");
+        }
+
+        let reopened = DataStore::open(dir).expect("v9 database migrates");
+        let migration_count: i64 = reopened
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations
+                 WHERE version = 10 AND name = 'knowledge_index_metadata'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("metadata migration marker");
+        let metadata_table_count: i64 = reopened
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'knowledge_index_metadata'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("metadata table");
+
+        assert_eq!(migration_count, 1);
+        assert_eq!(metadata_table_count, 1);
+    }
+
+    #[test]
+    fn note_lifecycle_keeps_knowledge_chunks_current_without_touching_sidecars() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Knowledge lifecycle".to_string(),
+                note_date: "2026-07-13".to_string(),
+            })
+            .expect("create note");
+        let sidecar = NoteContentSidecarInput {
+            kind: "editor_node_attrs_v1".to_string(),
+            schema_version: 1,
+            payload_json: json!({"images":[{"alignment":"right"}]}),
+        };
+        let saved = store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("Раздел Содержимое"),
+                content_markdown: "# Раздел\n\nСодержимое".to_string(),
+                content_html: "<h1>Раздел</h1><p>Содержимое</p>".to_string(),
+                content_sidecars: vec![sidecar],
+                plain_text: "Раздел Содержимое".to_string(),
+            })
+            .expect("save note");
+        let chunks = knowledge::get_chunks_by_note_id(&store.conn, &note.id).expect("chunks");
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks[0].heading_path, vec!["Раздел"]);
+        assert_eq!(saved.content_markdown, "# Раздел\n\nСодержимое");
+        assert_eq!(
+            note_sidecar_payload(&store, &note.id, "editor_node_attrs_v1"),
+            json!({"images":[{"alignment":"right"}]})
+        );
+
+        store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("Временная версия"),
+                content_markdown: "Временная версия".to_string(),
+                content_html: "<p>Временная версия</p>".to_string(),
+                content_sidecars: vec![],
+                plain_text: "Временная версия".to_string(),
+            })
+            .expect("save temporary version");
+        let revision_id: String = store
+            .conn
+            .query_row(
+                "SELECT id FROM note_revisions WHERE note_id = ?1 AND content_markdown = ?2 ORDER BY created_at DESC LIMIT 1",
+                params![note.id, "# Раздел\n\nСодержимое"],
+                |row| row.get(0),
+            )
+            .expect("revision id");
+        let restored = store
+            .restore_note_revision(RestoreNoteRevisionRequest {
+                note_id: note.id.clone(),
+                revision_id,
+            })
+            .expect("restore revision");
+        assert_eq!(restored.content_markdown, "# Раздел\n\nСодержимое");
+        assert!(knowledge::get_chunks_by_note_id(&store.conn, &note.id)
+            .expect("restored chunks")
+            .iter()
+            .any(|chunk| chunk.content_text.contains("Содержимое")));
+
+        let duplicate = store.duplicate_note(&note.id).expect("duplicate note");
+        assert!(
+            !knowledge::get_chunks_by_note_id(&store.conn, &duplicate.id)
+                .expect("duplicate chunks")
+                .is_empty()
+        );
+        store.archive_note(&note.id).expect("archive note");
+        assert!(!knowledge::get_chunks_by_note_id(&store.conn, &note.id)
+            .expect("archived chunks")
+            .is_empty());
+        store.delete_note(&note.id).expect("soft delete note");
+        assert!(knowledge::get_chunks_by_note_id(&store.conn, &note.id)
+            .expect("deleted chunks")
+            .is_empty());
+    }
+
+    #[test]
+    fn backup_excludes_derived_chunks_and_import_reconciles_them() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Backup knowledge".to_string(),
+                note_date: "2026-07-13".to_string(),
+            })
+            .expect("create note");
+        store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id,
+                content_json: document_from_text("Canonical backup body"),
+                content_markdown: "Canonical backup body".to_string(),
+                content_html: "<p>Canonical backup body</p>".to_string(),
+                content_sidecars: vec![],
+                plain_text: "Canonical backup body".to_string(),
+            })
+            .expect("save note");
+        let backup = store.create_backup().expect("create backup");
+        let bytes = fs::read(backup.path).expect("read backup");
+        let mut archive = ZipArchive::new(Cursor::new(bytes.clone())).expect("open backup");
+        let mut backup_json = String::new();
+        archive
+            .by_name("noteflow-backup.json")
+            .expect("backup json")
+            .read_to_string(&mut backup_json)
+            .expect("read backup json");
+        assert!(!backup_json.contains("knowledge_chunks"));
+        assert!(!backup_json.contains("knowledge_chunk_state"));
+
+        let mut imported = temp_store();
+        imported
+            .import_backup(ImportBackupRequest {
+                file_name: "backup.zip".to_string(),
+                bytes,
+            })
+            .expect("import backup");
+        let status = knowledge::index_status(&imported.conn).expect("imported status");
+        assert_eq!(status.status, "current");
+        assert_eq!(status.indexed_notes, status.total_notes);
     }
 }

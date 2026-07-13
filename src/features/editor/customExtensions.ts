@@ -1,4 +1,5 @@
 import { Mark, Node, mergeAttributes } from "@tiptap/core";
+import { TextSelection } from "@tiptap/pm/state";
 
 export type CalloutVariant = "important" | "info" | "tip" | "warning";
 
@@ -351,8 +352,8 @@ export const InlineDate = Node.create({
     return [{ tag: 'time[data-type="inline-date"]' }];
   },
 
-  renderHTML({ HTMLAttributes }) {
-    const value = String(HTMLAttributes.value ?? "");
+  renderHTML({ node, HTMLAttributes }) {
+    const value = String(node.attrs.value ?? "");
     return ["time", mergeAttributes(HTMLAttributes, { "data-type": "inline-date", class: "inline-date", datetime: value }), formatDate(value)];
   },
 
@@ -361,7 +362,10 @@ export const InlineDate = Node.create({
       insertInlineDate:
         (attrs) =>
         ({ commands }) =>
-          commands.insertContent({ type: this.name, attrs }),
+          commands.insertContent([
+            { type: this.name, attrs },
+            { type: "text", text: " " },
+          ]),
     };
   },
 });
@@ -387,8 +391,8 @@ export const FormulaInline = Node.create({
     return [{ tag: 'span[data-type="formula-inline"]' }];
   },
 
-  renderHTML({ HTMLAttributes }) {
-    return ["span", mergeAttributes(HTMLAttributes, { "data-type": "formula-inline", class: "formula-inline" }), `ƒ ${String(HTMLAttributes.latex ?? "")}`];
+  renderHTML({ node, HTMLAttributes }) {
+    return ["span", mergeAttributes(HTMLAttributes, { "data-type": "formula-inline", class: "formula-inline" }), `ƒ ${String(node.attrs.latex ?? "")}`];
   },
 
   addCommands() {
@@ -396,7 +400,10 @@ export const FormulaInline = Node.create({
       insertFormulaInline:
         (attrs) =>
         ({ commands }) =>
-          commands.insertContent({ type: this.name, attrs }),
+          commands.insertContent([
+            { type: this.name, attrs },
+            { type: "text", text: " " },
+          ]),
     };
   },
 });
@@ -421,21 +428,58 @@ export const FormulaBlock = Node.create({
     return [{ tag: 'div[data-type="formula-block"]' }];
   },
 
-  renderHTML({ HTMLAttributes }) {
-    return ["div", mergeAttributes(HTMLAttributes, { "data-type": "formula-block", class: "formula-block" }), `ƒ ${String(HTMLAttributes.latex ?? "")}`];
+  renderHTML({ node, HTMLAttributes }) {
+    return ["div", mergeAttributes(HTMLAttributes, { "data-type": "formula-block", class: "formula-block" }), `ƒ ${String(node.attrs.latex ?? "")}`];
   },
 
   addCommands() {
     return {
       insertFormulaBlock:
         (attrs) =>
-        ({ commands }) =>
-          commands.insertContent({ type: this.name, attrs }),
+        ({ commands, tr }) => {
+          const insertionPosition = tr.selection.from;
+          const didInsert = commands.insertContent([
+            { type: this.name, attrs },
+            { type: "paragraph" },
+          ]);
+          if (!didInsert) {
+            return false;
+          }
+
+          let insertedFormulaPosition: number | null = null;
+          tr.doc.descendants((node, position) => {
+            if (node.type === this.type && String(node.attrs.latex ?? "") === attrs.latex) {
+              if (insertedFormulaPosition === null || Math.abs(position - insertionPosition) < Math.abs(insertedFormulaPosition - insertionPosition)) {
+                insertedFormulaPosition = position;
+              }
+            }
+          });
+          if (insertedFormulaPosition !== null) {
+            const paragraphPosition = insertedFormulaPosition + 1;
+            if (tr.doc.nodeAt(paragraphPosition)?.type.name === "paragraph") {
+              tr.setSelection(TextSelection.create(tr.doc, paragraphPosition + 1));
+            }
+          }
+          return true;
+        },
     };
   },
 });
 
-function formatDate(value: string) {
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${day}.${month}.${year}` : "Дата";
+export function formatInlineDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return "Дата";
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.valueOf())) {
+    return "Дата";
+  }
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+    year: "numeric",
+  }).format(date);
 }
+
+const formatDate = formatInlineDate;
