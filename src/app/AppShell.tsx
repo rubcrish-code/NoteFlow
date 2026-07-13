@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, ProjectCard, SaveStatus, TagColor, TagRow } from "./types";
 import * as dataService from "../services/dataService";
+import * as searchService from "../services/searchService";
+import type { SearchNoteResult } from "../services/searchService";
 import { ArchivePage } from "../features/archive/ArchivePage";
 import { EditorArea } from "../features/editor/EditorArea";
 import { MainSidebar } from "../features/navigation/MainSidebar";
 import { NewNoteModal } from "../features/notes/NewNoteModal";
-import { NoteListPanel } from "../features/notes/NoteListPanel";
+import { NoteListPanel, type NoteSearchStatus } from "../features/notes/NoteListPanel";
 import { NoteChatPanel } from "../features/note-chat/NoteChatPanel";
 import { ProjectsPage } from "../features/projects/ProjectsPage";
 import { RagChatPage } from "../features/rag/RagChatPage";
@@ -84,6 +86,10 @@ export function AppShell() {
   const [archiveItems, setArchiveItems] = useState<ArchiveItem[]>([]);
   const [activeNoteId, setActiveNoteId] = useState("");
   const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchNoteResult[]>([]);
+  const [searchStatus, setSearchStatus] = useState<NoteSearchStatus>("idle");
+  const [includeArchivedSearch, setIncludeArchivedSearch] = useState(false);
+  const [searchRevision, setSearchRevision] = useState(0);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [editorSelectionText, setEditorSelectionText] = useState("");
@@ -101,6 +107,8 @@ export function AppShell() {
   const settingsSaveTimeoutRef = useRef<number | null>(null);
   const settingsSaveInFlightRef = useRef<Promise<void> | null>(null);
   const uiSettingsRef = useRef<UiSettings>(DEFAULT_UI_SETTINGS);
+  const searchRequestIdRef = useRef(0);
+  const openedArchivedNoteIdRef = useRef<string | null>(null);
   const appZoom = useAppZoom({
     onZoomChange: showToast,
     onZoomPercentChange: (appZoomPercent) => updateUiSettings({ appZoomPercent }),
@@ -195,27 +203,49 @@ export function AppShell() {
       return;
     }
 
-    let isCancelled = false;
+    const trimmedQuery = query.trim();
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
+    if (!trimmedQuery) {
+      setSearchResults([]);
+      setSearchStatus("idle");
+      if (openedArchivedNoteIdRef.current) {
+        openedArchivedNoteIdRef.current = null;
+        void dataService
+          .listNotes("")
+          .then((loadedNotes) => {
+            setNotes(loadedNotes);
+            setActiveNoteId((currentId) => (loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? ""));
+          })
+          .catch(() => setSearchStatus("error"));
+      }
+      return;
+    }
+
+    setSearchResults([]);
+    setSearchStatus("searching");
     const timeoutId = window.setTimeout(() => {
-      void dataService
-        .listNotes(query)
-        .then((loadedNotes) => {
-          if (isCancelled) {
+      void searchService
+        .searchNotes({ includeArchived: includeArchivedSearch, query: trimmedQuery })
+        .then((results) => {
+          if (searchRequestIdRef.current !== requestId) {
             return;
           }
-          setNotes(loadedNotes);
-          if (loadedNotes.length > 0 && !loadedNotes.some((note) => note.id === activeNoteId)) {
-            setActiveNoteId(loadedNotes[0].id);
-          }
+          setSearchResults(results);
+          setSearchStatus(results.length > 0 ? "results" : "empty");
         })
-        .catch((error) => showToast(`Поиск не выполнен: ${String(error)}`));
+        .catch(() => {
+          if (searchRequestIdRef.current === requestId) {
+            setSearchResults([]);
+            setSearchStatus("error");
+          }
+        });
     }, 180);
 
     return () => {
-      isCancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [activeNoteId, isDataLoading, query]);
+  }, [includeArchivedSearch, isDataLoading, query, searchRevision]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -418,10 +448,12 @@ export function AppShell() {
     setTags(snapshot.tags);
     setArchiveItems(snapshot.archiveItems);
     setActiveNoteId((currentId) => (snapshot.notes.some((note) => note.id === currentId) ? currentId : snapshot.notes[0]?.id ?? ""));
+    setSearchRevision((revision) => revision + 1);
   }
 
   function replaceNote(updatedNote: Note) {
     setNotes((currentNotes) => sortNotesForDisplay(currentNotes.map((note) => (note.id === updatedNote.id ? updatedNote : note))));
+    setSearchRevision((revision) => revision + 1);
   }
 
   async function refreshSecondaryData() {
@@ -635,14 +667,11 @@ export function AppShell() {
 
   async function openNote(noteId: string) {
     await flushPendingSave();
+    openedArchivedNoteIdRef.current = searchResults.find((result) => result.noteId === noteId)?.archived ? noteId : null;
     if (!notes.some((note) => note.id === noteId)) {
       try {
-        const loadedNotes = await dataService.listNotes("");
-        setNotes(loadedNotes);
-        if (!loadedNotes.some((note) => note.id === noteId)) {
-          showToast("Связанная заметка не найдена");
-          return;
-        }
+        const loadedNote = await dataService.getNote(noteId);
+        setNotes((currentNotes) => sortNotesForDisplay([loadedNote, ...currentNotes.filter((note) => note.id !== noteId)]));
       } catch (error) {
         showToast(`Не удалось открыть заметку: ${String(error)}`);
         return;
@@ -669,6 +698,7 @@ export function AppShell() {
       .then((duplicatedNote) => {
         setNotes((currentNotes) => sortNotesForDisplay([duplicatedNote, ...currentNotes.filter((note) => note.id !== duplicatedNote.id)]));
         setActiveNoteId(duplicatedNote.id);
+        setSearchRevision((revision) => revision + 1);
         showToast("Заметка дублирована");
       })
       .catch((error) => showToast(`Не удалось дублировать заметку: ${String(error)}`));
@@ -699,12 +729,13 @@ export function AppShell() {
     void flushPendingSave()
       .then(() => (mode === "archive" ? dataService.archiveNote(noteId) : dataService.deleteNote(noteId)))
       .then(async () => {
-        const loadedNotes = await dataService.listNotes(query);
+        const loadedNotes = await dataService.listNotes("");
         setNotes(loadedNotes);
         if (activeNoteId === noteId) {
           setActiveNoteId(loadedNotes[0]?.id ?? "");
         }
         await refreshSecondaryData();
+        setSearchRevision((revision) => revision + 1);
         showToast(mode === "archive" ? "Заметка архивирована" : "Заметка удалена");
       })
       .catch((error) => showToast(`Не удалось обновить заметку: ${String(error)}`));
@@ -764,7 +795,10 @@ export function AppShell() {
   function renameTag(tagId: string, name: string) {
     void dataService
       .renameTag(tagId, name)
-      .then(setTags)
+      .then((nextTags) => {
+        setTags(nextTags);
+        setSearchRevision((revision) => revision + 1);
+      })
       .then(() => showToast("Тег переименован"))
       .catch((error) => showToast(`Не удалось переименовать тег: ${String(error)}`));
   }
@@ -780,7 +814,10 @@ export function AppShell() {
   function deleteTag(tagId: string) {
     void dataService
       .deleteTag(tagId)
-      .then(setTags)
+      .then((nextTags) => {
+        setTags(nextTags);
+        setSearchRevision((revision) => revision + 1);
+      })
       .then(() => showToast("Тег удалён"))
       .catch((error) => showToast(`Не удалось удалить тег: ${String(error)}`));
   }
@@ -788,7 +825,10 @@ export function AppShell() {
   function mergeTags(sourceTagId: string, targetTagId: string) {
     void dataService
       .mergeTags(sourceTagId, targetTagId)
-      .then(setTags)
+      .then((nextTags) => {
+        setTags(nextTags);
+        setSearchRevision((revision) => revision + 1);
+      })
       .then(() => showToast("Теги объединены"))
       .catch((error) => showToast(`Не удалось объединить теги: ${String(error)}`));
   }
@@ -816,7 +856,8 @@ export function AppShell() {
       .restoreArchiveItem(item)
       .then(async () => {
         setArchiveItems(await dataService.listArchive());
-        setNotes(await dataService.listNotes(query));
+        setNotes(await dataService.listNotes(""));
+        setSearchRevision((revision) => revision + 1);
         await refreshSecondaryData();
         showToast(item.kind === "Проект" ? "Проект восстановлен" : "Заметка восстановлена");
       })
@@ -1033,12 +1074,16 @@ export function AppShell() {
             ) : null}
             <NoteListPanel
               activeNoteId={activeNote?.id ?? ""}
+              includeArchivedSearch={includeArchivedSearch}
               notes={notes}
               onQueryChange={setQuery}
               onSelectNote={(noteId) => void openNote(noteId)}
+              onToggleArchivedSearch={() => setIncludeArchivedSearch((includeArchived) => !includeArchived)}
               onTogglePin={toggleNotePin}
               projects={projects}
               query={query}
+              searchResults={searchResults}
+              searchStatus={searchStatus}
             />
             <ResizeHandle
               className="resize-list"

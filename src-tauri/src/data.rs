@@ -1,4 +1,4 @@
-use crate::llm;
+use crate::{llm, search};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -299,6 +299,13 @@ pub struct UpdateNoteContentRequest {
     pub plain_text: String,
     #[serde(default)]
     pub content_sidecars: Vec<NoteContentSidecarInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreNoteRevisionRequest {
+    pub note_id: String,
+    pub revision_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -916,7 +923,7 @@ impl DataStore {
                  ORDER BY n.is_pinned DESC, n.pinned_at DESC, n.updated_at DESC",
                 params![include_archived],
             )?
-        } else if let Some(fts_query) = build_fts_query(&trimmed_query) {
+        } else if let Some(fts_query) = search::build_fts_query(&trimmed_query) {
             match self.query_note_rows(
                 "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
                         n.plain_text, n.project_id, COALESCE(p.title, 'Входящие') AS project_title,
@@ -925,7 +932,7 @@ impl DataStore {
                  LEFT JOIN projects p ON p.id = n.project_id
                  WHERE n.deleted_at IS NULL
                    AND (?1 OR n.archived_at IS NULL)
-                   AND n.id IN (SELECT note_id FROM notes_fts WHERE notes_fts MATCH ?2)
+                   AND n.id IN (SELECT note_id FROM note_search_fts WHERE note_search_fts MATCH ?2)
                  ORDER BY n.is_pinned DESC, n.pinned_at DESC, n.updated_at DESC",
                 params![include_archived, fts_query],
             ) {
@@ -1289,7 +1296,6 @@ impl DataStore {
             "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
             params![note_id, default_tag_id],
         )?;
-        self.refresh_note_search_index(&note_id)?;
         self.get_note(&note_id)
     }
 
@@ -1338,7 +1344,121 @@ impl DataStore {
             &request.content_sidecars,
             &now,
         )?;
-        self.refresh_note_search_index(&request.note_id)?;
+        self.get_note(&request.note_id)
+    }
+
+    fn restore_note_revision(
+        &mut self,
+        request: RestoreNoteRevisionRequest,
+    ) -> DataResult<NoteDto> {
+        let current = self.get_note(&request.note_id)?;
+        let restored_content = self
+            .conn
+            .query_row(
+                "SELECT content_json, content_markdown, content_html, plain_text
+                 FROM note_revisions
+                 WHERE id = ?1 AND note_id = ?2",
+                params![request.revision_id, request.note_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| DataError::NotFound("Ревизия заметки не найдена".to_string()))?;
+        let now = now_iso();
+        let snapshot_revision_id = Uuid::new_v4().to_string();
+        let current_content_json = current.content_json.to_string();
+        let current_sidecars = current.content_sidecars;
+        let (restored_content_json, restored_markdown, restored_html, restored_plain_text) =
+            restored_content;
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "INSERT INTO note_revisions (
+                id, note_id, content_json, content_markdown, content_html, plain_text, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                snapshot_revision_id,
+                request.note_id,
+                current_content_json,
+                current.content_markdown,
+                current.content_html,
+                current.plain_text,
+                now
+            ],
+        )?;
+        if current_sidecars.is_empty() {
+            transaction.execute(
+                "INSERT INTO note_revision_sidecars (
+                    revision_id, kind, schema_version, payload_json, created_at
+                 ) VALUES (?1, ?2, 1, ?3, ?4)",
+                params![
+                    snapshot_revision_id,
+                    LEGACY_TIPTAP_SIDECAR_KIND,
+                    current_content_json,
+                    now
+                ],
+            )?;
+        }
+        for sidecar in current_sidecars {
+            transaction.execute(
+                "INSERT INTO note_revision_sidecars (
+                    revision_id, kind, schema_version, payload_json, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    snapshot_revision_id,
+                    sidecar.kind,
+                    sidecar.schema_version,
+                    sidecar.payload_json.to_string(),
+                    now
+                ],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE notes
+             SET content_json = ?1, content_markdown = ?2, content_html = ?3,
+                 plain_text = ?4, updated_at = ?5
+             WHERE id = ?6 AND deleted_at IS NULL",
+            params![
+                restored_content_json,
+                restored_markdown,
+                restored_html,
+                restored_plain_text,
+                now,
+                request.note_id
+            ],
+        )?;
+        transaction.execute(
+            "DELETE FROM note_content_sidecars WHERE note_id = ?1",
+            params![request.note_id],
+        )?;
+        let restored_sidecar_count = transaction.execute(
+            "INSERT INTO note_content_sidecars (
+                note_id, kind, schema_version, payload_json, created_at, updated_at
+             )
+             SELECT ?1, kind, schema_version, payload_json, ?2, ?2
+             FROM note_revision_sidecars
+             WHERE revision_id = ?3",
+            params![request.note_id, now, request.revision_id],
+        )?;
+        if restored_sidecar_count == 0 {
+            transaction.execute(
+                "INSERT INTO note_content_sidecars (
+                    note_id, kind, schema_version, payload_json, created_at, updated_at
+                 ) VALUES (?1, ?2, 1, ?3, ?4, ?4)",
+                params![
+                    request.note_id,
+                    LEGACY_TIPTAP_SIDECAR_KIND,
+                    restored_content_json,
+                    now
+                ],
+            )?;
+        }
+        transaction.commit()?;
         self.get_note(&request.note_id)
     }
 
@@ -1348,7 +1468,6 @@ impl DataStore {
             "UPDATE notes SET title = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
             params![title, now_iso(), request.note_id],
         )?;
-        self.refresh_note_search_index(&request.note_id)?;
         self.get_note(&request.note_id)
     }
 
@@ -1383,7 +1502,6 @@ impl DataStore {
         }
 
         self.copy_note_content_sidecars(note_id, &new_id, &source.content_json, &now)?;
-        self.refresh_note_search_index(&new_id)?;
         self.get_note(&new_id)
     }
 
@@ -1415,7 +1533,6 @@ impl DataStore {
             "UPDATE notes SET project_id = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
             params![project_id, now_iso(), request.note_id],
         )?;
-        self.refresh_note_search_index(&request.note_id)?;
         self.get_note(&request.note_id)
     }
 
@@ -1424,7 +1541,6 @@ impl DataStore {
             "UPDATE notes SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
             params![now_iso(), note_id],
         )?;
-        self.refresh_note_search_index(note_id)?;
         Ok(())
     }
 
@@ -1433,7 +1549,6 @@ impl DataStore {
             "UPDATE notes SET archived_at = NULL, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
             params![now_iso(), note_id],
         )?;
-        self.refresh_note_search_index(note_id)?;
         self.get_note(note_id)
     }
 
@@ -1553,7 +1668,6 @@ impl DataStore {
             "UPDATE tags SET name = ?1, updated_at = ?2 WHERE id = ?3",
             params![name, now_iso(), request.tag_id],
         )?;
-        self.rebuild_search_index()?;
         self.list_tags(None)
     }
 
@@ -1573,7 +1687,6 @@ impl DataStore {
     fn delete_tag(&mut self, tag_id: &str) -> DataResult<Vec<TagRowDto>> {
         self.conn
             .execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
-        self.rebuild_search_index()?;
         self.list_tags(None)
     }
 
@@ -1595,7 +1708,6 @@ impl DataStore {
             params![request.source_tag_id],
         )?;
         transaction.commit()?;
-        self.rebuild_search_index()?;
         self.list_tags(None)
     }
 
@@ -1697,11 +1809,6 @@ impl DataStore {
             &format!("UPDATE {table} SET archived_at = NULL, updated_at = ?1 WHERE id = ?2"),
             params![now_iso(), item_id],
         )?;
-        if table == "notes" {
-            self.refresh_note_search_index(item_id)?;
-        } else {
-            self.rebuild_search_index()?;
-        }
         Ok(())
     }
 
@@ -1709,7 +1816,6 @@ impl DataStore {
         if kind == "Проект" {
             self.conn
                 .execute("DELETE FROM projects WHERE id = ?1", params![item_id])?;
-            self.rebuild_search_index()?;
         } else {
             self.delete_note_permanently(item_id)?;
         }
@@ -2358,61 +2464,36 @@ impl DataStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    fn refresh_note_search_index(&self, note_id: &str) -> DataResult<()> {
-        let row = self
-            .conn
-            .query_row(
-                "SELECT n.title, n.plain_text, COALESCE(p.title, '')
-                 FROM notes n
-                 LEFT JOIN projects p ON p.id = n.project_id
-                 WHERE n.id = ?1 AND n.deleted_at IS NULL",
-                params![note_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .optional()?;
-        self.conn
-            .execute("DELETE FROM notes_fts WHERE note_id = ?1", params![note_id])?;
-        if let Some((title, plain_text, project_title)) = row {
-            let tag_names = self
-                .conn
-                .query_row(
-                    "SELECT COALESCE(GROUP_CONCAT(t.name, ' '), '')
-                     FROM tags t
-                     INNER JOIN note_tags nt ON nt.tag_id = t.id
-                     WHERE nt.note_id = ?1",
-                    params![note_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-                .unwrap_or_default();
-            self.conn.execute(
-                "INSERT INTO notes_fts (note_id, title, plain_text, tag_names, project_title)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![note_id, title, plain_text, tag_names, project_title],
-            )?;
-        }
+    fn rebuild_search_index(&mut self) -> DataResult<()> {
+        search::rebuild_search_index(&mut self.conn)?;
         Ok(())
     }
 
-    fn rebuild_search_index(&self) -> DataResult<()> {
-        self.conn.execute("DELETE FROM notes_fts", [])?;
-        let mut statement = self
-            .conn
-            .prepare("SELECT id FROM notes WHERE deleted_at IS NULL")?;
-        let note_ids = statement
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        drop(statement);
-        for note_id in note_ids {
-            self.refresh_note_search_index(&note_id)?;
-        }
-        Ok(())
+    fn search_notes(
+        &self,
+        request: search::SearchNotesRequest,
+    ) -> DataResult<Vec<search::SearchNoteResultDto>> {
+        search::search_notes(&self.conn, &request)
+    }
+
+    fn rebuild_knowledge_search_index(
+        &mut self,
+    ) -> DataResult<search::RebuildSearchIndexResultDto> {
+        search::rebuild_search_index(&mut self.conn)
+    }
+
+    fn get_knowledge_documents(
+        &self,
+        request: search::KnowledgeDocumentsRequest,
+    ) -> DataResult<Vec<search::KnowledgeDocumentDto>> {
+        search::get_knowledge_documents(&self.conn, &request)
+    }
+
+    fn get_knowledge_document_by_note_id(
+        &self,
+        note_id: &str,
+    ) -> DataResult<search::KnowledgeDocumentDto> {
+        search::get_knowledge_document_by_note_id(&self.conn, note_id)
     }
 
     fn resolve_storage_path(&self, relative_path: &str) -> DataResult<PathBuf> {
@@ -2657,6 +2738,11 @@ fn migrations() -> Vec<Migration> {
                 WHERE trim(content_markdown) = ''
                   AND trim(plain_text) <> '';
             ",
+        },
+        Migration {
+            version: 8,
+            name: "search_foundation_fts5",
+            sql: search::SEARCH_MIGRATION_SQL,
         },
     ]
 }
@@ -3233,20 +3319,6 @@ fn export_result(path: PathBuf, relative_path: String, message: &str) -> ExportR
     }
 }
 
-fn build_fts_query(query: &str) -> Option<String> {
-    let terms = query
-        .split(|character: char| !character.is_alphanumeric())
-        .map(str::trim)
-        .filter(|term| !term.is_empty())
-        .map(|term| format!("{term}*"))
-        .collect::<Vec<_>>();
-    if terms.is_empty() {
-        None
-    } else {
-        Some(terms.join(" "))
-    }
-}
-
 fn command_error(error: DataError) -> String {
     error.to_string()
 }
@@ -3572,6 +3644,52 @@ pub fn list_notes(
 }
 
 #[tauri::command]
+pub fn get_note(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.get_note(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn search_notes(
+    request: search::SearchNotesRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<search::SearchNoteResultDto>, String> {
+    state
+        .with_store(|store| store.search_notes(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn rebuild_search_index(
+    state: State<'_, AppState>,
+) -> Result<search::RebuildSearchIndexResultDto, String> {
+    state
+        .with_store(DataStore::rebuild_knowledge_search_index)
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_knowledge_documents(
+    request: search::KnowledgeDocumentsRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<search::KnowledgeDocumentDto>, String> {
+    state
+        .with_store(|store| store.get_knowledge_documents(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_knowledge_document_by_note_id(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<search::KnowledgeDocumentDto, String> {
+    state
+        .with_store(|store| store.get_knowledge_document_by_note_id(&note_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
 pub fn create_note(
     request: CreateNoteRequest,
     state: State<'_, AppState>,
@@ -3588,6 +3706,16 @@ pub fn update_note_content(
 ) -> Result<NoteDto, String> {
     state
         .with_store(|store| store.update_note_content(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn restore_note_revision(
+    request: RestoreNoteRevisionRequest,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.restore_note_revision(request))
         .map_err(command_error)
 }
 
@@ -3989,6 +4117,36 @@ mod tests {
     }
 
     #[test]
+    fn real_database_copy_migrates_when_test_directory_is_provided() {
+        let Some(copy_dir) = std::env::var_os("NOTEFLOW_REAL_DB_COPY_DIR") else {
+            return;
+        };
+        let store = DataStore::open(PathBuf::from(copy_dir)).expect("real database copy migrates");
+        let migration_applied: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 8 AND name = 'search_foundation_fts5'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("search migration recorded");
+        let note_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count source notes");
+        let index_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM note_search_fts", [], |row| row.get(0))
+            .expect("count indexed notes");
+        assert_eq!(migration_applied, 1);
+        assert_eq!(index_count, note_count);
+    }
+
+    #[test]
     fn markdown_first_sidecar_migration_preserves_legacy_content() {
         let dir = temp_store_dir();
         create_v6_database_with_notes(&dir);
@@ -4012,6 +4170,28 @@ mod tests {
             .expect("revision sidecar table exists");
         assert_eq!(note_sidecar_table_exists, 1);
         assert_eq!(revision_sidecar_table_exists, 1);
+        let search_migration_applied: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 8 AND name = 'search_foundation_fts5'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("search migration recorded");
+        let indexed_legacy_notes: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM note_search_fts", [], |row| row.get(0))
+            .expect("legacy notes backfilled");
+        let current_note_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("current note count");
+        assert_eq!(search_migration_applied, 1);
+        assert_eq!(indexed_legacy_notes, current_note_count);
 
         let preserved_markdown: String = store
             .conn
@@ -4165,6 +4345,91 @@ mod tests {
             serde_json::from_str::<Value>(&revision_payload).expect("payload json"),
             document_from_text("first revision text")
         );
+    }
+
+    #[test]
+    fn restoring_revision_updates_search_and_sidecar_atomically() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Revision search".to_string(),
+                note_date: "2026-07-11".to_string(),
+            })
+            .expect("create note");
+        store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("first searchable revision"),
+                content_markdown: "first searchable revision".to_string(),
+                content_html: "<p>first searchable revision</p>".to_string(),
+                content_sidecars: vec![NoteContentSidecarInput {
+                    kind: "editor_node_attrs_v1".to_string(),
+                    schema_version: 1,
+                    payload_json: json!({ "revision": "first" }),
+                }],
+                plain_text: "first searchable revision".to_string(),
+            })
+            .expect("save first revision");
+        store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                content_json: document_from_text("second searchable revision"),
+                content_markdown: "second searchable revision".to_string(),
+                content_html: "<p>second searchable revision</p>".to_string(),
+                content_sidecars: vec![NoteContentSidecarInput {
+                    kind: "editor_node_attrs_v1".to_string(),
+                    schema_version: 1,
+                    payload_json: json!({ "revision": "second" }),
+                }],
+                plain_text: "second searchable revision".to_string(),
+            })
+            .expect("save second revision");
+        let first_revision_id: String = store
+            .conn
+            .query_row(
+                "SELECT id FROM note_revisions WHERE note_id = ?1 AND plain_text = ?2",
+                params![note.id, "first searchable revision"],
+                |row| row.get(0),
+            )
+            .expect("first revision id");
+
+        let restored = store
+            .restore_note_revision(RestoreNoteRevisionRequest {
+                note_id: note.id.clone(),
+                revision_id: first_revision_id,
+            })
+            .expect("restore revision");
+        assert_eq!(restored.content_markdown, "first searchable revision");
+        assert_eq!(restored.plain_text, "first searchable revision");
+        assert_eq!(
+            note_sidecar_payload(&store, &note.id, "editor_node_attrs_v1"),
+            json!({ "revision": "first" })
+        );
+
+        let first_results = store
+            .search_notes(search::SearchNotesRequest {
+                query: "first searchable".to_string(),
+                project_id: None,
+                tag_id: None,
+                include_archived: false,
+                favorites_only: false,
+                limit: 50,
+                offset: 0,
+            })
+            .expect("search restored revision");
+        assert_eq!(first_results[0].note_id, note.id);
+        let second_results = store
+            .search_notes(search::SearchNotesRequest {
+                query: "second searchable".to_string(),
+                project_id: None,
+                tag_id: None,
+                include_archived: false,
+                favorites_only: false,
+                limit: 50,
+                offset: 0,
+            })
+            .expect("search stale revision");
+        assert!(second_results.is_empty());
     }
 
     #[test]
@@ -4890,6 +5155,18 @@ mod tests {
             ),
             document_from_text("backup sidecar text")
         );
+        let search_results = imported_store
+            .search_notes(search::SearchNotesRequest {
+                query: "backup sidecar".to_string(),
+                project_id: None,
+                tag_id: None,
+                include_archived: false,
+                favorites_only: false,
+                limit: 50,
+                offset: 0,
+            })
+            .expect("imported search index rebuilt");
+        assert_eq!(search_results[0].note_id, imported_note.id);
     }
 
     #[test]

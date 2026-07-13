@@ -1,5 +1,6 @@
 mod data;
 mod llm;
+mod search;
 
 use std::{
     sync::{
@@ -87,6 +88,7 @@ pub fn run() {
             data::export_project_zip,
             data::accept_note_ai_privacy,
             data::get_note_ai_status,
+            data::get_note,
             data::get_ui_settings,
             data::import_backup,
             data::list_archive,
@@ -95,6 +97,10 @@ pub fn run() {
             data::list_llm_models_for_draft,
             data::list_llm_providers,
             data::list_notes,
+            data::search_notes,
+            data::rebuild_search_index,
+            data::get_knowledge_documents,
+            data::get_knowledge_document_by_note_id,
             data::list_projects,
             data::list_tags,
             data::load_workspace,
@@ -104,6 +110,7 @@ pub fn run() {
             data::rename_tag,
             data::restore_archive_item,
             data::restore_note,
+            data::restore_note_revision,
             data::resolve_attachment_path,
             data::save_llm_provider,
             data::set_default_llm_provider,

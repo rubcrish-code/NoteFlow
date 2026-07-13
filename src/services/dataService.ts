@@ -322,6 +322,10 @@ export async function listNotes(query: string, includeArchived = false) {
   return notes.map(mapNote);
 }
 
+export async function getNote(noteId: string) {
+  return mapNote(await invoke<NoteDto>("get_note", { noteId }));
+}
+
 export async function createNote(title: string, noteDate: string) {
   return mapNote(await invoke<NoteDto>("create_note", { request: { noteDate, title } }));
 }
@@ -356,6 +360,10 @@ export async function updateNoteContent(note: UpdateNoteContentInput) {
       },
     }),
   );
+}
+
+export async function restoreNoteRevision(noteId: string, revisionId: string) {
+  return mapNote(await invoke<NoteDto>("restore_note_revision", { request: { noteId, revisionId } }));
 }
 
 export async function renameNote(noteId: string, title: string) {
