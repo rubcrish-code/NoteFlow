@@ -189,17 +189,18 @@ describe("LLM provider frontend contract", () => {
 
   it("renders the provider list as the main page and moves add/edit into a modal", () => {
     const source = readFileSync("src/features/settings/SettingsPage.tsx", "utf8");
+    const modalSource = readFileSync("src/features/settings/ModelSettingsUi.tsx", "utf8");
     const styles = readFileSync("src/styles/app.css", "utf8");
 
     assert.match(source, /llm-empty-state-card/);
     assert.match(source, /llm-provider-card/);
     assert.match(source, /onClick=\{\(\) => openAddProvider\(\)\}/);
     assert.match(source, /onClick=\{\(\) => openEditProvider\(provider\)\}/);
-    assert.match(source, /className="modal-backdrop llm-provider-modal-backdrop"/);
-    assert.match(source, /className="llm-provider-modal"/);
-    assert.match(source, /role="dialog"/);
-    assert.match(source, /aria-modal="true"/);
-    assert.match(source, /provider-presets llm-provider-type-grid/);
+    assert.match(source, /<SettingsModalShell[\s\S]*className="llm-provider-modal"/);
+    assert.match(modalSource, /className="modal-backdrop settings-modal-backdrop"/);
+    assert.match(modalSource, /role="dialog"/);
+    assert.match(modalSource, /aria-modal="true"/);
+    assert.match(source, /<ProviderTypeSelector/);
     assert.doesNotMatch(source, /llm-provider-manager-grid/);
     assert.match(styles, /\.llm-provider-modal/);
     assert.match(styles, /\.llm-provider-cards/);

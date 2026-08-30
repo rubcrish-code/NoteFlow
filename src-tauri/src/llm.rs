@@ -832,7 +832,12 @@ pub fn collect_provider_backups(conn: &Connection) -> DataResult<Vec<LlmProvider
             updated_at: row.get(16)?,
         })
     })?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let mut providers = rows.collect::<Result<Vec<_>, _>>()?;
+    for provider in &mut providers {
+        provider.custom_headers_json =
+            safe_custom_headers_for_backup(&provider.custom_headers_json);
+    }
+    Ok(providers)
 }
 
 pub fn import_provider_backups(
@@ -1450,6 +1455,23 @@ fn normalize_custom_headers_json(value: &str) -> DataResult<String> {
         normalized.insert(key.trim().to_string(), header_value);
     }
     serde_json::to_string(&normalized).map_err(DataError::from)
+}
+
+fn safe_custom_headers_for_backup(value: &str) -> String {
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(value) else {
+        return "{}".to_string();
+    };
+    let mut safe_headers = BTreeMap::new();
+    for (key, value) in object {
+        if validate_custom_header(&key, &value).is_ok() {
+            let header_value = value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string());
+            safe_headers.insert(key.trim().to_string(), header_value);
+        }
+    }
+    serde_json::to_string(&safe_headers).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn validate_custom_header(key: &str, value: &Value) -> DataResult<()> {

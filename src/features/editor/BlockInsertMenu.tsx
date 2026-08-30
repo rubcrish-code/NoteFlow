@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { Editor } from "@tiptap/react";
-import type { Note, NoteAttachment } from "../../app/types";
+import type { NoteAttachment } from "../../app/types";
 import { Icon, type IconName } from "../../shared/Icon";
 import type { CalloutVariant } from "./customExtensions";
 
@@ -13,13 +13,8 @@ type SimpleBlockCommand =
 interface BlockInsertMenuProps {
   editTarget: EditorInsertTarget | null;
   editor: Editor | null;
-  notes: Note[];
   onClose: () => void;
-  onStoreAttachment: (
-    file: File,
-    kind: "file" | "image",
-    options?: { editMetadata?: Record<string, unknown>; originalAttachmentId?: string },
-  ) => Promise<{ attachment: NoteAttachment; sizeLabel: string }>;
+  onPickAndStoreAttachment: (kind: "file" | "image") => Promise<{ attachment: NoteAttachment; sizeLabel: string } | null>;
   onToast: (message: string) => void;
   selection: EditorInsertSelection | null;
 }
@@ -72,27 +67,10 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} МБ`;
 }
 
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-      } else {
-        reject(new Error("Файл не удалось прочитать как data URL"));
-      }
-    });
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Файл не удалось прочитать")));
-    reader.readAsDataURL(file);
-  });
-}
-
-export function BlockInsertMenu({ editTarget, editor, notes, onClose, onStoreAttachment, onToast, selection }: BlockInsertMenuProps) {
+export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAttachment, onToast, selection }: BlockInsertMenuProps) {
   const [dateDraft, setDateDraft] = useState(editTarget?.kind === "date" ? editTarget.value : getTodayIsoDate());
   const [formulaDraft, setFormulaDraft] = useState(editTarget && editTarget.kind !== "date" ? editTarget.latex : "a^2 + b^2 = c^2");
   const [insertError, setInsertError] = useState("");
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -149,21 +127,23 @@ export function BlockInsertMenu({ editTarget, editor, notes, onClose, onStoreAtt
     onClose();
   }
 
-  async function insertImage(file: File | undefined) {
-    if (!file || !editor) {
+  async function insertImage() {
+    if (!editor) {
       return;
     }
 
     try {
-      const stored = await onStoreAttachment(file, "image");
-      const src = await readFileAsDataUrl(file);
+      const stored = await onPickAndStoreAttachment("image");
+      if (!stored?.attachment.assetUri) {
+        return;
+      }
       const imageAttrs = {
-        alt: file.name,
+        alt: stored.attachment.originalName,
         attachmentId: stored.attachment.id,
         originalAttachmentId: stored.attachment.id,
-        originalSrc: src,
-        src,
-        title: file.name,
+        originalSrc: stored.attachment.assetUri,
+        src: stored.attachment.assetUri,
+        title: stored.attachment.originalName,
       };
       editor
         .chain()
@@ -177,21 +157,24 @@ export function BlockInsertMenu({ editTarget, editor, notes, onClose, onStoreAtt
     }
   }
 
-  async function insertFile(file: File | undefined) {
-    if (!file || !editor) {
+  async function insertFile() {
+    if (!editor) {
       return;
     }
 
     try {
-      const stored = await onStoreAttachment(file, "file");
+      const stored = await onPickAndStoreAttachment("file");
+      if (!stored) {
+        return;
+      }
       editor
         .chain()
         .focus()
         .insertFileAttachment({
-          name: file.name,
-          size: stored.sizeLabel || formatFileSize(file.size),
+          name: stored.attachment.originalName,
+          size: stored.sizeLabel || formatFileSize(stored.attachment.sizeBytes),
           storageId: stored.attachment.id,
-          type: file.type || "file",
+          type: stored.attachment.mimeType || "file",
         })
         .run();
       onToast("Файл сохранён во вложениях");
@@ -277,14 +260,6 @@ export function BlockInsertMenu({ editTarget, editor, notes, onClose, onStoreAtt
     onClose();
   }
 
-  function insertMention(note: Note) {
-    if (!editor) {
-      return;
-    }
-    editor.chain().focus().insertNoteMention({ label: note.title, noteId: note.id }).run();
-    onClose();
-  }
-
   return (
     <div className="block-insert-menu" ref={menuRef} role="dialog">
       <div className="block-menu-head">
@@ -310,14 +285,14 @@ export function BlockInsertMenu({ editTarget, editor, notes, onClose, onStoreAtt
       </div>
 
       <div className="block-menu-tools">
-        <button className="block-menu-item" onClick={() => imageInputRef.current?.click()} type="button">
+        <button className="block-menu-item" onClick={() => void insertImage()} type="button">
           <Icon name="image" />
           <span>
             <b>Изображение</b>
             <small>Сохраняется локально во вложениях заметки</small>
           </span>
         </button>
-        <button className="block-menu-item" onClick={() => fileInputRef.current?.click()} type="button">
+        <button className="block-menu-item" onClick={() => void insertFile()} type="button">
           <Icon name="attach" />
           <span>
             <b>Файл</b>
@@ -377,17 +352,6 @@ export function BlockInsertMenu({ editTarget, editor, notes, onClose, onStoreAtt
 
       {insertError ? <div aria-live="polite" className="block-menu-error">{insertError}</div> : null}
 
-      <div className="block-menu-mentions">
-        <div className="block-menu-section-title">Упоминание заметки</div>
-        {notes.slice(0, 5).map((note) => (
-          <button className="block-menu-note" key={note.id} onClick={() => insertMention(note)} type="button">
-            @{note.title}
-          </button>
-        ))}
-      </div>
-
-      <input accept="image/*" hidden onChange={(event) => void insertImage(event.currentTarget.files?.[0])} ref={imageInputRef} type="file" />
-      <input hidden onChange={(event) => void insertFile(event.currentTarget.files?.[0])} ref={fileInputRef} type="file" />
     </div>
   );
 }

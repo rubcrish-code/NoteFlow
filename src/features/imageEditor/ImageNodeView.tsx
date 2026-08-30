@@ -2,6 +2,7 @@ import Image from "@tiptap/extension-image";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { useEffect, useRef, useState, type PointerEvent, type CSSProperties } from "react";
 import { Icon } from "../../shared/Icon";
+import { runtimeAssetUrl } from "../editor/assetUri";
 import type { ImageEditMode } from "./imageEditService";
 import { getResizeCursor, resizeHandles, resizeImageBox, type ResizeHandle, type Size } from "./imageGeometry";
 
@@ -243,7 +244,7 @@ function ImageNodeView(props: NodeViewProps) {
         </div>
       ) : null}
       <figure style={getFigureStyle(renderedWidth, renderedHeight)}>
-        <img alt={attrs.alt ?? ""} draggable={false} ref={imageRef} src={attrs.src} title={attrs.title ?? ""} />
+        <img alt={attrs.alt ?? ""} draggable={false} ref={imageRef} src={runtimeAssetUrl(attrs.src)} title={attrs.title ?? ""} />
         {props.selected ? (
           <div className="image-resize-frame" contentEditable={false}>
             {resizeHandles.map((handle) => (

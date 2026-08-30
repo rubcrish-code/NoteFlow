@@ -33,11 +33,15 @@ describe("production data layer contract", () => {
 
     assert.match(source, /from "@tauri-apps\/api\/core"/);
     assert.match(source, /invoke<WorkspaceSnapshotDto>\("load_workspace"/);
-    assert.match(source, /invoke<NoteDto>\("update_note_content"/);
+    assert.match(source, /return await invoke<T>\(command, args\)/);
+    assert.match(source, /invokeNotePersistence<NoteDto>\("update_note_content"/);
     assert.match(source, /invoke<ExportResultDto>\("create_backup"/);
-    assert.match(source, /invoke<string>\("resolve_attachment_path", \{ attachmentId \}\)/);
-    assert.match(source, /openPath\(path\)/);
-    assert.match(source, /revealItemInDir\(path\)/);
+    assert.match(source, /invoke<BackupPreviewDto>\("preview_backup"/);
+    assert.match(source, /invoke<ImportBackupResultDto>\("import_backup"/);
+    assert.match(source, /invoke<void>\("open_attachment", \{ attachmentId \}\)/);
+    assert.match(source, /invoke<void>\("reveal_attachment", \{ attachmentId \}\)/);
+    assert.match(source, /invoke<AttachmentStoreResultDto>\("store_attachment_from_path"/);
+    assert.doesNotMatch(source, /resolve_attachment_path/);
     assert.match(source, /buildEditorDocumentFromStoredNoteContent/);
     assert.match(source, /contentSidecars: note\.contentSidecars\.map\(mapNoteContentSidecarInput\)/);
     assert.doesNotMatch(source, /editorDocument: note\.contentJson/);

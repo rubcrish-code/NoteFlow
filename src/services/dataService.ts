@@ -1,9 +1,56 @@
 import { invoke } from "@tauri-apps/api/core";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, NoteContentSidecar, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
 import { buildEditorDocumentFromStoredNoteContent } from "../features/editor/editorContentSerializer";
 import { createNotePreview } from "../features/notes/notePreview";
 import { normalizeNoteIconKey } from "../shared/noteIconRegistry";
+
+export type NotePersistenceErrorCode = "invalid_input" | "not_found" | "revision" | "serialization" | "sidecar" | "stale_write" | "transaction";
+const notePersistenceErrorCodes = new Set<NotePersistenceErrorCode>([
+  "invalid_input",
+  "not_found",
+  "revision",
+  "serialization",
+  "sidecar",
+  "stale_write",
+  "transaction",
+]);
+
+interface NotePersistenceErrorDto {
+  code: NotePersistenceErrorCode;
+  message: string;
+}
+
+export class NotePersistenceError extends Error {
+  readonly code: NotePersistenceErrorCode;
+
+  constructor(error: NotePersistenceErrorDto) {
+    super(error.message);
+    this.name = "NotePersistenceError";
+    this.code = error.code;
+  }
+}
+
+function isNotePersistenceErrorDto(value: unknown): value is NotePersistenceErrorDto {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.code === "string" && notePersistenceErrorCodes.has(candidate.code as NotePersistenceErrorCode) && typeof candidate.message === "string";
+}
+
+async function invokeNotePersistence<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    if (isNotePersistenceErrorDto(error)) {
+      throw new NotePersistenceError(error);
+    }
+    throw new NotePersistenceError({
+      code: "transaction",
+      message: "Не удалось атомарно сохранить заметку",
+    });
+  }
+}
 
 export interface DataLocation {
   dataDir: string;
@@ -24,6 +71,33 @@ export interface ExportResult {
   relativePath: string;
 }
 
+export interface BackupContentsSummary {
+  notes: number;
+  projects: number;
+  tags: number;
+  attachments: number;
+  noteAiChats: number;
+  ragChats: number;
+  messages: number;
+}
+
+export interface BackupPreview {
+  formatVersion: number;
+  exportedAt: string;
+  appVersion?: string | null;
+  contents: BackupContentsSummary;
+  includesAiHistory: boolean;
+  preservesExistingAiHistory: boolean;
+  missingAttachmentFiles: number;
+}
+
+export interface ImportBackupResult {
+  workspace: WorkspaceSnapshot;
+  contents: BackupContentsSummary;
+  preservedLegacyChats: number;
+  indexesUpdating: boolean;
+}
+
 export interface AttachmentStoreResult {
   attachment: NoteAttachment;
   sizeLabel: string;
@@ -38,6 +112,8 @@ interface NoteTagDto {
 }
 
 interface AttachmentDto {
+  assetUri?: string | null;
+  blobId?: string | null;
   createdAt: string;
   id: string;
   kind: string;
@@ -47,7 +123,6 @@ interface AttachmentDto {
   originalAttachmentId?: string | null;
   editMetadata?: Record<string, unknown> | null;
   sizeBytes: number;
-  storageRelPath: string;
 }
 
 interface NoteDto {
@@ -56,6 +131,7 @@ interface NoteDto {
   contentHtml: string;
   contentJson: EditorDocument;
   contentMarkdown: string;
+  contentVersion: number;
   contentSidecars?: NoteContentSidecarDto[];
   createdAt: string;
   deletedAt?: string | null;
@@ -131,6 +207,23 @@ interface ExportResultDto {
   relativePath: string;
 }
 
+interface BackupPreviewDto {
+  formatVersion: number;
+  exportedAt: string;
+  appVersion?: string | null;
+  contents: BackupContentsSummary;
+  includesAiHistory: boolean;
+  preservesExistingAiHistory: boolean;
+  missingAttachmentFiles: number;
+}
+
+interface ImportBackupResultDto {
+  workspace: WorkspaceSnapshotDto;
+  contents: BackupContentsSummary;
+  preservedLegacyChats: number;
+  indexesUpdating: boolean;
+}
+
 interface AttachmentStoreResultDto {
   attachment: AttachmentDto;
   sizeLabel: string;
@@ -158,6 +251,8 @@ function mapTag(tag: NoteTagDto): NoteTag {
 
 function mapAttachment(attachment: AttachmentDto): NoteAttachment {
   return {
+    assetUri: attachment.assetUri ?? undefined,
+    blobId: attachment.blobId ?? undefined,
     createdAt: attachment.createdAt,
     id: attachment.id,
     kind: toAttachmentKind(attachment.kind),
@@ -167,7 +262,6 @@ function mapAttachment(attachment: AttachmentDto): NoteAttachment {
     originalAttachmentId: attachment.originalAttachmentId ?? undefined,
     editMetadata: attachment.editMetadata ?? undefined,
     sizeBytes: attachment.sizeBytes,
-    storageRelPath: attachment.storageRelPath,
   };
 }
 
@@ -224,6 +318,7 @@ function mapNote(note: NoteDto): Note {
     attachments: note.attachments.map(mapAttachment),
     contentHtml: note.contentHtml,
     contentMarkdown: note.contentMarkdown,
+    contentVersion: note.contentVersion,
     contentSidecars,
     createdAt: note.createdAt,
     dateLabel: formatDateLabel(note.updatedAt, note.noteDate),
@@ -327,7 +422,7 @@ export async function getNote(noteId: string) {
 }
 
 export async function createNote(title: string, noteDate: string) {
-  return mapNote(await invoke<NoteDto>("create_note", { request: { noteDate, title } }));
+  return mapNote(await invokeNotePersistence<NoteDto>("create_note", { request: { noteDate, title } }));
 }
 
 export interface UpdateNoteContentInput {
@@ -335,6 +430,7 @@ export interface UpdateNoteContentInput {
   contentMarkdown: string;
   contentSidecars: EditorContentSidecarInput[];
   editorDocument: EditorDocument;
+  expectedContentVersion: number;
   id: string;
   plainText: string;
 }
@@ -349,12 +445,13 @@ function mapNoteContentSidecarInput(sidecar: EditorContentSidecarInput): NoteCon
 
 export async function updateNoteContent(note: UpdateNoteContentInput) {
   return mapNote(
-    await invoke<NoteDto>("update_note_content", {
+    await invokeNotePersistence<NoteDto>("update_note_content", {
       request: {
         contentHtml: note.contentHtml,
         contentJson: note.editorDocument,
         contentMarkdown: note.contentMarkdown,
         contentSidecars: note.contentSidecars.map(mapNoteContentSidecarInput),
+        expectedContentVersion: note.expectedContentVersion,
         noteId: note.id,
         plainText: note.plainText,
       },
@@ -362,8 +459,12 @@ export async function updateNoteContent(note: UpdateNoteContentInput) {
   );
 }
 
-export async function restoreNoteRevision(noteId: string, revisionId: string) {
-  return mapNote(await invoke<NoteDto>("restore_note_revision", { request: { noteId, revisionId } }));
+export async function restoreNoteRevision(noteId: string, revisionId: string, expectedContentVersion: number) {
+  return mapNote(
+    await invokeNotePersistence<NoteDto>("restore_note_revision", {
+      request: { expectedContentVersion, noteId, revisionId },
+    }),
+  );
 }
 
 export async function renameNote(noteId: string, title: string) {
@@ -371,7 +472,7 @@ export async function renameNote(noteId: string, title: string) {
 }
 
 export async function duplicateNote(noteId: string) {
-  return mapNote(await invoke<NoteDto>("duplicate_note", { noteId }));
+  return mapNote(await invokeNotePersistence<NoteDto>("duplicate_note", { noteId }));
 }
 
 export async function toggleNotePin(noteId: string) {
@@ -472,14 +573,35 @@ export async function storeAttachment(noteId: string, file: File, kind: "file" |
   );
 }
 
+export async function pickAndStoreAttachment(noteId: string, kind: "file" | "image") {
+  const sourcePath = await open({
+    directory: false,
+    filters: kind === "image" ? [{ name: "Изображения", extensions: ["png", "jpg", "jpeg", "webp"] }] : undefined,
+    multiple: false,
+    title: kind === "image" ? "Выберите изображение" : "Выберите файл",
+  });
+  if (!sourcePath) {
+    return null;
+  }
+  return mapAttachmentStoreResult(
+    await invoke<AttachmentStoreResultDto>("store_attachment_from_path", {
+      request: {
+        editMetadata: null,
+        kind,
+        noteId,
+        originalAttachmentId: null,
+        sourcePath,
+      },
+    }),
+  );
+}
+
 export async function openAttachment(attachmentId: string) {
-  const path = await invoke<string>("resolve_attachment_path", { attachmentId });
-  await openPath(path);
+  await invoke<void>("open_attachment", { attachmentId });
 }
 
 export async function revealAttachment(attachmentId: string) {
-  const path = await invoke<string>("resolve_attachment_path", { attachmentId });
-  await revealItemInDir(path);
+  await invoke<void>("reveal_attachment", { attachmentId });
 }
 
 export async function exportNoteMarkdown(noteId: string) {
@@ -502,15 +624,26 @@ export async function createBackup() {
   return mapExportResult(await invoke<ExportResultDto>("create_backup"));
 }
 
-export async function importBackup(file: File) {
-  return mapWorkspace(
-    await invoke<WorkspaceSnapshotDto>("import_backup", {
-      request: {
-        bytes: await fileToBytes(file),
-        fileName: file.name,
-      },
-    }),
-  );
+export async function previewBackup(file: File): Promise<BackupPreview> {
+  return await invoke<BackupPreviewDto>("preview_backup", {
+    request: {
+      bytes: await fileToBytes(file),
+      fileName: file.name,
+    },
+  });
+}
+
+export async function importBackup(file: File): Promise<ImportBackupResult> {
+  const result = await invoke<ImportBackupResultDto>("import_backup", {
+    request: {
+      bytes: await fileToBytes(file),
+      fileName: file.name,
+    },
+  });
+  return {
+    ...result,
+    workspace: mapWorkspace(result.workspace),
+  } satisfies ImportBackupResult;
 }
 
 export async function quitApp() {

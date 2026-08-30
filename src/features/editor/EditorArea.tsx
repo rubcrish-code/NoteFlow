@@ -18,24 +18,27 @@ import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNod
 import { ImageEditorModal } from "../imageEditor/ImageEditorModal";
 import { createEditedImageFileName, dataUrlToFile, type ImageEditMode, type ImageEditMetadata } from "../imageEditor/imageEditService";
 import { BlockInsertMenu, type EditorInsertSelection, type EditorInsertTarget } from "./BlockInsertMenu";
+import { runtimeAssetUrl } from "./assetUri";
 import { InteractiveFileAttachment } from "./FileAttachmentNodeView";
 import { FormattingToolbar } from "./FormattingToolbar";
 import { NoteMenuPopover } from "./NoteMenuPopover";
 import { TableToolsPopover } from "./TableToolsPopover";
 import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
 import { serializeEditorDocumentForStorage } from "./editorContentSerializer";
+import { shouldReloadEditorDocument, type EditorDocumentLoadToken } from "./editorDocumentReload";
 import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
 import { NoteFlowTable, NoteFlowTableCell, NoteFlowTableHeader, NoteFlowTableView, TableToolsAnchor } from "./tableExtensions";
 import { NoteFlowTaskItem } from "./taskExtensions";
 import { useEditorPageLayout } from "./useEditorPageLayout";
 import type { EditorPageLayoutSettings } from "../../shared/editorPageLayout";
+import type { SemanticSearchResult } from "../../services/embeddingService";
 
 interface EditorAreaProps {
+  documentReloadGeneration: number;
   editorContentOffset: number;
   editorContentWidth: number;
   isFocusMode: boolean;
   note: Note;
-  notes: Note[];
   onEditorChange: (
     noteId: string,
     editorDocument: EditorDocument,
@@ -57,6 +60,7 @@ interface EditorAreaProps {
   onOpenAttachment: (attachmentId: string) => Promise<void>;
   onOpenNote: (noteId: string) => void;
   onOpenSettingsModels: () => void;
+  onPickAndStoreAttachment: (kind: "file" | "image") => Promise<{ attachment: NoteAttachment; sizeLabel: string } | null>;
   onRenameNote: (noteId: string, title: string) => void;
   onRevealAttachment: (attachmentId: string) => Promise<void>;
   onSelectionTextChange: (text: string) => void;
@@ -70,6 +74,7 @@ interface EditorAreaProps {
   onToast: (message: string) => void;
   projectOptions: string[];
   saveStatus: SaveStatus;
+  semanticOpenTarget: SemanticSearchResult | null;
 }
 
 interface AiSelectionSnapshot {
@@ -163,11 +168,11 @@ function createEditorExtensions(options: {
 }
 
 export function EditorArea({
+  documentReloadGeneration,
   editorContentOffset,
   editorContentWidth,
   isFocusMode,
   note,
-  notes,
   onArchiveNote,
   onDeleteNote,
   onDuplicateNote,
@@ -181,6 +186,7 @@ export function EditorArea({
   onOpenAttachment,
   onOpenNote,
   onOpenSettingsModels,
+  onPickAndStoreAttachment,
   onRenameNote,
   onRevealAttachment,
   onSelectionTextChange,
@@ -190,6 +196,7 @@ export function EditorArea({
   onToast,
   projectOptions,
   saveStatus,
+  semanticOpenTarget,
 }: EditorAreaProps) {
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
   const [blockInsertSelection, setBlockInsertSelection] = useState<EditorInsertSelection | null>(null);
@@ -205,7 +212,7 @@ export function EditorArea({
   const editorRef = useRef<Editor | null>(null);
   const aiRequestIdRef = useRef(0);
   const isMountedRef = useRef(false);
-  const loadedNoteIdRef = useRef<string | null>(null);
+  const loadedDocumentTokenRef = useRef<EditorDocumentLoadToken | null>(null);
   const noteIdRef = useRef(note.id);
   const onOpenNoteRef = useRef(onOpenNote);
   const editorExtensions = useMemo(
@@ -334,13 +341,48 @@ export function EditorArea({
   useEffect(() => {
     noteIdRef.current = note.id;
 
-    if (!editor || loadedNoteIdRef.current === note.id) {
+    if (!editor) {
       return;
     }
 
-    editor.commands.setContent(note.editorDocument, { emitUpdate: false });
-    loadedNoteIdRef.current = note.id;
-  }, [editor, note.editorDocument, note.id]);
+    const nextToken: EditorDocumentLoadToken = {
+      contentVersion: note.contentVersion,
+      noteId: note.id,
+      reloadGeneration: documentReloadGeneration,
+    };
+    const shouldReload = shouldReloadEditorDocument({
+      currentDocument: editor.getJSON() as EditorDocument,
+      nextDocument: note.editorDocument,
+      nextToken,
+      previousToken: loadedDocumentTokenRef.current,
+    });
+    loadedDocumentTokenRef.current = nextToken;
+    if (shouldReload) {
+      editor.commands.setContent(note.editorDocument, { emitUpdate: false });
+    }
+  }, [documentReloadGeneration, editor, note.contentVersion, note.editorDocument, note.id]);
+
+  useEffect(() => {
+    if (!editor || semanticOpenTarget?.noteId !== note.id || loadedDocumentTokenRef.current?.noteId !== note.id) {
+      return;
+    }
+
+    const editorElement = editor.view.dom;
+    const targetElement = findSemanticTargetElement(editorElement, semanticOpenTarget);
+    if (!targetElement) {
+      return;
+    }
+
+    editorElement.querySelectorAll(".semantic-search-target").forEach((element) => {
+      element.classList.remove("semantic-search-target");
+    });
+    targetElement.classList.add("semantic-search-target");
+    targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timeoutId = window.setTimeout(() => {
+      targetElement.classList.remove("semantic-search-target");
+    }, 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [editor, note.id, semanticOpenTarget]);
 
   async function refreshAiStatus() {
     try {
@@ -518,13 +560,16 @@ export function EditorArea({
         editMetadata: metadata,
         originalAttachmentId,
       });
+      if (!stored.attachment.assetUri) {
+        throw new Error("Managed asset не создан");
+      }
       target.updateAttributes({
         attachmentId: stored.attachment.id,
         editedAttachmentId: stored.attachment.id,
         editMetadata: metadata,
         originalAttachmentId: originalAttachmentId ?? target.attrs.originalAttachmentId ?? null,
         originalSrc: target.attrs.originalSrc ?? target.attrs.src,
-        src: dataUrl,
+        src: stored.attachment.assetUri,
       });
       setImageEditTarget(null);
       onToast(mode === "crop" ? "Изображение обрезано" : "Аннотации применены");
@@ -657,7 +702,7 @@ export function EditorArea({
           mode={imageEditTarget.mode}
           onApply={(dataUrl, mode) => void applyImageEdit(dataUrl, mode)}
           onClose={() => setImageEditTarget(null)}
-          src={imageEditTarget.attrs.src}
+          src={runtimeAssetUrl(imageEditTarget.attrs.src)}
           title={imageEditTarget.attrs.title ?? imageEditTarget.attrs.alt ?? "Изображение"}
         />
       ) : null}
@@ -685,12 +730,11 @@ export function EditorArea({
           <BlockInsertMenu
             editTarget={blockInsertTarget}
             editor={editor}
-            notes={notes}
             onClose={() => {
               setIsBlockMenuOpen(false);
               setBlockInsertTarget(null);
             }}
-            onStoreAttachment={onStoreAttachment}
+            onPickAndStoreAttachment={onPickAndStoreAttachment}
             onToast={onToast}
             selection={blockInsertSelection}
           />
@@ -728,6 +772,38 @@ function selectionStillMatches(editor: Editor, selection: AiSelectionSnapshot) {
     return false;
   }
   return editor.state.doc.textBetween(selection.from, selection.to, "\n").trim() === selection.text;
+}
+
+function findSemanticTargetElement(editorElement: HTMLElement, target: SemanticSearchResult) {
+  const elements = Array.from(editorElement.querySelectorAll<HTMLElement>("h1, h2, h3, h4, p, li, td, th, blockquote, pre"));
+  const heading = target.headingPath[target.headingPath.length - 1];
+  if (heading) {
+    const normalizedHeading = normalizeSearchTargetText(heading);
+    const headingElement = elements.find((element) => normalizeSearchTargetText(element.textContent ?? "") === normalizedHeading);
+    if (headingElement) {
+      return headingElement;
+    }
+  }
+
+  const snippetWords = normalizeSearchTargetText(target.snippet.replace(/^…|…$/g, ""))
+    .split(" ")
+    .filter((word) => word.length >= 3);
+  const phrase = snippetWords.slice(0, 6).join(" ");
+  if (phrase) {
+    const phraseElement = elements.find((element) => normalizeSearchTargetText(element.textContent ?? "").includes(phrase));
+    if (phraseElement) {
+      return phraseElement;
+    }
+  }
+
+  return snippetWords
+    .slice(0, 12)
+    .map((word) => elements.find((element) => normalizeSearchTargetText(element.textContent ?? "").includes(word)))
+    .find((element): element is HTMLElement => Boolean(element));
+}
+
+function normalizeSearchTargetText(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
 function AiScopeChoicePanel({

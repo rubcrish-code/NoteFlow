@@ -237,7 +237,7 @@ pub fn sync_note(conn: &mut Connection, note_id: &str) -> DataResult<i64> {
     let existing_created_at = existing_chunk_creation_times(conn, note_id)?;
     let transaction = conn.transaction()?;
     transaction.execute(
-        "DELETE FROM knowledge_chunks WHERE note_id = ?1",
+        "UPDATE knowledge_chunks SET chunk_order = -chunk_order - 1 WHERE note_id = ?1",
         params![note_id],
     )?;
 
@@ -265,7 +265,17 @@ pub fn sync_note(conn: &mut Connection, note_id: &str) -> DataResult<i64> {
             "INSERT INTO knowledge_chunks (
                 id, note_id, chunk_order, heading_path_json, content_markdown, content_text,
                 content_hash, char_count, estimated_tokens, chunker_version, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(id) DO UPDATE SET
+                chunk_order = excluded.chunk_order,
+                heading_path_json = excluded.heading_path_json,
+                content_markdown = excluded.content_markdown,
+                content_text = excluded.content_text,
+                content_hash = excluded.content_hash,
+                char_count = excluded.char_count,
+                estimated_tokens = excluded.estimated_tokens,
+                chunker_version = excluded.chunker_version,
+                updated_at = excluded.updated_at",
             params![
                 chunk_id,
                 note_id,
@@ -282,6 +292,10 @@ pub fn sync_note(conn: &mut Connection, note_id: &str) -> DataResult<i64> {
             ],
         )?;
     }
+    transaction.execute(
+        "DELETE FROM knowledge_chunks WHERE note_id = ?1 AND chunk_order < 0",
+        params![note_id],
+    )?;
     transaction.execute(
         "INSERT INTO knowledge_chunk_state (
             note_id, source_hash, chunker_version, chunk_count, status, last_indexed_at, last_error_code

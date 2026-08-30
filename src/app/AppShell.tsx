@@ -4,6 +4,7 @@ import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument
 import * as dataService from "../services/dataService";
 import * as searchService from "../services/searchService";
 import type { SearchNoteResult } from "../services/searchService";
+import type { SemanticSearchResult } from "../services/embeddingService";
 import { ArchivePage } from "../features/archive/ArchivePage";
 import { EditorArea } from "../features/editor/EditorArea";
 import { MainSidebar } from "../features/navigation/MainSidebar";
@@ -21,6 +22,8 @@ import { TooltipPortal } from "../shared/TooltipPortal";
 import { useAppZoom } from "../shared/useAppZoom";
 import { clearLegacyUiSettings, migrateLegacyUiSettings } from "../services/legacyUiSettingsMigration";
 import { DEFAULT_UI_SETTINGS, getUiSettings, normalizeUiSettings, updateUiSettings as persistUiSettings, type UiSettings } from "../services/uiSettingsService";
+import { advancePendingSaveVersion, hasNewerPendingSave, shouldRestoreFailedSave } from "./noteAutosaveCoordinator";
+import { restoreWorkspaceBackup } from "./backupImportCoordinator";
 
 const closeFlushTimeoutMs = 3500;
 
@@ -32,6 +35,10 @@ type WorkspaceStyle = CSSProperties & {
 
 type AppZoomStyle = CSSProperties & {
   "--app-zoom": string;
+  "--app-viewport-height": string;
+  "--app-page-padding-x": string;
+  "--app-page-padding-y": string;
+  "--app-page-sidebar-max": string;
 };
 
 interface PendingNoteSave {
@@ -39,8 +46,10 @@ interface PendingNoteSave {
   contentMarkdown: string;
   contentSidecars: EditorContentSidecarInput[];
   editorDocument: EditorDocument;
+  expectedContentVersion: number;
   noteId: string;
   plainText: string;
+  sequence: number;
   wordCount: number;
 }
 
@@ -87,6 +96,7 @@ export function AppShell() {
   const [activeNoteId, setActiveNoteId] = useState("");
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchNoteResult[]>([]);
+  const [semanticOpenTarget, setSemanticOpenTarget] = useState<SemanticSearchResult | null>(null);
   const [searchStatus, setSearchStatus] = useState<NoteSearchStatus>("idle");
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
@@ -96,12 +106,16 @@ export function AppShell() {
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isNewNoteModalOpen, setIsNewNoteModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
+  const [editorReloadGeneration, setEditorReloadGeneration] = useState(0);
+  const [workspaceReloadGeneration, setWorkspaceReloadGeneration] = useState(0);
   const [toastAction, setToastAction] = useState<ToastAction | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [uiSettings, setUiSettings] = useState<UiSettings>(DEFAULT_UI_SETTINGS);
   const saveTimeoutRef = useRef<number | null>(null);
   const pendingSaveRef = useRef<PendingNoteSave | null>(null);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const saveSequenceRef = useRef(0);
+  const noteContentVersionsRef = useRef(new Map<string, number>());
   const isClosingRef = useRef(false);
   const settingsHydratedRef = useRef(false);
   const settingsSaveTimeoutRef = useRef<number | null>(null);
@@ -121,6 +135,10 @@ export function AppShell() {
   const isSidebarCollapsed = uiSettings.sidebarCollapsed;
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0] ?? null;
+
+  useEffect(() => {
+    notes.forEach((note) => noteContentVersionsRef.current.set(note.id, note.contentVersion));
+  }, [notes]);
 
   const projectOptions = useMemo(() => {
     const projectNames = new Set<string>(projects.map((project) => project.title));
@@ -442,7 +460,11 @@ export function AppShell() {
     await saveUiSettingsNow(uiSettingsRef.current);
   }
 
-  function applyWorkspaceSnapshot(snapshot: dataService.WorkspaceSnapshot) {
+  function applyWorkspaceSnapshot(snapshot: dataService.WorkspaceSnapshot, reloadActiveEditor = false) {
+    if (reloadActiveEditor) {
+      setEditorReloadGeneration((generation) => generation + 1);
+    }
+    noteContentVersionsRef.current = new Map(snapshot.notes.map((note) => [note.id, note.contentVersion]));
     setNotes(snapshot.notes);
     setProjects(snapshot.projects);
     setTags(snapshot.tags);
@@ -452,6 +474,7 @@ export function AppShell() {
   }
 
   function replaceNote(updatedNote: Note) {
+    noteContentVersionsRef.current.set(updatedNote.id, updatedNote.contentVersion);
     setNotes((currentNotes) => sortNotesForDisplay(currentNotes.map((note) => (note.id === updatedNote.id ? updatedNote : note))));
     setSearchRevision((revision) => revision + 1);
   }
@@ -487,17 +510,55 @@ export function AppShell() {
         contentMarkdown: pendingSave.contentMarkdown,
         contentSidecars: pendingSave.contentSidecars,
         editorDocument: pendingSave.editorDocument,
+        expectedContentVersion: pendingSave.expectedContentVersion,
         id: pendingSave.noteId,
         plainText: pendingSave.plainText,
       })
       .then((savedNote) => {
-        replaceNote(savedNote);
-        setSaveStatus("saved");
+        const hasNewerSave = hasNewerPendingSave(
+          pendingSaveRef.current,
+          pendingSave.noteId,
+          pendingSave.sequence,
+        );
+        pendingSaveRef.current = advancePendingSaveVersion(
+          pendingSaveRef.current,
+          pendingSave.noteId,
+          pendingSave.sequence,
+          savedNote.contentVersion,
+        );
+        noteContentVersionsRef.current.set(savedNote.id, savedNote.contentVersion);
+        if (hasNewerSave) {
+          setNotes((currentNotes) =>
+            currentNotes.map((note) =>
+              note.id === savedNote.id
+                ? { ...note, contentVersion: savedNote.contentVersion }
+                : note,
+            ),
+          );
+          setSearchRevision((revision) => revision + 1);
+          setSaveStatus("saving");
+        } else {
+          replaceNote(savedNote);
+          setSaveStatus("saved");
+        }
       })
-      .catch((error) => {
-        pendingSaveRef.current = pendingSave;
+      .catch(async (error) => {
+        if (error instanceof dataService.NotePersistenceError && error.code === "stale_write") {
+          pendingSaveRef.current = null;
+          setSaveStatus("error");
+          try {
+            replaceNote(await dataService.getNote(pendingSave.noteId));
+          } catch {
+            // The persistence error is already safe and actionable for the user.
+          }
+          showToast(error.message);
+          return;
+        }
+        if (shouldRestoreFailedSave(pendingSaveRef.current, pendingSave)) {
+          pendingSaveRef.current = pendingSave;
+        }
         setSaveStatus("error");
-        showToast(`Ошибка сохранения: ${String(error)}`);
+        showToast(error instanceof dataService.NotePersistenceError ? error.message : "Не удалось сохранить заметку");
       })
       .finally(() => {
         if (saveInFlightRef.current === savePromise) {
@@ -570,13 +631,17 @@ export function AppShell() {
     const safeEditorDocument = shouldPreserveFallbackContent && currentNote ? currentNote.editorDocument : editorDocument;
     const safePlainText = shouldPreserveFallbackContent && currentNote ? currentNote.plainText : plainText;
     const safeWordCount = shouldPreserveFallbackContent && currentNote ? currentNote.wordCount : wordCount;
+    const sequence = saveSequenceRef.current + 1;
+    saveSequenceRef.current = sequence;
     pendingSaveRef.current = {
       contentHtml: safeContentHtml,
       contentMarkdown: safeContentMarkdown,
       contentSidecars,
       editorDocument: safeEditorDocument,
+      expectedContentVersion: noteContentVersionsRef.current.get(noteId) ?? currentNote?.contentVersion ?? 0,
       noteId,
       plainText: safePlainText,
+      sequence,
       wordCount: safeWordCount,
     };
 
@@ -665,9 +730,10 @@ export function AppShell() {
     }
   }
 
-  async function openNote(noteId: string) {
+  async function openNote(noteId: string, archivedHint?: boolean) {
     await flushPendingSave();
-    openedArchivedNoteIdRef.current = searchResults.find((result) => result.noteId === noteId)?.archived ? noteId : null;
+    const archivedResult = archivedHint ?? searchResults.find((result) => result.noteId === noteId)?.archived;
+    openedArchivedNoteIdRef.current = archivedResult ? noteId : null;
     if (!notes.some((note) => note.id === noteId)) {
       try {
         const loadedNote = await dataService.getNote(noteId);
@@ -680,6 +746,12 @@ export function AppShell() {
     activateSection("notes");
     setActiveNoteId(noteId);
     setIsFocusMode(false);
+  }
+
+  async function openSemanticResult(result: SemanticSearchResult) {
+    setQuery("");
+    await openNote(result.noteId, result.archived);
+    setSemanticOpenTarget(result);
   }
 
   function renameNote(noteId: string, title: string) {
@@ -763,6 +835,22 @@ export function AppShell() {
       return Promise.reject(new Error("Нет активной заметки"));
     }
     return dataService.storeAttachment(activeNote.id, file, kind, options).then(async (result) => {
+      setNotes((currentNotes) =>
+        currentNotes.map((note) => (note.id === activeNote.id ? { ...note, attachments: [...note.attachments, result.attachment] } : note)),
+      );
+      await refreshSecondaryData();
+      return result;
+    });
+  }
+
+  function pickAndStoreAttachment(kind: "file" | "image") {
+    if (!activeNote) {
+      return Promise.reject(new Error("Нет активной заметки"));
+    }
+    return dataService.pickAndStoreAttachment(activeNote.id, kind).then(async (result) => {
+      if (!result) {
+        return null;
+      }
       setNotes((currentNotes) =>
         currentNotes.map((note) => (note.id === activeNote.id ? { ...note, attachments: [...note.attachments, result.attachment] } : note)),
       );
@@ -904,14 +992,24 @@ export function AppShell() {
       .catch((error) => showToast(`Не удалось создать резервную копию: ${String(error)}`));
   }
 
-  function importBackup(file: File) {
-    void dataService
-      .importBackup(file)
-      .then((snapshot) => {
-        applyWorkspaceSnapshot(snapshot);
-        showToast("Резервная копия импортирована");
-      })
-      .catch((error) => showToast(`Не удалось импортировать резервную копию: ${String(error)}`));
+  function previewBackup(file: File) {
+    return dataService.previewBackup(file);
+  }
+
+  async function importBackup(file: File) {
+    const result = await restoreWorkspaceBackup<dataService.WorkspaceSnapshot, dataService.ImportBackupResult>({
+      applyWorkspace: (workspace) => applyWorkspaceSnapshot(workspace, true),
+      file,
+      flushPendingSave,
+      importBackup: dataService.importBackup,
+      invalidatePendingSaves: () => {
+        pendingSaveRef.current = null;
+        saveSequenceRef.current += 1;
+      },
+      refreshExternalViews: () => setWorkspaceReloadGeneration((generation) => generation + 1),
+    });
+    showToast("Резервная копия восстановлена");
+    return result;
   }
 
   function toggleFocusMode() {
@@ -956,8 +1054,16 @@ export function AppShell() {
   if (activeSection === "rag") {
     return renderAppFrame(
       <RagChatPage
+        dataReloadGeneration={workspaceReloadGeneration}
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
+        onOpenModelSettings={() => {
+          navigate("settings");
+          window.setTimeout(() => {
+            document.getElementById("semantic-search-settings")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 80);
+        }}
+        onOpenSemanticResult={(result) => void openSemanticResult(result)}
         onRagConversationReset={() => updateUiSettings({ ragConversationWidth: 280 })}
         onRagConversationResize={(deltaX) =>
           updateUiSettings((currentSettings) => ({
@@ -1029,6 +1135,7 @@ export function AppShell() {
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
         onBackupCreate={createBackup}
+        onBackupPreview={previewBackup}
         onExportCurrentNote={exportCurrentNoteZip}
         onExportCurrentProject={exportCurrentProjectZip}
         onImportBackup={importBackup}
@@ -1100,9 +1207,10 @@ export function AppShell() {
 
         {activeNote ? (
           <EditorArea
+            documentReloadGeneration={editorReloadGeneration}
             isFocusMode={isFocusMode}
             note={activeNote}
-            notes={notes}
+            semanticOpenTarget={semanticOpenTarget}
             onArchiveNote={(noteId) => removeNote(noteId, "archive")}
             onDeleteNote={(noteId) => removeNote(noteId, "delete")}
             onDuplicateNote={duplicateNote}
@@ -1127,6 +1235,7 @@ export function AppShell() {
               setIsChatOpen(false);
               activateSection("settings");
             }}
+            onPickAndStoreAttachment={pickAndStoreAttachment}
             onRenameNote={renameNote}
             onRevealAttachment={dataService.revealAttachment}
             onSelectionTextChange={setEditorSelectionText}
@@ -1176,8 +1285,13 @@ interface AppFrameProps {
 }
 
 function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFrameProps) {
+  const zoomFactor = zoomPercent / 100;
   const zoomStyle: AppZoomStyle = {
-    "--app-zoom": String(zoomPercent / 100),
+    "--app-zoom": String(zoomFactor),
+    "--app-viewport-height": `${100 / zoomFactor}vh`,
+    "--app-page-padding-x": `${36 / zoomFactor}px`,
+    "--app-page-padding-y": `${28 / zoomFactor}px`,
+    "--app-page-sidebar-max": zoomPercent > 100 ? `${250 / zoomFactor}px` : "10000px",
   };
 
   return (

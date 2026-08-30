@@ -361,6 +361,14 @@ fn determine_match_source(
 
 pub fn rebuild_search_index(conn: &mut Connection) -> DataResult<RebuildSearchIndexResultDto> {
     let transaction = conn.transaction()?;
+    let indexed_notes = rebuild_search_index_transaction(&transaction)?;
+    transaction.commit()?;
+    Ok(RebuildSearchIndexResultDto { indexed_notes })
+}
+
+pub(crate) fn rebuild_search_index_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+) -> DataResult<i64> {
     transaction.execute("DELETE FROM note_search_fts", [])?;
     transaction.execute(
         "INSERT INTO note_search_fts (note_id, title, plain_text, tags_text, project_text)
@@ -377,10 +385,9 @@ pub fn rebuild_search_index(conn: &mut Connection) -> DataResult<RebuildSearchIn
          WHERE n.deleted_at IS NULL",
         [],
     )?;
-    let indexed_notes =
-        transaction.query_row("SELECT COUNT(*) FROM note_search_fts", [], |row| row.get(0))?;
-    transaction.commit()?;
-    Ok(RebuildSearchIndexResultDto { indexed_notes })
+    transaction
+        .query_row("SELECT COUNT(*) FROM note_search_fts", [], |row| row.get(0))
+        .map_err(Into::into)
 }
 
 pub fn get_knowledge_documents(

@@ -60,9 +60,10 @@ export function NoteListPanel({
       setSelectedSearchIndex((currentIndex) => getNextSearchResultIndex(currentIndex, searchResults.length, event.key));
       return;
     }
-    if (event.key === "Enter" && searchResults[selectedSearchIndex]) {
+    const selectedResult = searchResults[selectedSearchIndex];
+    if (event.key === "Enter" && selectedResult) {
       event.preventDefault();
-      onSelectNote(searchResults[selectedSearchIndex].noteId);
+      onSelectNote(selectedResult.noteId);
     }
   }
 

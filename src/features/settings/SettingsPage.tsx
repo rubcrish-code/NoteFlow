@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { AppLanguage, AppSection, SettingsPanel, ThemeMode } from "../../app/types";
+import type { BackupPreview, ImportBackupResult } from "../../services/dataService";
 import { Icon } from "../../shared/Icon";
 import { PageShell } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
@@ -14,6 +15,17 @@ import {
   shouldClearLlmNetworkOperationForTarget,
 } from "./llmNetworkOperation";
 import type { LlmNetworkAction, LlmNetworkOperation } from "./llmNetworkOperation";
+import { ModelStatusBadge, ProviderTypeSelector, SettingsModalShell, SettingsSectionHeader } from "./ModelSettingsUi";
+import { SemanticSearchSettings } from "./SemanticSearchSettings";
+import {
+  formatBackupDate,
+  getBackupPreviewErrorMessage,
+  getBackupRestoreErrorMessage,
+  getBackupSummaryRows,
+  getLegacyBackupHistoryNotice,
+  initialBackupImportState,
+  reduceBackupImportState,
+} from "./backupImportFlow";
 
 interface SettingsPageProps {
   appZoomPercent: number;
@@ -22,9 +34,10 @@ interface SettingsPageProps {
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
   onBackupCreate: () => void;
+  onBackupPreview: (file: File) => Promise<BackupPreview>;
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
-  onImportBackup: (file: File) => void;
+  onImportBackup: (file: File) => Promise<ImportBackupResult>;
   onLanguageChange: (language: AppLanguage) => void;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
@@ -46,7 +59,7 @@ const providerPresets = [
     id: "openai",
     label: "OpenAI",
     detail: "Публичный API с ключом",
-    icon: "◎",
+    icon: <Icon aria-hidden="true" name="bulb" />,
     url: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     modelsEndpoint: "/models",
@@ -57,7 +70,7 @@ const providerPresets = [
     id: "ollama",
     label: "Ollama",
     detail: "Локально на компьютере",
-    icon: "◉",
+    icon: <Icon aria-hidden="true" name="gear" />,
     url: "http://127.0.0.1:11434",
     model: "qwen3-4b-local:latest",
     modelsEndpoint: "/api/tags",
@@ -68,7 +81,7 @@ const providerPresets = [
     id: "lmstudio",
     label: "LM Studio",
     detail: "Локальный OpenAI API",
-    icon: "▣",
+    icon: <Icon aria-hidden="true" name="chat" />,
     url: "http://localhost:1234/v1",
     model: "local-model",
     modelsEndpoint: "/models",
@@ -79,7 +92,7 @@ const providerPresets = [
     id: "custom",
     label: "OpenAI-compatible",
     detail: "Свой сервер или другой API",
-    icon: "</>",
+    icon: <Icon aria-hidden="true" name="code" />,
     url: "http://localhost:8000/v1",
     model: "custom-model",
     modelsEndpoint: "/models",
@@ -117,6 +130,7 @@ export function SettingsPage({
   language,
   theme,
   onBackupCreate,
+  onBackupPreview,
   onExportCurrentNote,
   onExportCurrentProject,
   onImportBackup,
@@ -160,6 +174,7 @@ export function SettingsPage({
           {activePanel === "data" ? (
             <DataSettings
               onBackupCreate={onBackupCreate}
+              onBackupPreview={onBackupPreview}
               onExportCurrentNote={onExportCurrentNote}
               onExportCurrentProject={onExportCurrentProject}
               onImportBackup={onImportBackup}
@@ -320,12 +335,7 @@ function validateDraftForm(form: ProviderFormState, action: "listModels" | "save
 }
 
 function LoadingInline({ label }: { label: string }) {
-  return (
-    <span className="loading-inline">
-      <span aria-hidden="true" className="button-spinner" />
-      {label}
-    </span>
-  );
+  return <span className="loading-inline">{label}</span>;
 }
 
 function ModelsSettings({ onToast }: ModelsSettingsProps) {
@@ -343,6 +353,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const [message, setMessage] = useState("Подключения пока не проверялись.");
   const [messageTone, setMessageTone] = useState<MessageTone>("neutral");
   const [showSecret, setShowSecret] = useState(false);
+  const [providerDeleteRequest, setProviderDeleteRequest] = useState<{ id: string; name: string } | null>(null);
   const latestNetworkRequestIdRef = useRef(0);
   const currentFormRef = useRef(form);
   const draftIdRef = useRef(draftId);
@@ -354,7 +365,6 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const modalInitialFocusRef = useRef<HTMLButtonElement>(null);
 
   const selectedProvider = useMemo(() => providers.find((provider) => provider.id === selectedProviderId), [providers, selectedProviderId]);
-  const activePreset = getProviderPreset(form.providerType);
   const currentTargetId = draftTargetId(form, draftId);
   const visibleNetworkAction = isProviderModalOpen ? getVisibleLlmNetworkAction(networkOperation, currentTargetId) : null;
   const checkingProviderId = networkOperation?.action === "testConnection" ? networkOperation.targetId : undefined;
@@ -366,7 +376,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const hasSavedApiKey = Boolean(selectedProvider && selectedProvider.id === form.id && selectedProvider.hasApiKey);
   const keyLabel = selectedProvider?.hasApiKey ? "Ключ сохранён" : "Ключ не задан";
   const privacyNotice = selectedProvider?.privacyNotice ?? (isLocalEndpoint(form.baseUrl) ? "Локальный endpoint: данные остаются на устройстве, если сервер действительно запущен локально." : "Внешний endpoint: при использовании модели выбранный контекст будет отправлен провайдеру.");
-  const modalTitle = draftMode === "edit" ? "Изменить подключение" : "Добавить подключение";
+  const modalTitle = draftMode === "edit" ? "Изменить модель" : "Добавить модель";
   const activeOperationMessage = isLoadingProviders
     ? "Загружаем подключения…"
     : isTestingConnection
@@ -907,14 +917,15 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       onToast(text);
     } finally {
       setStorageAction(null);
+      setProviderDeleteRequest(null);
     }
   }
 
-  async function handleDeleteProvider() {
+  function handleDeleteProvider() {
     if (!form.id) {
       return;
     }
-    await deleteProvider(form.id);
+    setProviderDeleteRequest({ id: form.id, name: form.name });
   }
 
   async function setDefaultProvider(providerId: string) {
@@ -968,28 +979,28 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   }
 
   return (
-    <div>
+    <div className="model-settings-page">
       <div className="settings-title">Модели ИИ</div>
-      <div className="settings-subtitle">Подключите локальную или облачную модель для работы с заметками.</div>
-      <div className="settings-card llm-provider-list-card">
-        <div className="settings-section-head">
-          <div>
-            <b>Подключения</b>
-            <div className="field-help">Метаданные хранятся в SQLite, API key — только в защищённом хранилище ОС.</div>
-          </div>
-          {providers.length > 0 ? (
+      <div className="settings-subtitle">Подключайте модели для генерации текста и смыслового поиска по базе заметок.</div>
+      <section className="model-settings-section">
+        <SettingsSectionHeader
+          action={providers.length > 0 ? (
             <button className="primary-btn compact" disabled={isLoadingProviders || storageAction !== null} onClick={() => openAddProvider()} type="button">
-              Добавить подключение
+              Добавить модель
             </button>
           ) : null}
-        </div>
+          description="Генерируют и редактируют текст, отвечают на вопросы и используются в ИИ-помощнике."
+          info="Эти модели создают текст: отвечают на вопросы, редактируют заметки, сокращают, объясняют и выполняют другие действия ИИ-помощника. API key хранится только в защищённом хранилище операционной системы."
+          title="Модели для ИИ-помощника"
+        />
+        <div className="settings-card llm-provider-list-card model-settings-card">
         {providers.length === 0 && !isLoadingProviders ? (
-          <div className="llm-empty-state-card">
+          <div className="llm-empty-state-card model-empty-state">
             <div className="llm-empty-icon" aria-hidden="true">✦</div>
-            <b>Подключений пока нет</b>
-            <p>Добавьте Ollama, LM Studio, OpenAI или совместимый API.</p>
+            <b>Модель ИИ пока не подключена</b>
+            <p>Подключите модель для работы ИИ-помощника и чата.</p>
             <button className="primary-btn" onClick={() => openAddProvider()} type="button">
-              Добавить подключение
+              Добавить модель
             </button>
           </div>
         ) : null}
@@ -1000,8 +1011,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
               const providerTargetId = `provider:${provider.id}`;
               const isProviderTesting = networkOperation?.action === "testConnection" && networkOperation.targetId === providerTargetId;
               return (
-                <article className="llm-provider-card" key={provider.id}>
-                  <div className="llm-provider-card-main">
+                <article className="llm-provider-card model-profile-card" key={provider.id}>
+                  <div className="llm-provider-card-main model-profile-head">
                     <span className="provider-icon">{preset.icon}</span>
                     <div>
                       <div className="llm-provider-card-title">
@@ -1010,15 +1021,19 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                       </div>
                       <small>{preset.label} · {provider.chatModel || "модель не выбрана"}</small>
                     </div>
-                    <span className={`status-pill ${provider.lastStatus === "success" ? "ok" : provider.lastStatus === "error" ? "error" : ""}`}>{isProviderTesting ? "Проверяем…" : statusLabel(provider.lastStatus)}</span>
+                    <ModelStatusBadge
+                      busy={isProviderTesting}
+                      label={isProviderTesting ? "Проверяем" : statusLabel(provider.lastStatus)}
+                      tone={provider.lastStatus === "success" ? "success" : provider.lastStatus === "error" ? "error" : "neutral"}
+                    />
                   </div>
                   <div className="llm-provider-card-meta">
                     <span>{provider.baseUrl}</span>
                     {provider.statusMessage ? <span>{provider.statusMessage}</span> : null}
                   </div>
-                  <div className="llm-provider-card-actions">
+                  <div className="llm-provider-card-actions model-profile-actions">
                     <button className="secondary-btn compact" disabled={isProviderTesting || storageAction !== null} onClick={() => void handleCheckSavedProvider(provider)} type="button">
-                      {isProviderTesting ? <LoadingInline label="Проверяем…" /> : "Проверить"}
+                      {isProviderTesting ? <LoadingInline label="Проверяем…" /> : "Проверить подключение"}
                     </button>
                     <button className="secondary-btn compact" disabled={storageAction !== null} onClick={() => openEditProvider(provider)} type="button">
                       Изменить
@@ -1026,9 +1041,12 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                     <button className="secondary-btn compact" disabled={provider.isDefault || storageAction === "default"} onClick={() => void setDefaultProvider(provider.id)} type="button">
                       {storageAction === "default" ? <LoadingInline label="Назначение…" /> : "Сделать основным"}
                     </button>
-                    <button className="danger-btn compact" disabled={storageAction === "delete"} onClick={() => void deleteProvider(provider.id)} type="button">
+                    <button className="danger-btn compact" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest({ id: provider.id, name: provider.name })} type="button">
                       {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить"}
                     </button>
+                  </div>
+                  <div aria-live="polite" className={`model-card-operation ${isProviderTesting ? "visible" : ""}`}>
+                    {isProviderTesting ? "Проверяем подключение…" : "\u00A0"}
                   </div>
                 </article>
               );
@@ -1036,36 +1054,53 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
           </div>
         ) : null}
         {shouldShowConnectionNote ? <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div> : null}
+        </div>
+      </section>
+      <div id="semantic-search-settings">
+        <SemanticSearchSettings onToast={onToast} />
       </div>
-      {isProviderModalOpen ? (
-        <div className="modal-backdrop llm-provider-modal-backdrop" onMouseDown={(event) => event.currentTarget === event.target && closeProviderModal()} role="presentation">
-          <section aria-labelledby="llm-provider-modal-title" aria-modal="true" className="llm-provider-modal" role="dialog">
-            <div className="llm-provider-modal-head">
-              <div>
-                <span className="llm-modal-eyebrow">{draftMode === "edit" ? "Редактирование" : "Новое подключение"}</span>
-                <h2 id="llm-provider-modal-title">{modalTitle}</h2>
-                <p>{privacyNotice}</p>
+      {isProviderModalOpen && !providerDeleteRequest ? (
+        <SettingsModalShell
+          className="llm-provider-modal"
+          description={privacyNotice}
+          eyebrow={draftMode === "edit" ? "Редактирование" : "Новая модель"}
+          footer={(
+            <div className="settings-modal-footer-layout">
+              <div className="settings-modal-footer-leading">
+                {form.id ? (
+                  <button className="danger-btn" disabled={storageAction === "delete"} onClick={handleDeleteProvider} type="button">
+                    {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить модель"}
+                  </button>
+                ) : null}
               </div>
-              <button aria-label="Закрыть окно подключения" className="llm-modal-close" onClick={closeProviderModal} type="button">×</button>
-            </div>
-            <div className="provider-presets llm-provider-type-grid">
-              {providerPresets.map((provider, index) => (
-                <button
-                  className={`provider-preset ${activePreset.id === provider.id ? "active" : ""}`}
-                  key={provider.id}
-                  onClick={() => {
-                    applyPreset(provider);
-                    onToast(`Выбран провайдер: ${provider.label}`);
-                  }}
-                  ref={index === 0 ? modalInitialFocusRef : undefined}
-                  type="button"
-                >
-                  <span className="provider-icon">{provider.icon}</span>
-                  <b>{provider.label}</b>
-                  <small>{provider.detail}</small>
+              <div className="settings-modal-footer-actions">
+                <button className="ghost-btn" disabled={storageAction !== null} onClick={handleCancelDraft} type="button">Отмена</button>
+                <button className="secondary-btn" disabled={isTestingConnection} onClick={() => void handleTestConnection()} type="button">
+                  {isTestingConnection ? <LoadingInline label="Проверяем…" /> : "Проверить подключение"}
                 </button>
-              ))}
+                <button className="primary-btn" disabled={storageAction === "save"} onClick={() => void handleSave()} type="button">
+                  {storageAction === "save" ? <LoadingInline label="Сохранение…" /> : draftMode === "edit" ? "Сохранить изменения" : "Сохранить модель"}
+                </button>
+              </div>
             </div>
+          )}
+          onClose={closeProviderModal}
+          size="wide"
+          status={shouldShowConnectionNote ? <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div> : null}
+          title={modalTitle}
+          titleId="llm-provider-modal-title"
+        >
+            <ProviderTypeSelector
+              ariaLabel="Тип подключения модели ИИ"
+              initialFocusRef={modalInitialFocusRef}
+              onChange={(providerType) => {
+                const provider = getProviderPreset(providerType);
+                applyPreset(provider);
+                onToast(`Выбран провайдер: ${provider.label}`);
+              }}
+              options={providerPresets}
+              value={form.providerType}
+            />
             <div className="form-grid llm-provider-modal-form">
               <label className="field full">
                 Название подключения
@@ -1146,10 +1181,6 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                     <span className="field-help">Стандартный OpenAI endpoint обычно не нужно менять.</span>
                   </label>
                 ) : null}
-                <label className="field full">
-                  Embedding-модель
-                  <input list="llm-chat-model-options" onChange={(event) => updateDraft({ embeddingModel: event.currentTarget.value })} placeholder="Необязательно, для RAG" value={form.embeddingModel} />
-                </label>
                 <label className="field">
                   Тайм-аут, сек.
                   <input max="600" min="5" onChange={(event) => updateDraft({ timeoutSec: event.currentTarget.value })} type="number" value={form.timeoutSec} />
@@ -1188,29 +1219,26 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                 </label>
               </div>
             </details>
-            <div className="llm-action-bar">
-              <div className="llm-danger-actions">
-                {form.id ? (
-                  <button className="danger-btn" disabled={storageAction === "delete"} onClick={() => void handleDeleteProvider()} type="button">
-                    {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить подключение"}
-                  </button>
-                ) : null}
-                <button className="secondary-btn" disabled={storageAction !== null} onClick={handleCancelDraft} type="button">
-                  Отменить
-                </button>
-              </div>
-              <div className="llm-main-actions">
-                <button className="secondary-btn" disabled={isTestingConnection} onClick={() => void handleTestConnection()} type="button">
-                  {isTestingConnection ? <LoadingInline label="Проверяем…" /> : form.providerType === "ollama" ? "Проверить Ollama" : "Проверить"}
-                </button>
-                <button className="primary-btn" disabled={storageAction === "save"} onClick={() => void handleSave()} type="button">
-                  {storageAction === "save" ? <LoadingInline label="Сохранение…" /> : draftMode === "edit" ? "Сохранить изменения" : "Сохранить подключение"}
-                </button>
-              </div>
+        </SettingsModalShell>
+      ) : null}
+      {providerDeleteRequest ? (
+        <SettingsModalShell
+          description={`Модель «${providerDeleteRequest.name}» и её настройки будут удалены. Это действие не удаляет заметки.`}
+          footer={(
+            <div className="settings-modal-footer-actions">
+              <button className="ghost-btn" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest(null)} type="button">Отмена</button>
+              <button className="danger-btn" disabled={storageAction === "delete"} onClick={() => void deleteProvider(providerDeleteRequest.id)} type="button">
+                {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить модель"}
+              </button>
             </div>
-            <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div>
-          </section>
-        </div>
+          )}
+          onClose={() => setProviderDeleteRequest(null)}
+          size="compact"
+          title="Удалить модель?"
+          titleId="llm-provider-delete-title"
+        >
+          <div className="settings-confirm-note">Сохранённый API key будет удалён из защищённого хранилища операционной системы.</div>
+        </SettingsModalShell>
       ) : null}
     </div>
   );
@@ -1316,9 +1344,10 @@ function LanguageSettings({ language, onLanguageChange, onToast }: LanguageSetti
 
 interface DataSettingsProps {
   onBackupCreate: () => void;
+  onBackupPreview: (file: File) => Promise<BackupPreview>;
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
-  onImportBackup: (file: File) => void;
+  onImportBackup: (file: File) => Promise<ImportBackupResult>;
   onToast: (message: string) => void;
 }
 
@@ -1348,14 +1377,56 @@ export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()
     : new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
-function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProject, onImportBackup, onToast }: DataSettingsProps) {
+function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, onExportCurrentProject, onImportBackup, onToast }: DataSettingsProps) {
   const importInputRef = useRef<HTMLInputElement>(null);
+  const importRequestIdRef = useRef(0);
   const knowledgeMoreRef = useRef<HTMLDetailsElement>(null);
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeIndexStatus | null>(null);
   const [knowledgeOperation, setKnowledgeOperation] = useState<KnowledgeIndexOperation | null>(null);
   const [knowledgeMessage, setKnowledgeMessage] = useState("Загружаем состояние базы знаний…");
   const [knowledgeHasError, setKnowledgeHasError] = useState(false);
   const [isRebuildConfirmationOpen, setIsRebuildConfirmationOpen] = useState(false);
+  const [selectedBackupFile, setSelectedBackupFile] = useState<File | null>(null);
+  const [importState, dispatchImport] = useReducer(reduceBackupImportState, initialBackupImportState);
+
+  async function prepareBackupImport(file: File) {
+    const requestId = importRequestIdRef.current + 1;
+    importRequestIdRef.current = requestId;
+    setSelectedBackupFile(file);
+    dispatchImport({ type: "previewStarted", requestId });
+    try {
+      const preview = await onBackupPreview(file);
+      dispatchImport({ type: "previewReady", preview, requestId });
+    } catch {
+      dispatchImport({
+        type: "previewFailed",
+        message: getBackupPreviewErrorMessage(),
+        requestId,
+      });
+    }
+  }
+
+  function closeBackupImport() {
+    if (importState.phase === "restoring") return;
+    importRequestIdRef.current += 1;
+    setSelectedBackupFile(null);
+    dispatchImport({ type: "close" });
+  }
+
+  async function restoreSelectedBackup() {
+    if (!selectedBackupFile || (importState.phase !== "ready" && importState.phase !== "error") || !importState.preview) return;
+    dispatchImport({ type: "restoreStarted" });
+    try {
+      const result = await onImportBackup(selectedBackupFile);
+      dispatchImport({ type: "restoreSucceeded", result });
+    } catch (error) {
+      const appliedButNotReloaded = String(error).includes("интерфейс не удалось обновить");
+      dispatchImport({
+        type: appliedButNotReloaded ? "restoreAppliedButReloadFailed" : "restoreFailed",
+        message: getBackupRestoreErrorMessage(appliedButNotReloaded),
+      });
+    }
+  }
 
   useEffect(() => {
     let isActive = true;
@@ -1492,9 +1563,14 @@ function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProj
             <b>Импорт и восстановление</b>
             <span>Резервная копия NoteFlow в формате ZIP</span>
           </div>
-          <button className="export-action secondary" onClick={() => importInputRef.current?.click()} type="button">
-            <Icon name="attach" />
-            Импорт резервной копии
+          <button
+            className="export-action secondary"
+            disabled={importState.phase === "previewing" || importState.phase === "restoring"}
+            onClick={() => importInputRef.current?.click()}
+            type="button"
+          >
+            {importState.phase === "previewing" ? <span aria-hidden="true" className="button-spinner" /> : <Icon name="attach" />}
+            {importState.phase === "previewing" ? "Проверяем копию…" : "Импорт резервной копии"}
           </button>
         </div>
         <input
@@ -1503,7 +1579,7 @@ function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProj
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             if (file) {
-              onImportBackup(file);
+              void prepareBackupImport(file);
             }
             event.currentTarget.value = "";
           }}
@@ -1511,6 +1587,101 @@ function DataSettings({ onBackupCreate, onExportCurrentNote, onExportCurrentProj
           type="file"
         />
       </div>
+      {importState.phase !== "closed" ? (
+        <SettingsModalShell
+          className="backup-import-modal"
+          closeDisabled={importState.phase === "restoring"}
+          description={importState.phase === "success" || importState.phase === "applied"
+            ? "Данные профиля заменены содержимым выбранной резервной копии."
+            : "Проверьте содержимое перед восстановлением данных профиля."}
+          footer={(
+            <div className="settings-modal-footer-layout">
+              <div className="settings-modal-footer-leading" />
+              <div className="settings-modal-footer-actions">
+                {importState.phase === "success" || importState.phase === "applied" ? (
+                  <button className="primary-btn" onClick={closeBackupImport} type="button">Закрыть</button>
+                ) : (
+                  <>
+                    <button className="secondary-btn" disabled={importState.phase === "restoring"} onClick={closeBackupImport} type="button">Отмена</button>
+                    {importState.preview ? (
+                      <button
+                        className="primary-btn"
+                        disabled={importState.phase === "restoring" || importState.phase === "previewing"}
+                        onClick={() => void restoreSelectedBackup()}
+                        type="button"
+                      >
+                        {importState.phase === "restoring" ? <span aria-hidden="true" className="button-spinner" /> : null}
+                        {importState.phase === "restoring" ? "Восстанавливаем…" : importState.phase === "error" ? "Попробовать снова" : "Восстановить"}
+                      </button>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          onClose={closeBackupImport}
+          size="compact"
+          title={importState.phase === "success" || importState.phase === "applied" ? "Резервная копия восстановлена" : "Восстановить резервную копию?"}
+          titleId="backup-import-title"
+        >
+          {importState.phase === "previewing" ? (
+            <div aria-live="polite" className="backup-import-loading">
+              <span aria-hidden="true" className="button-spinner" />
+              <span>Проверяем файл и вложения. Текущие данные пока не изменяются.</span>
+            </div>
+          ) : null}
+          {importState.preview && importState.phase !== "success" && importState.phase !== "applied" ? (
+            <div className="backup-import-preview">
+              <div className="backup-import-meta">
+                <b>Резервная копия от {formatBackupDate(importState.preview.exportedAt)}</b>
+                <span>{importState.preview.appVersion ? `Создана в NoteFlow ${importState.preview.appVersion}` : `Формат резервной копии ${importState.preview.formatVersion}`}</span>
+              </div>
+              <div className="backup-import-counts">
+                {getBackupSummaryRows(importState.preview.contents).map(([label, count]) => (
+                  <div key={label}><span>{label}</span><b>{count}</b></div>
+                ))}
+              </div>
+              {getLegacyBackupHistoryNotice(importState.preview) ? (
+                <div className="backup-import-notice warning">{getLegacyBackupHistoryNotice(importState.preview)}</div>
+              ) : null}
+              {importState.preview.missingAttachmentFiles > 0 ? (
+                <div className="backup-import-notice warning">
+                  В старой резервной копии недоступны некоторые файлы вложений: {importState.preview.missingAttachmentFiles}.
+                </div>
+              ) : null}
+              <div className="backup-import-notice danger">
+                Восстановление заменит заметки, проекты, теги, вложения и поддерживаемую историю чатов данными из резервной копии.
+              </div>
+            </div>
+          ) : null}
+          {importState.phase === "restoring" ? (
+            <div aria-live="polite" className="backup-import-loading">
+              <span aria-hidden="true" className="button-spinner" />
+              <span>Восстанавливаем данные и проверяем поиск. Не закрывайте NoteFlow.</span>
+            </div>
+          ) : null}
+          {importState.phase === "error" ? (
+            <div aria-live="assertive" className="backup-import-error" role="alert">{importState.errorMessage}</div>
+          ) : null}
+          {importState.phase === "applied" ? (
+            <div aria-live="assertive" className="backup-import-error" role="alert">{importState.errorMessage}</div>
+          ) : null}
+          {importState.phase === "success" && importState.result ? (
+            <div className="backup-import-result">
+              <div className="backup-import-counts">
+                {getBackupSummaryRows(importState.result.contents).map(([label, count]) => (
+                  <div key={label}><span>{label}</span><b>{count}</b></div>
+                ))}
+              </div>
+              <div className="backup-import-notice success">
+                {importState.result.indexesUpdating
+                  ? "Заметки и чаты восстановлены. Базу знаний нужно обновить в этом разделе."
+                  : "Заметки, чаты, поиск и база знаний находятся в согласованном состоянии."}
+              </div>
+            </div>
+          ) : null}
+        </SettingsModalShell>
+      ) : null}
       {isRebuildConfirmationOpen ? (
         <div className="confirm-backdrop" onMouseDown={(event) => event.currentTarget === event.target && setIsRebuildConfirmationOpen(false)} role="presentation">
           <div aria-labelledby="knowledge-rebuild-title" aria-modal="true" className="confirm-dialog" role="dialog">

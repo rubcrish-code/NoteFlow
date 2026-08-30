@@ -25,6 +25,8 @@ export interface NoteTag {
 }
 
 export interface NoteAttachment {
+  assetUri?: string;
+  blobId?: string;
   createdAt: string;
   id: string;
   kind: "file" | "image";
@@ -34,7 +36,6 @@ export interface NoteAttachment {
   originalAttachmentId?: string;
   editMetadata?: Record<string, unknown>;
   sizeBytes: number;
-  storageRelPath: string;
 }
 
 export interface EditorContentSidecar {
@@ -57,6 +58,7 @@ export interface Note {
   attachments: NoteAttachment[];
   contentHtml: string;
   contentMarkdown: string;
+  contentVersion: number;
   contentSidecars: NoteContentSidecar[];
   id: string;
   editorDocument: EditorDocument;

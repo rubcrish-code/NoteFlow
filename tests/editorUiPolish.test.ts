@@ -207,11 +207,12 @@ describe("editor UI polish contract", () => {
     assert.match(nodeView, /getAttachmentTypeLabel/);
     assert.match(nodeView, /Файл недоступен/);
     assert.match(editorArea, /InteractiveFileAttachment\.configure/);
-    assert.match(dataService, /invoke<string>\("resolve_attachment_path", \{ attachmentId \}\)/);
-    assert.match(dataService, /openPath\(path\)/);
-    assert.match(dataService, /revealItemInDir\(path\)/);
-    assert.match(backend, /fn resolve_attachment_path/);
-    assert.match(backend, /path\.is_file\(\)/);
+    assert.match(dataService, /invoke<void>\("open_attachment", \{ attachmentId \}\)/);
+    assert.match(dataService, /invoke<void>\("reveal_attachment", \{ attachmentId \}\)/);
+    assert.doesNotMatch(dataService, /openPath\(path\)/);
+    assert.match(backend, /fn open_attachment/);
+    assert.match(backend, /fn reveal_attachment/);
+    assert.match(backend, /materialize_attachment_view/);
   });
 
   it("uses Russian formula labels without exposing the LaTeX term", () => {

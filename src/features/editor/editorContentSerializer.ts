@@ -8,6 +8,7 @@ import {
   type EditorMark,
   type EditorNode,
 } from "./markdownService";
+import { normalizeDocumentAssetUris } from "./assetUri";
 
 export const LEGACY_TIPTAP_SIDECAR_KIND = "legacy_tiptap_json";
 export const EDITOR_NODE_ATTRS_SIDECAR_KIND = "editor_node_attrs_v1";
@@ -115,7 +116,7 @@ export function buildEditorDocumentFromStoredNoteContent(input: StoredEditorCont
 }
 
 export function serializeEditorDocumentForStorage(editorDocument: EditorDocument, contentHtml?: string): EditorContentSerializeResult {
-  const normalizedDocument = normalizeEditorDocument(editorDocument);
+  const normalizedDocument = normalizeDocumentAssetUris(normalizeEditorDocument(editorDocument));
   const plainText = tiptapJsonToPlainText(normalizedDocument);
   return {
     contentHtml: contentHtml ?? tiptapJsonToHtml(normalizedDocument),
