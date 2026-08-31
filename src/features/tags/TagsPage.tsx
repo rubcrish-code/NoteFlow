@@ -23,6 +23,7 @@ interface ColorEditorState {
     top: number;
   };
   tagId: string;
+  trigger: HTMLButtonElement;
 }
 
 function getTagHex(tag: TagRow) {
@@ -53,7 +54,7 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
   }, [query, tags]);
 
   function openColorPopover(tagId: string, event: ReactMouseEvent<HTMLButtonElement>) {
-    setColorEditor({ tagId, position: getPopoverPosition(event.currentTarget.getBoundingClientRect()) });
+    setColorEditor({ tagId, position: getPopoverPosition(event.currentTarget.getBoundingClientRect()), trigger: event.currentTarget });
   }
 
   function applyTagColor(hex: string) {
@@ -63,6 +64,12 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
 
     const preset = tagColorPalette.find((paletteItem) => paletteItem.hex.toUpperCase() === hex.toUpperCase());
     onUpdateTagColor(colorEditor.tagId, preset?.color ?? "blue", hex);
+    colorEditor.trigger.focus();
+    setColorEditor(null);
+  }
+
+  function closeColorPopover() {
+    colorEditor?.trigger.focus();
     setColorEditor(null);
   }
 
@@ -95,8 +102,9 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
           <div className="page-title">Теги</div>
           <div className="page-subtitle">Создавайте, переименовывайте, объединяйте и удаляйте теги. Нажмите на тег, чтобы увидеть связанные заметки.</div>
         </div>
-        <button className="new-btn tags-new" onClick={onCreateTag} type="button">
-          + Новый тег
+        <button className="primary-btn tags-new" onClick={onCreateTag} type="button">
+          <Icon name="plus" />
+          Новый тег
         </button>
       </div>
 
@@ -116,21 +124,21 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
               </div>
             </div>
             <div className="tag-row-actions">
-              <button className="tag-action primary" onClick={() => onOpenTag(tag.name)} type="button">
+              <button className="tag-action primary primary-btn" onClick={() => onOpenTag(tag.name)} type="button">
                 Открыть
               </button>
-            <button className="tag-action secondary" onClick={() => renameTag(tag)} type="button">
-              Переименовать
-            </button>
-            <button className="tag-action secondary" onClick={(event) => openColorPopover(tag.id, event)} type="button">
-              Цвет
-            </button>
-            <button className="tag-action secondary" onClick={() => mergeTag(tag)} type="button">
-              Объединить
-            </button>
-            <button className="tag-action danger" onClick={() => onDeleteTag(tag.id)} type="button">
-              Удалить
-            </button>
+              <button className="tag-action secondary secondary-btn" onClick={() => renameTag(tag)} type="button">
+                Переименовать
+              </button>
+              <button className="tag-action secondary secondary-btn" onClick={(event) => openColorPopover(tag.id, event)} type="button">
+                Цвет
+              </button>
+              <button className="tag-action secondary secondary-btn" onClick={() => mergeTag(tag)} type="button">
+                Объединить
+              </button>
+              <button className="tag-action danger danger-btn" onClick={() => onDeleteTag(tag.id)} type="button">
+                Удалить
+              </button>
             </div>
           </div>
         ))}
@@ -139,7 +147,7 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
         <TagColorPopover
           currentHex={getTagHex(editedTag)}
           onApply={applyTagColor}
-          onCancel={() => setColorEditor(null)}
+          onCancel={closeColorPopover}
           position={colorEditor.position}
           tagName={editedTag.name}
         />

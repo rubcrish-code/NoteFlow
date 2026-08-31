@@ -33,6 +33,7 @@ export type IconName =
   | "link"
   | "logo"
   | "mention"
+  | "minus"
   | "noteLink"
   | "ol"
   | "person"
@@ -265,6 +266,12 @@ export function Icon({ name, ...props }: IconProps) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
           <circle cx="12" cy="12" r="4" />
           <path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1" strokeLinecap="round" />
+        </svg>
+      );
+    case "minus":
+      return (
+        <svg viewBox="0 0 24 24" fill="none" {...props}>
+          <path d="M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
         </svg>
       );
     case "noteLink":

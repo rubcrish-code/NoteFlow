@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, Ref } from "react";
 import { Icon } from "../../shared/Icon";
+import { ModalShell } from "../../shared/ModalShell";
 
 export interface ProviderTypeOption<T extends string> {
   id: T;
@@ -69,6 +70,7 @@ interface SettingsModalShellProps {
   className?: string;
   closeDisabled?: boolean;
   description?: string;
+  dismissOnBackdrop?: boolean;
   eyebrow?: string;
   footer?: ReactNode;
   onClose: () => void;
@@ -83,6 +85,7 @@ export function SettingsModalShell({
   className = "",
   closeDisabled = false,
   description,
+  dismissOnBackdrop = true,
   eyebrow,
   footer,
   onClose,
@@ -91,37 +94,28 @@ export function SettingsModalShell({
   title,
   titleId,
 }: SettingsModalShellProps) {
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !closeDisabled) onClose();
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [closeDisabled, onClose]);
-
   return (
-    <div className="modal-backdrop settings-modal-backdrop" onMouseDown={(event) => event.currentTarget === event.target && !closeDisabled && onClose()} role="presentation">
-      <section
-        aria-labelledby={titleId}
-        aria-modal="true"
-        className={`settings-modal-shell settings-modal-${size} ${className}`.trim()}
-        role="dialog"
-      >
-        <header className="settings-modal-header">
-          <div className="settings-modal-heading">
-            {eyebrow ? <span className="settings-modal-eyebrow">{eyebrow}</span> : null}
-            <h2 id={titleId}>{title}</h2>
-            {description ? <p>{description}</p> : null}
-          </div>
-          <button aria-label="Закрыть окно" className="settings-modal-close" disabled={closeDisabled} onClick={onClose} title="Закрыть" type="button">
-            <Icon name="x" />
-          </button>
-        </header>
-        <div className="settings-modal-body">{children}</div>
-        {status ? <div className="settings-modal-status">{status}</div> : null}
-        {footer ? <footer className="settings-modal-footer">{footer}</footer> : null}
-      </section>
-    </div>
+    <ModalShell
+      backdropClassName="modal-backdrop settings-modal-backdrop"
+      bodyClassName="settings-modal-body"
+      className={`settings-modal-shell settings-modal-${size} ${className}`.trim()}
+      closeButtonClassName="settings-modal-close"
+      closeDisabled={closeDisabled}
+      description={description}
+      dismissOnBackdrop={dismissOnBackdrop}
+      eyebrow={eyebrow}
+      footer={footer}
+      footerClassName="settings-modal-footer"
+      onClose={onClose}
+      open
+      size={size}
+      status={status}
+      statusClassName="settings-modal-status"
+      title={title}
+      titleId={titleId}
+    >
+      {children}
+    </ModalShell>
   );
 }
 

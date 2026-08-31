@@ -527,6 +527,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       {confirmation ? (
         <SettingsModalShell
           description={confirmation.type === "delete" ? "Модель смыслового поиска (RAG) и её производный индекс будут удалены. Заметки и другие подключения не изменятся." : "NoteFlow удалит только производные данные выбранной модели и создаст их заново. Заметки останутся без изменений."}
+          dismissOnBackdrop={false}
           footer={(
             <div className="settings-modal-footer-actions">
               <button className="ghost-btn" onClick={() => setConfirmation(null)} type="button">Отмена</button>

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { AppSection, ArchiveItem } from "../../app/types";
 import { Icon } from "../../shared/Icon";
+import { ModalShell } from "../../shared/ModalShell";
 import { PageShell } from "../navigation/PageShell";
 
 interface ArchivePageProps {
@@ -24,22 +25,6 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
 
     return archiveItems.filter((item) => [item.title, item.kind, item.archivedAt].join(" ").toLowerCase().includes(normalizedQuery));
   }, [archiveItems, query]);
-
-  useEffect(() => {
-    if (!pendingDelete) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        setPendingDelete(null);
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [pendingDelete]);
 
   function restoreItem(item: ArchiveItem) {
     onRestoreItem(item);
@@ -75,10 +60,10 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
               <span className="archive-kind">{item.kind}</span>
             </div>
             <div className="archive-row-actions">
-              <button className="archive-action primary" onClick={() => restoreItem(item)} type="button">
+              <button className="archive-action primary primary-btn" onClick={() => restoreItem(item)} type="button">
                 Восстановить
               </button>
-              <button className="archive-action danger" onClick={() => setPendingDelete(item)} type="button">
+              <button className="archive-action danger danger-btn" onClick={() => setPendingDelete(item)} type="button">
                 Удалить окончательно
               </button>
             </div>
@@ -88,22 +73,29 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
       </div>
 
       {pendingDelete ? (
-        <div className="confirm-backdrop" role="presentation" onMouseDown={(event) => event.currentTarget === event.target && setPendingDelete(null)}>
-          <div aria-labelledby="delete-archive-title" aria-modal="true" className="confirm-dialog" role="dialog">
-            <h2 id="delete-archive-title">Удалить окончательно?</h2>
-            <p>
-              «{pendingDelete.title}» будет {pendingDeleteVerb} из локальной базы NoteFlow.
-            </p>
+        <ModalShell
+          backdropClassName="confirm-backdrop"
+          className="confirm-dialog"
+          description={`«${pendingDelete.title}» будет ${pendingDeleteVerb} из локальной базы NoteFlow.`}
+          dismissOnBackdrop={false}
+          footer={(
             <div className="new-note-actions">
-              <button className="cancel" onClick={() => setPendingDelete(null)} type="button">
+              <button className="secondary-btn" onClick={() => setPendingDelete(null)} type="button">
                 Отмена
               </button>
-              <button className="danger-solid" onClick={deletePermanently} type="button">
+              <button className="danger-btn" onClick={deletePermanently} type="button">
                 Удалить окончательно
               </button>
             </div>
-          </div>
-        </div>
+          )}
+          onClose={() => setPendingDelete(null)}
+          open
+          size="compact"
+          title="Удалить окончательно?"
+          titleId="delete-archive-title"
+        >
+          <div className="settings-confirm-note">Это действие нельзя отменить.</div>
+        </ModalShell>
       ) : null}
     </PageShell>
   );

@@ -15,6 +15,7 @@ const editorSource = readFileSync("src/features/editor/EditorArea.tsx", "utf8");
 const blockMenuSource = readFileSync("src/features/editor/BlockInsertMenu.tsx", "utf8");
 const customExtensionsSource = readFileSync("src/features/editor/customExtensions.ts", "utf8");
 const sidebarSource = readFileSync("src/features/navigation/MainSidebar.tsx", "utf8");
+const menuPopoverSource = readFileSync("src/shared/MenuPopover.tsx", "utf8");
 const floatingPositionSource = readFileSync("src/shared/useFloatingPopoverPosition.ts", "utf8");
 const stylesSource = readFileSync("src/styles/app.css", "utf8");
 const rustEmbeddingSource = readFileSync("src-tauri/src/embedding.rs", "utf8");
@@ -184,9 +185,10 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   });
 
   it("keeps the profile popover portal, sidebar actions and editor mention extension intact", () => {
-    assert.match(sidebarSource, /createPortal/);
-    assert.match(sidebarSource, /document\.body/);
-    assert.match(sidebarSource, /useFloatingPopoverPosition/);
+    assert.match(sidebarSource, /<MenuPopover/);
+    assert.match(menuPopoverSource, /createPortal/);
+    assert.match(menuPopoverSource, /document\.body/);
+    assert.match(menuPopoverSource, /useFloatingPopoverPosition/);
     assert.match(floatingPositionSource, /getBoundingClientRect/);
     assert.match(stylesSource, /\.profile-pop\s*\{[\s\S]*position: fixed;[\s\S]*z-index: 1200;/);
     assert.match(sidebarSource, /collapsed \? "forward" : "back"/);

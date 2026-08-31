@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { TagColor } from "../../app/types";
 
 interface TagColorPaletteItem {
@@ -109,6 +110,10 @@ export function TagColorPopover({ currentHex, onApply, onCancel, position, tagNa
   const isValid = isValidHexColor(normalizedDraft);
 
   useEffect(() => {
+    const animationFrame = window.requestAnimationFrame(() => {
+      popoverRef.current?.querySelector<HTMLButtonElement>(".active")?.focus();
+    });
+
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
       if (target instanceof Node && popoverRef.current && !popoverRef.current.contains(target)) {
@@ -126,13 +131,14 @@ export function TagColorPopover({ currentHex, onApply, onCancel, position, tagNa
     document.addEventListener("mousedown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown, true);
     return () => {
+      window.cancelAnimationFrame(animationFrame);
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [onCancel]);
 
-  return (
-    <div className="tag-color-popover" ref={popoverRef} role="dialog" style={{ left: position.left, top: position.top }}>
+  return createPortal(
+    <div aria-label={`Цвет тега ${tagName}`} className="tag-color-popover nf-popover" ref={popoverRef} role="dialog" style={{ left: position.left, top: position.top }}>
       <div className="tag-color-head">
         <div>
           <b>Цвет тега</b>
@@ -169,6 +175,7 @@ export function TagColorPopover({ currentHex, onApply, onCancel, position, tagNa
           Применить
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -87,8 +87,9 @@ describe("unified model settings UI", () => {
 
   it("uses one modal shell for model forms, consent and confirmations", () => {
     assert.match(sharedSource, /export function SettingsModalShell/);
-    assert.match(sharedSource, /className="settings-modal-body"/);
-    assert.match(sharedSource, /className="settings-modal-footer"/);
+    assert.match(sharedSource, /<ModalShell/);
+    assert.match(sharedSource, /bodyClassName="settings-modal-body"/);
+    assert.match(sharedSource, /footerClassName="settings-modal-footer"/);
     assert.match(chatSource, /<SettingsModalShell[\s\S]*className="llm-provider-modal"/);
     assert.match(semanticSource, /<SettingsModalShell[\s\S]*className="semantic-profile-modal"/);
     assert.ok((semanticSource.match(/<SettingsModalShell/g) ?? []).length >= 3);

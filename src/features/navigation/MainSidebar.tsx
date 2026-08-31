@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useRef, useState } from "react";
 import type { AppSection } from "../../app/types";
 import { Icon, type IconName } from "../../shared/Icon";
-import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
+import { MenuPopover } from "../../shared/MenuPopover";
 
 interface NavItem {
   section: AppSection;
@@ -34,43 +33,7 @@ interface MainSidebarProps {
 export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNewNote, onToggleCollapse, onToast }: MainSidebarProps) {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const profileAnchorRef = useRef<HTMLButtonElement>(null);
-  const profilePopoverRef = useRef<HTMLDivElement>(null);
-  const profilePopoverStyle = useFloatingPopoverPosition({
-    anchorRef: profileAnchorRef,
-    gap: 8,
-    isOpen: isProfileOpen,
-    maxHeight: 240,
-    padding: 12,
-    popoverRef: profilePopoverRef,
-    preferredWidth: 220,
-  });
-
-  useEffect(() => {
-    function handleDocumentPointerDown(event: PointerEvent) {
-      const target = event.target;
-      if (
-        target instanceof Node
-        && !profileAnchorRef.current?.contains(target)
-        && !profilePopoverRef.current?.contains(target)
-      ) {
-        setIsProfileOpen(false);
-      }
-    }
-
-    function handleDocumentKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsProfileOpen(false);
-        profileAnchorRef.current?.focus();
-      }
-    }
-
-    document.addEventListener("pointerdown", handleDocumentPointerDown);
-    document.addEventListener("keydown", handleDocumentKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handleDocumentPointerDown);
-      document.removeEventListener("keydown", handleDocumentKeyDown);
-    };
-  }, []);
+  const closeProfileMenu = useCallback(() => setIsProfileOpen(false), []);
 
   function renderNavItem(item: NavItem) {
     const isActive = activeSection === item.section;
@@ -142,13 +105,15 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
             <div className="em">noteflow@local</div>
           </div>
         </button>
-        {isProfileOpen ? createPortal((
-          <div
-            className="profile-pop show profile-pop-portal"
-            ref={profilePopoverRef}
-            role="menu"
-            style={{ ...profilePopoverStyle, visibility: profilePopoverStyle ? "visible" : "hidden" }}
-          >
+        <MenuPopover
+          anchorRef={profileAnchorRef}
+          ariaLabel="Меню профиля"
+          className="profile-pop show profile-pop-portal"
+          isOpen={isProfileOpen}
+          maxHeight={240}
+          onClose={closeProfileMenu}
+          preferredWidth={220}
+        >
           <button
             onClick={() => {
               onNavigate("settings");
@@ -179,8 +144,7 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
           >
             Выйти
           </button>
-          </div>
-        ), document.body) : null}
+        </MenuPopover>
       </div>
     </aside>
   );

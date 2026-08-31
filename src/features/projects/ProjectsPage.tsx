@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { AppSection, ProjectCard } from "../../app/types";
+import { ModalShell } from "../../shared/ModalShell";
 import { PageShell } from "../navigation/PageShell";
 
 interface ProjectsPageProps {
@@ -53,12 +54,30 @@ interface NewProjectModalProps {
 function NewProjectModal({ onClose, onCreate }: NewProjectModalProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const canCreate = title.trim().length > 0;
 
   return (
-    <div className="modal-backdrop" role="presentation">
+    <ModalShell
+      backdropClassName="modal-backdrop"
+      className="new-note-dialog project-dialog"
+      description="Проект будет сохранён в локальной базе NoteFlow."
+      footer={(
+        <div className="new-note-actions">
+          <button className="secondary-btn" onClick={onClose} type="button">Отмена</button>
+          <button className="primary-btn" disabled={!canCreate} form="new-project-form" type="submit">Создать</button>
+        </div>
+      )}
+      initialFocusRef={titleInputRef}
+      onClose={onClose}
+      open
+      size="compact"
+      title="Новый проект"
+      titleId="new-project-title"
+    >
       <form
-        className="new-note-dialog project-dialog"
+        className="new-note-form"
+        id="new-project-form"
         onSubmit={(event) => {
           event.preventDefault();
           if (canCreate) {
@@ -66,25 +85,15 @@ function NewProjectModal({ onClose, onCreate }: NewProjectModalProps) {
           }
         }}
       >
-        <h2>Новый проект</h2>
-        <p>Проект будет сохранён в локальной базе NoteFlow.</p>
         <label>
           Название
-          <input autoFocus onChange={(event) => setTitle(event.currentTarget.value)} placeholder="Например, Исследование рынка" value={title} />
+          <input onChange={(event) => setTitle(event.currentTarget.value)} placeholder="Например, Исследование рынка" ref={titleInputRef} value={title} />
         </label>
         <label>
           Описание
           <input onChange={(event) => setDescription(event.currentTarget.value)} placeholder="Короткое описание проекта" value={description} />
         </label>
-        <div className="new-note-actions">
-          <button className="cancel" onClick={onClose} type="button">
-            Отмена
-          </button>
-          <button className="create" disabled={!canCreate} type="submit">
-            Создать
-          </button>
-        </div>
       </form>
-    </div>
+    </ModalShell>
   );
 }

@@ -151,7 +151,13 @@ export function SettingsPage({
         <aside className="settings-nav-col">
           <div className="nav-sec">НАСТРОЙКИ</div>
           {settingsPanels.map((panel) => (
-            <button className={`nav-i settings-nav ${activePanel === panel.id ? "on" : ""}`} key={panel.id} onClick={() => setActivePanel(panel.id)} type="button">
+            <button
+              aria-current={activePanel === panel.id ? "page" : undefined}
+              className={`nav-i settings-nav ${activePanel === panel.id ? "on" : ""}`}
+              key={panel.id}
+              onClick={() => setActivePanel(panel.id)}
+              type="button"
+            >
               <span>{panel.label}</span>
             </button>
           ))}
@@ -996,7 +1002,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
         <div className="settings-card llm-provider-list-card model-settings-card">
         {providers.length === 0 && !isLoadingProviders ? (
           <div className="llm-empty-state-card model-empty-state">
-            <div className="llm-empty-icon" aria-hidden="true">✦</div>
+            <div className="llm-empty-icon" aria-hidden="true"><Icon name="logo" /></div>
             <b>Модель ИИ пока не подключена</b>
             <p>Подключите модель для работы ИИ-помощника и чата.</p>
             <button className="primary-btn" onClick={() => openAddProvider()} type="button">
@@ -1224,6 +1230,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       {providerDeleteRequest ? (
         <SettingsModalShell
           description={`Модель «${providerDeleteRequest.name}» и её настройки будут удалены. Это действие не удаляет заметки.`}
+          dismissOnBackdrop={false}
           footer={(
             <div className="settings-modal-footer-actions">
               <button className="ghost-btn" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest(null)} type="button">Отмена</button>
@@ -1269,6 +1276,7 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
         <div className="theme-options">
           {options.map((option) => (
             <button
+              aria-pressed={theme === option.id}
               className={`theme-option ${theme === option.id ? "active" : ""}`}
               key={option.id}
               onClick={() => {
@@ -1298,13 +1306,13 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
         </div>
         <div className="zoom-settings-row">
           <button className="zoom-step-btn" data-tooltip="Уменьшить масштаб" disabled={appZoomPercent <= APP_ZOOM_MIN} onClick={onZoomDecrease} type="button">
-            −
+            <Icon name="minus" />
           </button>
           <button className="zoom-reset-btn" data-tooltip="Сбросить масштаб" onClick={onZoomReset} type="button">
             100%
           </button>
           <button className="zoom-step-btn" data-tooltip="Увеличить масштаб" disabled={appZoomPercent >= APP_ZOOM_MAX} onClick={onZoomIncrease} type="button">
-            +
+            <Icon name="plus" />
           </button>
         </div>
       </div>
@@ -1594,6 +1602,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
           description={importState.phase === "success" || importState.phase === "applied"
             ? "Данные профиля заменены содержимым выбранной резервной копии."
             : "Проверьте содержимое перед восстановлением данных профиля."}
+          dismissOnBackdrop={false}
           footer={(
             <div className="settings-modal-footer-layout">
               <div className="settings-modal-footer-leading" />
@@ -1683,14 +1692,14 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
         </SettingsModalShell>
       ) : null}
       {isRebuildConfirmationOpen ? (
-        <div className="confirm-backdrop" onMouseDown={(event) => event.currentTarget === event.target && setIsRebuildConfirmationOpen(false)} role="presentation">
-          <div aria-labelledby="knowledge-rebuild-title" aria-modal="true" className="confirm-dialog" role="dialog">
-            <h2 id="knowledge-rebuild-title">Пересоздать базу знаний?</h2>
-            <p>NoteFlow заново обработает все заметки. Сами заметки и их форматирование не изменятся. Операция может занять некоторое время.</p>
-            <div className="new-note-actions">
-              <button className="cancel" onClick={() => setIsRebuildConfirmationOpen(false)} type="button">Отмена</button>
+        <SettingsModalShell
+          description="NoteFlow заново обработает все заметки. Сами заметки и их форматирование не изменятся. Операция может занять некоторое время."
+          dismissOnBackdrop={false}
+          footer={(
+            <div className="settings-modal-footer-actions">
+              <button className="secondary-btn" onClick={() => setIsRebuildConfirmationOpen(false)} type="button">Отмена</button>
               <button
-                className="primary"
+                className="primary-btn"
                 onClick={() => {
                   setIsRebuildConfirmationOpen(false);
                   if (knowledgeMoreRef.current) {
@@ -1703,8 +1712,14 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
                 Пересоздать
               </button>
             </div>
-          </div>
-        </div>
+          )}
+          onClose={() => setIsRebuildConfirmationOpen(false)}
+          size="compact"
+          title="Пересоздать базу знаний?"
+          titleId="knowledge-rebuild-title"
+        >
+          <div className="settings-confirm-note">Поиск продолжит работать во время обновления базы знаний.</div>
+        </SettingsModalShell>
       ) : null}
     </div>
   );

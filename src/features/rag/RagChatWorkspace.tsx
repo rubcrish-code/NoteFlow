@@ -5,6 +5,7 @@ import { getNoteAiStatus, type NoteAiStatus } from "../../services/noteAiService
 import * as ragChatService from "../../services/ragChatService";
 import type { RagChat, RagChatMessage } from "../../services/ragChatService";
 import { Icon } from "../../shared/Icon";
+import { MenuPopover } from "../../shared/MenuPopover";
 import { ResizeHandle } from "../../shared/ResizeHandle";
 import { ChatMarkdown } from "../note-chat/ChatMarkdown";
 import { SettingsModalShell } from "../settings/ModelSettingsUi";
@@ -68,6 +69,8 @@ export function RagChatWorkspace({
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const requestIdRef = useRef(0);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const chatMenuAnchorRef = useRef<HTMLButtonElement>(null);
+  const closeChatMenu = useCallback(() => setOpenChatMenuId(""), []);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
@@ -325,11 +328,27 @@ export function RagChatWorkspace({
                     <span>{chat.title}</span>
                     <small>{formatChatDate(chat.updatedAt)}</small>
                   </button>
-                  <button aria-label={`Действия: ${chat.title}`} className="rag-history-menu-button" onClick={() => setOpenChatMenuId((current) => current === chat.id ? "" : chat.id)} type="button">
+                  <button
+                    aria-expanded={openChatMenuId === chat.id}
+                    aria-haspopup="menu"
+                    aria-label={`Действия: ${chat.title}`}
+                    className="rag-history-menu-button"
+                    onClick={(event) => {
+                      chatMenuAnchorRef.current = event.currentTarget;
+                      setOpenChatMenuId((current) => current === chat.id ? "" : chat.id);
+                    }}
+                    type="button"
+                  >
                     <Icon name="dots" />
                   </button>
-                  {openChatMenuId === chat.id ? (
-                    <div className="rag-history-menu" role="menu">
+                  <MenuPopover
+                    anchorRef={chatMenuAnchorRef}
+                    ariaLabel={`Действия с чатом «${chat.title}»`}
+                    className="rag-history-menu"
+                    isOpen={openChatMenuId === chat.id}
+                    onClose={closeChatMenu}
+                    preferredWidth={164}
+                  >
                       <button onClick={() => {
                         setRenameDraft(chat.title);
                         setPendingDialog({ kind: "rename", chat });
@@ -339,8 +358,7 @@ export function RagChatWorkspace({
                         setPendingDialog({ kind: "delete", chat });
                         setOpenChatMenuId("");
                       }} role="menuitem" type="button">Удалить</button>
-                    </div>
-                  ) : null}
+                  </MenuPopover>
                 </div>
               ))}
               {!isLoading && chats.length === 0 ? <div className="rag-history-empty">Создайте первый чат по базе заметок.</div> : null}
@@ -486,6 +504,7 @@ export function RagChatWorkspace({
       {pendingDialog?.kind === "delete" ? (
         <SettingsModalShell
           description={`Чат «${pendingDialog.chat.title}» и его история будут удалены.`}
+          dismissOnBackdrop={false}
           footer={<div className="settings-modal-footer-actions"><button className="ghost-btn" onClick={() => setPendingDialog(null)} type="button">Отмена</button><button className="danger-btn" onClick={() => void confirmDelete()} type="button">Удалить чат</button></div>}
           onClose={() => setPendingDialog(null)}
           size="compact"

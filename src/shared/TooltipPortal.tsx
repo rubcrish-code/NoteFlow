@@ -11,6 +11,8 @@ interface TooltipPosition {
   top: number;
 }
 
+const TOOLTIP_ID = "noteflow-tooltip";
+
 function findTooltipTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) {
     return null;
@@ -24,6 +26,7 @@ export function TooltipPortal() {
   const [position, setPosition] = useState<TooltipPosition>({ left: 0, top: 0 });
   const tooltipRef = useRef<HTMLDivElement>(null);
   const anchorElementRef = useRef<HTMLElement | null>(null);
+  const previousDescribedByRef = useRef<string | null>(null);
 
   useEffect(() => {
     function showTooltip(target: EventTarget | null) {
@@ -34,6 +37,11 @@ export function TooltipPortal() {
       }
 
       anchorElementRef.current = tooltipTarget;
+      previousDescribedByRef.current = tooltipTarget.getAttribute("aria-describedby");
+      const describedBy = previousDescribedByRef.current?.split(/\s+/).filter(Boolean) ?? [];
+      if (!describedBy.includes(TOOLTIP_ID)) {
+        tooltipTarget.setAttribute("aria-describedby", [...describedBy, TOOLTIP_ID].join(" "));
+      }
       setAnchor({ rect: tooltipTarget.getBoundingClientRect(), text });
     }
 
@@ -53,7 +61,16 @@ export function TooltipPortal() {
         }
       }
 
+      if (anchorElementRef.current) {
+        const previousDescribedBy = previousDescribedByRef.current;
+        if (previousDescribedBy) {
+          anchorElementRef.current.setAttribute("aria-describedby", previousDescribedBy);
+        } else {
+          anchorElementRef.current.removeAttribute("aria-describedby");
+        }
+      }
       anchorElementRef.current = null;
+      previousDescribedByRef.current = null;
       setAnchor(null);
     }
 
@@ -61,10 +78,17 @@ export function TooltipPortal() {
       hideTooltip(event);
     }
 
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        hideTooltip(event);
+      }
+    }
+
     document.addEventListener("mouseover", handleMouseOver);
     document.addEventListener("focusin", handleFocusIn);
     document.addEventListener("mouseout", handleMouseOut);
     document.addEventListener("focusout", hideTooltip);
+    document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", hideTooltip);
     window.addEventListener("scroll", hideTooltip, true);
 
@@ -73,6 +97,7 @@ export function TooltipPortal() {
       document.removeEventListener("focusin", handleFocusIn);
       document.removeEventListener("mouseout", handleMouseOut);
       document.removeEventListener("focusout", hideTooltip);
+      document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", hideTooltip);
       window.removeEventListener("scroll", hideTooltip, true);
     };
@@ -101,7 +126,7 @@ export function TooltipPortal() {
   }
 
   return createPortal(
-    <div className="nf-tooltip" ref={tooltipRef} role="tooltip" style={{ left: position.left, top: position.top }}>
+    <div className="nf-tooltip" id={TOOLTIP_ID} ref={tooltipRef} role="tooltip" style={{ left: position.left, top: position.top }}>
       {anchor.text}
     </div>,
     document.body,

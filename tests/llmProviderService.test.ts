@@ -197,9 +197,11 @@ describe("LLM provider frontend contract", () => {
     assert.match(source, /onClick=\{\(\) => openAddProvider\(\)\}/);
     assert.match(source, /onClick=\{\(\) => openEditProvider\(provider\)\}/);
     assert.match(source, /<SettingsModalShell[\s\S]*className="llm-provider-modal"/);
-    assert.match(modalSource, /className="modal-backdrop settings-modal-backdrop"/);
-    assert.match(modalSource, /role="dialog"/);
-    assert.match(modalSource, /aria-modal="true"/);
+    assert.match(modalSource, /backdropClassName="modal-backdrop settings-modal-backdrop"/);
+    assert.match(modalSource, /<ModalShell/);
+    const sharedModalSource = readFileSync("src/shared/ModalShell.tsx", "utf8");
+    assert.match(sharedModalSource, /role="dialog"/);
+    assert.match(sharedModalSource, /aria-modal="true"/);
     assert.match(source, /<ProviderTypeSelector/);
     assert.doesNotMatch(source, /llm-provider-manager-grid/);
     assert.match(styles, /\.llm-provider-modal/);
