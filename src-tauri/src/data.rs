@@ -1156,7 +1156,7 @@ impl DataStore {
              FROM ai_messages m
              INNER JOIN ai_chats c ON c.id = m.chat_id
              WHERE c.scope = 'note' AND c.note_id = ?1
-             ORDER BY m.created_at ASC, m.id ASC",
+             ORDER BY m.created_at ASC, m.rowid ASC",
         )?;
         let rows = statement.query_map(params![normalized_note_id], |row| {
             Ok(NoteChatMessageDto {
@@ -1307,7 +1307,7 @@ impl DataStore {
              FROM ai_messages m
              INNER JOIN ai_chats c ON c.id = m.chat_id
              WHERE c.scope = 'rag' AND c.id = ?1
-             ORDER BY m.created_at ASC, m.id ASC",
+             ORDER BY m.created_at ASC, m.rowid ASC",
         )?;
         let rows = statement.query_map(params![chat_id], |row| {
             let sources_json: String = row.get(4)?;
@@ -3300,7 +3300,7 @@ impl DataStore {
         let mut statement = self.conn.prepare(
             "SELECT id, chat_id, role, content, sources_json, created_at
              FROM ai_messages
-             ORDER BY created_at, id",
+             ORDER BY created_at, rowid",
         )?;
         let rows = statement.query_map([], |row| {
             let sources_json: String = row.get(4)?;
@@ -7403,6 +7403,54 @@ mod tests {
         assert!(note_b_history
             .iter()
             .all(|message| message.note_id == note_b_id));
+    }
+
+    #[test]
+    fn chat_messages_with_equal_timestamps_keep_insertion_order() {
+        let mut store = temp_store();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Stable chat order".to_string(),
+                note_date: "2026-09-01".to_string(),
+            })
+            .expect("create note");
+
+        store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: note.id.clone(),
+                role: "user".to_string(),
+                content: "First message".to_string(),
+            })
+            .expect("save first message");
+        store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: note.id.clone(),
+                role: "assistant".to_string(),
+                content: "Second message".to_string(),
+            })
+            .expect("save second message");
+
+        store
+            .conn
+            .execute(
+                "UPDATE ai_messages
+                 SET created_at = '2026-09-01T12:00:00.000Z',
+                     id = CASE role WHEN 'user' THEN 'z-first' ELSE 'a-second' END
+                 WHERE chat_id = (
+                     SELECT id FROM ai_chats WHERE scope = 'note' AND note_id = ?1
+                 )",
+                params![note.id],
+            )
+            .expect("force equal timestamps and reverse lexical IDs");
+
+        let messages = store
+            .list_note_chat_messages(&note.id)
+            .expect("ordered history loads");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "First message");
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "Second message");
     }
 
     #[test]
