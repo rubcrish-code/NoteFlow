@@ -368,13 +368,15 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
             </div>
           ),
         )}
-        <div className="note-chat-suggestions">
-          {suggestedPrompts.map((prompt) => (
-            <button disabled={isSending || !canSend} key={prompt} onClick={() => void handleSend(prompt)} type="button">
-              {prompt}
-            </button>
-          ))}
-        </div>
+        {messages.length === 0 ? (
+          <div className="note-chat-suggestions">
+            {suggestedPrompts.map((prompt) => (
+              <button disabled={isSending || !canSend} key={prompt} onClick={() => void handleSend(prompt)} type="button">
+                {prompt}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
       <div className="nc-in">
         <div className="box">

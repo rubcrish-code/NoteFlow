@@ -426,13 +426,11 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
                     Обновить смысловой поиск (RAG)
                   </button>
                 )}
-                <button className="danger-btn compact" disabled={Boolean(operation)} onClick={() => setConfirmation({ type: "delete", profile })} type="button">Удалить</button>
-              </div>
-              <div className="semantic-maintenance-row">
-                <details className="semantic-more-actions">
-                  <summary className="secondary-btn compact">Дополнительные действия</summary>
+                <details className="semantic-more-actions model-card-more">
+                  <summary aria-label={`Дополнительные действия: ${profile.name}`} className="row-menu-trigger"><Icon name="dots" /></summary>
                   <div className="semantic-more-menu">
                     <button disabled={Boolean(operation)} onClick={() => requestIndexOperation(profile, "rebuild")} type="button">Пересоздать смысловой поиск (RAG)</button>
+                    <button className="danger" disabled={Boolean(operation)} onClick={() => setConfirmation({ type: "delete", profile })} type="button">Удалить модель</button>
                   </div>
                 </details>
               </div>

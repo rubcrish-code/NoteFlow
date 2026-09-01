@@ -224,7 +224,7 @@ function ImageNodeView(props: NodeViewProps) {
             ))}
           </div>
           <button onClick={() => options.onToast?.("Потяните маркеры по краям изображения")} type="button">
-            Изменить размер
+            Размер
           </button>
           <button onClick={() => openEditor("crop")} type="button">
             Обрезать
@@ -238,8 +238,8 @@ function ImageNodeView(props: NodeViewProps) {
           <button onClick={resetImage} type="button">
             Сбросить
           </button>
-          <button className="danger" onClick={props.deleteNode} type="button">
-            Удалить
+          <button aria-label="Удалить изображение" className="danger image-delete-action" data-tooltip="Удалить изображение" onClick={props.deleteNode} type="button">
+            <Icon name="x" />
           </button>
         </div>
       ) : null}

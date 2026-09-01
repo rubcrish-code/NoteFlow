@@ -149,7 +149,7 @@ export function SettingsPage({
     <PageShell activeSection="settings" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
       <div className="settings-layout-inner">
         <aside className="settings-nav-col">
-          <div className="nav-sec">НАСТРОЙКИ</div>
+          <div className="nav-sec">Настройки</div>
           {settingsPanels.map((panel) => (
             <button
               aria-current={activePanel === panel.id ? "page" : undefined}
@@ -401,7 +401,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const connectionNoteClass = ["connection-note", !activeOperationMessage && (messageTone === "error" || selectedProvider?.lastStatus === "error") ? "error" : "", activeOperationMessage ? "pending" : ""]
     .filter(Boolean)
     .join(" ");
-  const shouldShowConnectionNote = Boolean(activeOperationMessage || messageTone === "error" || providers.length > 0 || isProviderModalOpen);
+  const shouldShowConnectionNote = Boolean(activeOperationMessage || messageTone === "error" || isProviderModalOpen);
 
   useEffect(() => {
     currentFormRef.current = form;
@@ -1044,12 +1044,17 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                     <button className="secondary-btn compact" disabled={storageAction !== null} onClick={() => openEditProvider(provider)} type="button">
                       Изменить
                     </button>
-                    <button className="secondary-btn compact" disabled={provider.isDefault || storageAction === "default"} onClick={() => void setDefaultProvider(provider.id)} type="button">
-                      {storageAction === "default" ? <LoadingInline label="Назначение…" /> : "Сделать основным"}
-                    </button>
-                    <button className="danger-btn compact" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest({ id: provider.id, name: provider.name })} type="button">
-                      {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить"}
-                    </button>
+                    <details className="model-card-more">
+                      <summary aria-label={`Дополнительные действия: ${provider.name}`} className="row-menu-trigger"><Icon name="dots" /></summary>
+                      <div className="model-card-more-menu">
+                        <button disabled={provider.isDefault || storageAction === "default"} onClick={() => void setDefaultProvider(provider.id)} type="button">
+                          {storageAction === "default" ? <LoadingInline label="Назначение…" /> : "Сделать основным"}
+                        </button>
+                        <button className="danger" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest({ id: provider.id, name: provider.name })} type="button">
+                          {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить"}
+                        </button>
+                      </div>
+                    </details>
                   </div>
                   <div aria-live="polite" className={`model-card-operation ${isProviderTesting ? "visible" : ""}`}>
                     {isProviderTesting ? "Проверяем подключение…" : "\u00A0"}

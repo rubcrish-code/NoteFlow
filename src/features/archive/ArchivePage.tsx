@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { AppSection, ArchiveItem } from "../../app/types";
 import { Icon } from "../../shared/Icon";
+import { MenuPopover } from "../../shared/MenuPopover";
 import { ModalShell } from "../../shared/ModalShell";
 import { PageShell } from "../navigation/PageShell";
 
@@ -16,6 +17,9 @@ interface ArchivePageProps {
 export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote, onRestoreItem, onToast }: ArchivePageProps) {
   const [query, setQuery] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ArchiveItem | null>(null);
+  const [openItemMenuId, setOpenItemMenuId] = useState("");
+  const itemMenuAnchorRef = useRef<HTMLButtonElement>(null);
+  const closeItemMenu = useCallback(() => setOpenItemMenuId(""), []);
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -53,23 +57,48 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
         {filteredItems.map((item) => (
           <div className="archive-row" key={item.id}>
             <div className="archive-row-main">
+              <span className="archive-row-icon"><Icon name={item.kind === "Проект" ? "folder" : "doc"} /></span>
               <div>
                 <b>{item.title}</b>
-                <div className="archive-date">{item.archivedAt}</div>
+                <div className="archive-date">{item.kind} · {item.archivedAt}</div>
               </div>
-              <span className="archive-kind">{item.kind}</span>
             </div>
             <div className="archive-row-actions">
-              <button className="archive-action primary primary-btn" onClick={() => restoreItem(item)} type="button">
+              <button className="archive-action secondary-btn compact" onClick={() => restoreItem(item)} type="button">
                 Восстановить
               </button>
-              <button className="archive-action danger danger-btn" onClick={() => setPendingDelete(item)} type="button">
-                Удалить окончательно
+              <button
+                aria-expanded={openItemMenuId === item.id}
+                aria-haspopup="menu"
+                aria-label={`Действия с «${item.title}»`}
+                className="row-menu-trigger"
+                onClick={(event) => {
+                  itemMenuAnchorRef.current = event.currentTarget;
+                  setOpenItemMenuId((current) => current === item.id ? "" : item.id);
+                }}
+                type="button"
+              >
+                <Icon name="dots" />
               </button>
+              <MenuPopover
+                anchorRef={itemMenuAnchorRef}
+                ariaLabel={`Действия с «${item.title}»`}
+                className="row-actions-menu"
+                isOpen={openItemMenuId === item.id}
+                onClose={closeItemMenu}
+                preferredWidth={210}
+              >
+                <button className="danger" onClick={() => { setOpenItemMenuId(""); setPendingDelete(item); }} role="menuitem" type="button">Удалить окончательно</button>
+              </MenuPopover>
             </div>
           </div>
         ))}
-        {filteredItems.length === 0 ? <div className="archive-empty">В архиве нет элементов по этому запросу.</div> : null}
+        {filteredItems.length === 0 ? (
+          <div className="page-empty-state panel-empty-state">
+            <span className="page-empty-icon"><Icon name="archive" /></span>
+            <div><b>{query ? "Ничего не найдено" : "Архив пуст"}</b><span>{query ? "Попробуйте изменить запрос." : "Здесь появятся архивированные заметки и проекты."}</span></div>
+          </div>
+        ) : null}
       </div>
 
       {pendingDelete ? (

@@ -18,7 +18,9 @@ class FailingClipboard {
 }
 
 const noteChatSource = readFileSync("src/features/note-chat/NoteChatPanel.tsx", "utf8");
-const appCssSource = readFileSync("src/styles/app.css", "utf8");
+const appCssSource = ["app.css", "chat.css"]
+  .map((fileName) => readFileSync(`src/styles/${fileName}`, "utf8"))
+  .join("\n");
 
 describe("note chat assistant copy action", () => {
   it("copies Markdown assistant content as plain text without HTML or UI labels", async () => {

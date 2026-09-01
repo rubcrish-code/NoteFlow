@@ -5,7 +5,9 @@ import { describe, it } from "node:test";
 const appShellSource = readFileSync("src/app/AppShell.tsx", "utf8");
 const editorAreaSource = readFileSync("src/features/editor/EditorArea.tsx", "utf8");
 const formattingToolbarSource = readFileSync("src/features/editor/FormattingToolbar.tsx", "utf8");
-const appCssSource = readFileSync("src/styles/app.css", "utf8");
+const appCssSource = ["app.css", "chat.css"]
+  .map((fileName) => readFileSync(`src/styles/${fileName}`, "utf8"))
+  .join("\n");
 const noteChatMarkdownSource = readFileSync("src/features/note-chat/ChatMarkdown.tsx", "utf8");
 const noteChatSource = readFileSync("src/features/note-chat/NoteChatPanel.tsx", "utf8");
 const noteAiServiceSource = readFileSync("src/services/noteAiService.ts", "utf8");
@@ -67,7 +69,7 @@ describe("current note AI contract", () => {
     assert.match(noteChatSource, /status: "loading"/);
     assert.match(noteChatSource, /status: "error"/);
     assert.match(noteChatSource, /note-chat-empty/);
-    assert.match(noteChatSource, /note-chat-suggestions/);
+    assert.match(noteChatSource, /messages\.length === 0 \? \([\s\S]*note-chat-suggestions/);
     assert.doesNotMatch(noteChatSource, /noteChatSeed/);
     assert.doesNotMatch(noteChatSource, /мок-ответ/i);
   });

@@ -1,6 +1,7 @@
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { AppSection, TagColor, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
+import { MenuPopover } from "../../shared/MenuPopover";
 import { PageShell } from "../navigation/PageShell";
 import { TagColorPopover, tagColorPalette } from "./TagColorPopover";
 
@@ -44,6 +45,9 @@ function getPopoverPosition(rect: DOMRect) {
 export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNavigate, onNewNote, onOpenTag, onRenameTag, onToast, onUpdateTagColor }: TagsPageProps) {
   const [query, setQuery] = useState("");
   const [colorEditor, setColorEditor] = useState<ColorEditorState | null>(null);
+  const [openTagMenuId, setOpenTagMenuId] = useState("");
+  const tagMenuAnchorRef = useRef<HTMLButtonElement>(null);
+  const closeTagMenu = useCallback(() => setOpenTagMenuId(""), []);
 
   const filteredTags = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -54,7 +58,12 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
   }, [query, tags]);
 
   function openColorPopover(tagId: string, event: ReactMouseEvent<HTMLButtonElement>) {
-    setColorEditor({ tagId, position: getPopoverPosition(event.currentTarget.getBoundingClientRect()), trigger: event.currentTarget });
+    setColorEditor({
+      tagId,
+      position: getPopoverPosition(event.currentTarget.getBoundingClientRect()),
+      trigger: tagMenuAnchorRef.current ?? event.currentTarget,
+    });
+    setOpenTagMenuId("");
   }
 
   function applyTagColor(hex: string) {
@@ -116,32 +125,50 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
       <div className="tags-table">
         {filteredTags.map((tag) => (
           <div className="tag-row" key={tag.id}>
-            <div className="tag-row-main">
+            <button className="tag-row-main" onClick={() => onOpenTag(tag.name)} type="button">
               <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagHex(tag) }} />
               <div>
                 <b>{tag.name}</b>
                 <small>{tag.count} заметок</small>
               </div>
-            </div>
+            </button>
             <div className="tag-row-actions">
-              <button className="tag-action primary primary-btn" onClick={() => onOpenTag(tag.name)} type="button">
-                Открыть
+              <button
+                aria-expanded={openTagMenuId === tag.id}
+                aria-haspopup="menu"
+                aria-label={`Действия с тегом «${tag.name}»`}
+                className="row-menu-trigger"
+                onClick={(event) => {
+                  tagMenuAnchorRef.current = event.currentTarget;
+                  setOpenTagMenuId((current) => current === tag.id ? "" : tag.id);
+                }}
+                type="button"
+              >
+                <Icon name="dots" />
               </button>
-              <button className="tag-action secondary secondary-btn" onClick={() => renameTag(tag)} type="button">
-                Переименовать
-              </button>
-              <button className="tag-action secondary secondary-btn" onClick={(event) => openColorPopover(tag.id, event)} type="button">
-                Цвет
-              </button>
-              <button className="tag-action secondary secondary-btn" onClick={() => mergeTag(tag)} type="button">
-                Объединить
-              </button>
-              <button className="tag-action danger danger-btn" onClick={() => onDeleteTag(tag.id)} type="button">
-                Удалить
-              </button>
+              <MenuPopover
+                anchorRef={tagMenuAnchorRef}
+                ariaLabel={`Действия с тегом «${tag.name}»`}
+                className="row-actions-menu"
+                isOpen={openTagMenuId === tag.id}
+                onClose={closeTagMenu}
+                preferredWidth={190}
+              >
+                <button onClick={() => { setOpenTagMenuId(""); renameTag(tag); }} role="menuitem" type="button">Переименовать</button>
+                <button onClick={(event) => openColorPopover(tag.id, event)} role="menuitem" type="button">Изменить цвет</button>
+                <button onClick={() => { setOpenTagMenuId(""); mergeTag(tag); }} role="menuitem" type="button">Объединить</button>
+                <div className="nf-menu-separator" />
+                <button className="danger" onClick={() => { setOpenTagMenuId(""); onDeleteTag(tag.id); }} role="menuitem" type="button">Удалить</button>
+              </MenuPopover>
             </div>
           </div>
         ))}
+        {filteredTags.length === 0 ? (
+          <div className="page-empty-state panel-empty-state">
+            <span className="page-empty-icon"><Icon name="tag" /></span>
+            <div><b>Теги не найдены</b><span>Измените запрос или создайте новый тег.</span></div>
+          </div>
+        ) : null}
       </div>
       {colorEditor && editedTag ? (
         <TagColorPopover

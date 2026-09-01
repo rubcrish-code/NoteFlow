@@ -8,7 +8,9 @@ const semanticSource = readFileSync("src/features/settings/SemanticSearchSetting
 const ragWorkspaceSource = readFileSync("src/features/rag/RagChatWorkspace.tsx", "utf8");
 const serviceSource = readFileSync("src/services/embeddingService.ts", "utf8");
 const rustSource = readFileSync("src-tauri/src/embedding.rs", "utf8");
-const stylesSource = readFileSync("src/styles/app.css", "utf8");
+const stylesSource = ["app.css", "settings.css", "rag.css"]
+  .map((fileName) => readFileSync(`src/styles/${fileName}`, "utf8"))
+  .join("\n");
 const appShellSource = readFileSync("src/app/AppShell.tsx", "utf8");
 
 describe("unified model settings UI", () => {
@@ -62,21 +64,22 @@ describe("unified model settings UI", () => {
     assert.match(stylesSource, /\.model-card-operation\.visible\s*\{[\s\S]*visibility: visible;/);
   });
 
-  it("keeps primary model actions visible on both card types", () => {
-    for (const label of ["Проверить подключение", "Изменить", "Удалить"]) {
+  it("keeps frequent model actions visible and moves destructive actions into disclosure menus", () => {
+    for (const label of ["Проверить подключение", "Изменить"]) {
       assert.match(chatSource, new RegExp(label));
       assert.match(semanticSource, new RegExp(label));
     }
     assert.match(chatSource, /llm-provider-card-actions model-profile-actions/);
     assert.match(semanticSource, /semantic-profile-actions model-profile-actions/);
-    assert.match(chatSource, /className="danger-btn compact"[\s\S]*setProviderDeleteRequest/);
-    assert.match(semanticSource, /className="danger-btn compact"[\s\S]*type: "delete"/);
+    assert.match(chatSource, /<details className="model-card-more">[\s\S]*className="danger"[\s\S]*setProviderDeleteRequest/);
+    assert.match(semanticSource, /<details className="semantic-more-actions model-card-more">[\s\S]*className="danger"[\s\S]*type: "delete"/);
   });
 
-  it("reserves additional actions for semantic index maintenance", () => {
-    const additionalActions = semanticSource.match(/<details className="semantic-more-actions">[\s\S]*?<\/details>/)?.[0] ?? "";
+  it("groups semantic index maintenance and delete in one predictable disclosure menu", () => {
+    const additionalActions = semanticSource.match(/<details className="semantic-more-actions model-card-more">[\s\S]*?<\/details>/)?.[0] ?? "";
     assert.match(additionalActions, /Пересоздать смысловой поиск \(RAG\)/);
-    assert.doesNotMatch(additionalActions, /Удалить|Изменить|Проверить подключение/);
+    assert.match(additionalActions, /Удалить модель/);
+    assert.doesNotMatch(additionalActions, /Изменить|Проверить подключение/);
   });
 
   it("uses the same Add model call to action in both sections", () => {
@@ -133,8 +136,10 @@ describe("unified model settings UI", () => {
     assert.match(chatSource, /<SemanticSearchSettings onToast=\{onToast\}/);
     assert.match(chatSource, /Подключайте модели для генерации текста и смыслового поиска по базе заметок/);
     assert.doesNotMatch(ragWorkspaceSource, /<SemanticSearchSettings|ProviderTypeSelector|type="password"|API key|Base URL/);
-    assert.match(ragWorkspaceSource, /Настроить модели/);
-    assert.match(ragWorkspaceSource, /Смысловой поиск \(RAG\) не настроен/);
+    assert.match(ragWorkspaceSource, /aria-label="Настроить модели"/);
+    assert.match(ragWorkspaceSource, /rag-model-summary/);
+    assert.match(ragWorkspaceSource, /Смысловой поиск не настроен/);
+    assert.doesNotMatch(ragWorkspaceSource, /rag-model-pill/);
   });
 
   it("loads semantic provider models with a typed command and preserves manual entry", () => {

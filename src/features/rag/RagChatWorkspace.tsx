@@ -311,7 +311,7 @@ export function RagChatWorkspace({
       {!conversationsCollapsed ? (
         <>
           <aside aria-label="История диалогов" className="rag-conversations">
-            <button className="primary-btn rag-new-chat" onClick={() => void createChat()} type="button">
+            <button className="secondary-btn rag-new-chat" onClick={() => void createChat()} type="button">
               <Icon name="plus" />
               Новый чат
             </button>
@@ -369,40 +369,43 @@ export function RagChatWorkspace({
       ) : null}
 
       <main className="rag-main-chat">
-        <header className="rag-chat-top">
-          <div className="rag-chat-title">
-            {conversationsCollapsed ? (
-              <button aria-label="Показать историю чатов" className="icon-close-btn" onClick={() => setConversationsCollapsed(false)} title="Показать историю" type="button">
-                <Icon name="forward" />
+        <header className="rag-chat-header">
+          <div className="rag-chat-top">
+            <div className="rag-chat-title">
+              {conversationsCollapsed ? (
+                <button aria-label="Показать историю чатов" className="icon-close-btn" onClick={() => setConversationsCollapsed(false)} title="Показать историю" type="button">
+                  <Icon name="forward" />
+                </button>
+              ) : null}
+              <div>
+                <b>{activeChat?.title ?? "Новый чат"}</b>
+                <span>По всей базе заметок</span>
+              </div>
+            </div>
+            <div className="rag-top-actions">
+              <button aria-label="Настроить модели" className="icon-close-btn" data-tooltip="Настроить модели" onClick={onOpenModelSettings} type="button">
+                <Icon name="gear" />
               </button>
-            ) : null}
-            <div>
-              <span>ИИ-чат по базе</span>
-              <b>{activeChat?.title ?? "Новый чат"}</b>
+              {sourcesCollapsed ? (
+                <button className="secondary-btn compact" onClick={() => onSourcesCollapsedChange(false)} type="button">
+                  <Icon name="doc" /> Источники
+                </button>
+              ) : null}
             </div>
           </div>
-          <div className="rag-top-actions">
-            <button className="secondary-btn compact" onClick={onOpenModelSettings} type="button">Настроить модели</button>
-            {sourcesCollapsed ? (
-              <button className="secondary-btn compact" onClick={() => onSourcesCollapsedChange(false)} type="button">
-                <Icon name="doc" /> Источники
-              </button>
-            ) : null}
-          </div>
+          <ModelStatusBar
+            generatorStatus={generatorStatus}
+            indexStatus={selectedIndexStatus}
+            isLoading={isLoading}
+            isUpdatingIndex={isUpdatingIndex}
+            onOpenSettings={onOpenModelSettings}
+            onProfileChange={setSelectedProfileId}
+            onUpdateIndex={() => void updateIndex()}
+            profiles={profiles}
+            selectedProfile={selectedProfile}
+            selectedProfileId={selectedProfileId}
+          />
         </header>
-
-        <ModelStatusBar
-          generatorStatus={generatorStatus}
-          indexStatus={selectedIndexStatus}
-          isLoading={isLoading}
-          isUpdatingIndex={isUpdatingIndex}
-          onOpenSettings={onOpenModelSettings}
-          onProfileChange={setSelectedProfileId}
-          onUpdateIndex={() => void updateIndex()}
-          profiles={profiles}
-          selectedProfile={selectedProfile}
-          selectedProfileId={selectedProfileId}
-        />
 
         <div className="rag-chat-scroll" ref={messagesRef}>
           {isHistoryLoading ? <div className="rag-chat-empty">Загружаем историю…</div> : null}
@@ -444,7 +447,7 @@ export function RagChatWorkspace({
         </div>
 
         <div className="rag-input-wrap">
-          <div className="rag-stage-note">На этапе 06C NoteFlow находит источники. Генерация ответа по ним будет подключена в 06D.</div>
+          <div className="rag-stage-note">NoteFlow найдёт релевантные фрагменты и покажет источники для проверки.</div>
           <div className="rag-input">
             <textarea
               disabled={!canRetrieve}
@@ -484,7 +487,13 @@ export function RagChatWorkspace({
                   </span>
                 </button>
               ))}
-              {activeSources.length === 0 ? <div className="rag-source-meta">После вопроса здесь появятся заметки и точные фрагменты, использованные retrieval-поиском.</div> : null}
+              {activeSources.length === 0 ? (
+                <div className="rag-source-empty">
+                  <span className="page-empty-icon"><Icon name="doc" /></span>
+                  <b>Источников пока нет</b>
+                  <span>После вопроса здесь появятся заметки и найденные фрагменты.</span>
+                </div>
+              ) : null}
             </div>
           </aside>
         </>
@@ -544,31 +553,29 @@ function ModelStatusBar({
   if (isLoading) return <div className="rag-model-status loading">Проверяем подключённые модели…</div>;
   const needsUpdate = selectedProfile && indexStatus?.status !== "current";
   return (
-    <section className="rag-model-status">
-      <div className="rag-model-pill">
-        <Icon name="chat" />
-        <span><small>Модель ответа</small><b>{generatorStatus?.hasProvider ? `${generatorStatus.providerName} · ${generatorStatus.model}` : "Не подключена"}</b></span>
-        <i className={generatorStatus?.canUse ? "ok" : "warn"} />
-      </div>
-      <div className="rag-model-pill">
-        <Icon name="search" />
-        <span>
-          <small>Смысловой поиск</small>
-          {profiles.length > 1 ? (
-            <select aria-label="Модель смыслового поиска" onChange={(event) => onProfileChange(event.currentTarget.value)} value={selectedProfileId}>
-              {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-            </select>
-          ) : <b>{selectedProfile ? `${selectedProfile.name} · ${selectedProfile.model}` : "Не подключён"}</b>}
+    <section aria-label="Состояние моделей и базы" className={`rag-model-status ${!selectedProfile || !generatorStatus?.canUse ? "requires-setup" : "ready"}`}>
+      <div className="rag-model-summary">
+        <span className={`rag-status-dot ${generatorStatus?.canUse ? "ok" : "warn"}`} />
+        <span className="rag-generator-summary">
+          {generatorStatus?.hasProvider ? generatorStatus.providerName : "Модель ответа не подключена"}
         </span>
-        {selectedProfile ? <em className={`locality-badge ${selectedProfile.locality}`}>{selectedProfile.locality === "local" ? "Локально" : "Облачно"}</em> : null}
+        <span aria-hidden="true" className="rag-summary-separator">·</span>
+        <Icon name="search" />
+        {profiles.length > 1 ? (
+          <select aria-label="Модель смыслового поиска" onChange={(event) => onProfileChange(event.currentTarget.value)} value={selectedProfileId}>
+            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+          </select>
+        ) : <span>{selectedProfile ? selectedProfile.name : "Смысловой поиск не настроен"}</span>}
+        {selectedProfile ? <span className="rag-locality-label">{selectedProfile.locality === "local" ? "локально" : "облачно"}</span> : null}
+        <span aria-hidden="true" className="rag-summary-separator">·</span>
+        <span className={`rag-index-label ${needsUpdate ? "warning" : ""}`}>{indexStatusLabel(indexStatus)}</span>
       </div>
       {selectedProfile ? (
         <div className="rag-index-compact">
-          <span>{indexStatusLabel(indexStatus)}{indexStatus ? ` · ${indexStatus.indexedChunks} из ${indexStatus.totalChunks}` : ""}</span>
-          {needsUpdate ? <button className="secondary-btn compact" disabled={isUpdatingIndex || selectedProfile.lastStatus !== "success"} onClick={onUpdateIndex} type="button">{isUpdatingIndex ? "Обновляем…" : "Обновить базу для RAG"}</button> : null}
+          {needsUpdate ? <button className="ghost-btn compact" disabled={isUpdatingIndex || selectedProfile.lastStatus !== "success"} onClick={onUpdateIndex} type="button">{isUpdatingIndex ? "Обновляем…" : "Обновить"}</button> : null}
         </div>
       ) : (
-        <div className="rag-model-empty"><span><b>Смысловой поиск (RAG) не настроен</b> Подключите модель смыслового поиска в разделе «Модели ИИ», чтобы работать со всей базой заметок.</span><button className="primary-btn compact" onClick={onOpenSettings} type="button">Настроить модели</button></div>
+        <button className="ghost-btn compact rag-setup-action" onClick={onOpenSettings} type="button">Настроить</button>
       )}
     </section>
   );

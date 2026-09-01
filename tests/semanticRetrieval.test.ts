@@ -17,7 +17,9 @@ const customExtensionsSource = readFileSync("src/features/editor/customExtension
 const sidebarSource = readFileSync("src/features/navigation/MainSidebar.tsx", "utf8");
 const menuPopoverSource = readFileSync("src/shared/MenuPopover.tsx", "utf8");
 const floatingPositionSource = readFileSync("src/shared/useFloatingPopoverPosition.ts", "utf8");
-const stylesSource = readFileSync("src/styles/app.css", "utf8");
+const stylesSource = ["app.css", "pages.css", "settings.css", "rag.css"]
+  .map((fileName) => readFileSync(`src/styles/${fileName}`, "utf8"))
+  .join("\n");
 const rustEmbeddingSource = readFileSync("src-tauri/src/embedding.rs", "utf8");
 const rustDataSource = readFileSync("src-tauri/src/data.rs", "utf8");
 const rustLibSource = readFileSync("src-tauri/src/lib.rs", "utf8");
@@ -119,17 +121,21 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   });
 
   it("does not fake a generated RAG answer before 06D", () => {
-    assert.match(workspaceSource, /Генерация ответа по ним будет подключена в 06D/);
+    assert.match(workspaceSource, /NoteFlow найдёт релевантные фрагменты и покажет источники для проверки/);
     assert.match(workspaceSource, /Генерация ответа на основе найденных фрагментов будет подключена на следующем этапе/);
+    assert.doesNotMatch(workspaceSource, />[^<]*06D[^<]*</);
     assert.doesNotMatch(workspaceSource, /runNoteAi|run_note_ai|rerank →|vector search/);
   });
 
-  it("shows separate generator and embedding model states", () => {
-    assert.match(workspaceSource, /Модель ответа/);
+  it("keeps generator, semantic model and index state in one compact status line", () => {
+    assert.match(workspaceSource, /aria-label="Состояние моделей и базы"/);
+    assert.match(workspaceSource, /rag-model-summary/);
+    assert.match(workspaceSource, /Модель ответа не подключена/);
     assert.match(workspaceSource, /Смысловой поиск/);
     assert.match(workspaceSource, /generatorStatus\?\.hasProvider/);
-    assert.match(workspaceSource, /Смысловой поиск \(RAG\) не настроен/);
-    assert.match(workspaceSource, /Подключите модель смыслового поиска в разделе «Модели ИИ»/);
+    assert.match(workspaceSource, /Смысловой поиск не настроен/);
+    assert.match(workspaceSource, /indexStatusLabel\(indexStatus\)/);
+    assert.doesNotMatch(workspaceSource, /rag-model-pill/);
   });
 
   it("loads an existing embedding profile automatically without reconfiguration", () => {
@@ -140,7 +146,8 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   });
 
   it("keeps index maintenance compact and routes cloud consent to settings", () => {
-    assert.match(workspaceSource, /Обновить базу для RAG/);
+    assert.match(workspaceSource, /rag-index-compact/);
+    assert.match(workspaceSource, /isUpdatingIndex \? "Обновляем…" : "Обновить"/);
     assert.match(workspaceSource, /hasCloudConsent/);
     assert.match(workspaceSource, /onOpenModelSettings\(\)/);
     assert.match(semanticSettingsSource, /acceptEmbeddingCloudConsent/);

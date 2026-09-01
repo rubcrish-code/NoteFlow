@@ -1,0 +1,355 @@
+/* P1.2 writing surface, adaptive toolbar and editor popovers. */
+
+.toolbar-wrap {
+  container-name: editor-toolbar;
+  container-type: inline-size;
+}
+
+.editor-col {
+  container-name: editor-surface;
+  container-type: inline-size;
+}
+
+.toolbar {
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+  padding-inline: var(--space-3);
+}
+
+.toolbar-slot,
+.toolbar-overflow-slot {
+  flex: 0 0 auto;
+}
+
+.toolbar-overflow-slot {
+  display: none;
+  margin-left: auto;
+}
+
+.toolbar-overflow-menu {
+  max-height: min(380px, calc(100vh - var(--space-8)));
+}
+
+.toolbar-overflow-menu button {
+  font-size: var(--text-sm-size);
+  gap: var(--space-2);
+  min-height: 32px;
+  padding-inline: var(--space-2);
+}
+
+.toolbar-overflow-menu button > svg:first-child {
+  color: var(--text-secondary);
+  flex: 0 0 17px;
+  height: 17px;
+  width: 17px;
+}
+
+.toolbar-overflow-menu button > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbar-overflow-menu .toolbar-menu-check {
+  color: var(--accent);
+  flex: 0 0 15px;
+  height: 15px;
+  width: 15px;
+}
+
+.ed-scroll {
+  --editor-page-gutter: clamp(var(--space-5), 4cqi, 64px);
+  padding-top: clamp(var(--space-6), 4cqi, var(--space-10));
+  overflow-x: hidden;
+}
+
+.ed-title {
+  font-size: clamp(30px, 3.2cqi, 36px);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0;
+  line-height: 1.16;
+}
+
+.ed-tags {
+  gap: var(--space-2);
+  margin: var(--space-4) 0 var(--space-6);
+}
+
+.ed-body {
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.ed-body h1,
+.ed-body h2,
+.ed-body h3 {
+  color: var(--text-primary);
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+.ed-body h1 {
+  font-size: 28px;
+  margin: var(--space-8) 0 var(--space-3);
+}
+
+.ed-body h2 {
+  font-size: 22px;
+  margin: var(--space-6) 0 var(--space-3);
+}
+
+.ed-body h3 {
+  font-size: 18px;
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.ed-body p {
+  margin-bottom: var(--space-4);
+}
+
+.ed-body blockquote {
+  background: color-mix(in srgb, var(--surface-hover) 62%, transparent);
+  border-left-width: 2px;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  color: var(--text-secondary);
+  font-style: normal;
+  padding: var(--space-3) var(--space-4);
+}
+
+.ed-body pre {
+  background: color-mix(in srgb, var(--surface-sidebar) 82%, var(--surface-panel));
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
+}
+
+:where(
+  .editor-ai-menu,
+  .note-menu-popover,
+  .block-insert-menu,
+  .editor-command-popover,
+  .font-format-popover,
+  .table-tools-popover,
+  .image-action-panel
+) {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-popover);
+}
+
+.note-menu-popover {
+  gap: 0;
+  padding: var(--space-2);
+  width: min(248px, calc(100vw - 2 * var(--space-4)));
+}
+
+.note-menu-head,
+.editor-command-head,
+.font-popover-head,
+.block-menu-head {
+  border-bottom-color: var(--border-subtle);
+  padding: var(--space-3);
+}
+
+.note-menu-head b {
+  font-size: var(--text-sm-size);
+}
+
+.note-menu-head span {
+  color: var(--text-muted);
+  font-size: var(--text-xs-size);
+}
+
+.note-menu-actions-list,
+.note-menu-projects {
+  gap: 2px;
+  padding: var(--space-1) 0 0;
+}
+
+.note-menu-actions-list button,
+.note-menu-projects button {
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font-size: var(--text-sm-size);
+  font-weight: var(--font-weight-medium);
+  min-height: 34px;
+  padding: 0 var(--space-3);
+}
+
+.note-menu-actions-list button:hover,
+.note-menu-projects button:hover {
+  background: var(--surface-hover);
+  border-color: transparent;
+}
+
+.note-menu-actions-list .danger {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--space-1);
+  padding-top: 0;
+}
+
+.editor-ai-menu,
+.block-insert-menu,
+.editor-command-popover,
+.font-format-popover {
+  border-radius: var(--radius-card);
+}
+
+.ai-menu-groups {
+  gap: var(--space-2);
+}
+
+.ai-menu-group + .ai-menu-group {
+  border-top-color: var(--border-subtle);
+}
+
+.ai-action-item {
+  border-radius: var(--radius-control);
+  min-height: 36px;
+}
+
+.table-tools-popover {
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.table-tools-mini {
+  background: var(--surface-elevated);
+  border-color: var(--border-default);
+  gap: var(--space-1);
+  padding: var(--space-1);
+}
+
+.table-tools-mini button {
+  border-radius: var(--radius-control);
+  min-height: 32px;
+}
+
+.table-tools-menu {
+  background: var(--surface-elevated);
+  border-color: var(--border-default);
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+}
+
+.table-tools-section + .table-tools-section {
+  border-top-color: var(--border-subtle);
+}
+
+.image-action-panel {
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+
+.image-action-panel button {
+  border-radius: var(--radius-control);
+  min-height: 32px;
+  padding: 0 var(--space-3);
+}
+
+.image-action-panel .danger {
+  margin-left: auto;
+}
+
+.image-action-panel .image-delete-action {
+  padding: 0;
+  width: 32px;
+}
+
+.image-action-panel .image-delete-action svg {
+  height: 15px;
+  width: 15px;
+}
+
+.image-align-actions {
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-control);
+  gap: 1px;
+  padding: 2px;
+}
+
+.image-align-actions button {
+  padding: 0;
+}
+
+@container editor-toolbar (max-width: 980px) {
+  .toolbar-slot-adaptive {
+    display: none;
+  }
+
+  .toolbar-overflow-slot {
+    display: inline-flex;
+  }
+}
+
+@container editor-toolbar (max-width: 700px) {
+  .toolbar {
+    padding-inline: var(--space-2);
+  }
+
+  .toolbar .tb {
+    height: 30px;
+    width: 29px;
+  }
+
+  .toolbar .tb-sep {
+    margin-inline: 2px;
+  }
+}
+
+@container editor-toolbar (max-width: 560px) {
+  .toolbar-slot-narrow {
+    display: none;
+  }
+}
+
+@container editor-surface (max-width: 560px) {
+  .ed-top {
+    gap: var(--space-2);
+    min-height: 52px;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .crumb {
+    flex: 1 1 auto;
+    max-width: none;
+    overflow: hidden;
+  }
+
+  .crumb > span:not(:last-child) {
+    display: none;
+  }
+
+  .crumb > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ed-act {
+    flex: 0 0 auto;
+    gap: 1px;
+  }
+
+  .saved {
+    margin-right: 0;
+  }
+
+  .saved span,
+  .ibtn.ai span {
+    display: none;
+  }
+
+  .ibtn,
+  .ibtn.ai {
+    height: 30px;
+    min-width: 30px;
+    padding: 0;
+    width: 30px;
+  }
+}

@@ -589,11 +589,16 @@ export function EditorArea({
             <span>{note.project}</span>
           </div>
           <div className="ed-act">
-            <div className={`saved ${saveStatus === "saving" ? "saving" : ""} ${saveStatus === "error" ? "error" : ""}`}>
+            <div
+              aria-label={saveStatus === "saving" ? "Сохранение" : saveStatus === "error" ? "Ошибка сохранения" : "Сохранено"}
+              className={`saved ${saveStatus === "saving" ? "saving" : ""} ${saveStatus === "error" ? "error" : ""}`}
+              data-tooltip={saveStatus === "saving" ? "Сохранение…" : saveStatus === "error" ? "Ошибка сохранения" : "Сохранено"}
+              role="status"
+            >
               <Icon name="check" />
               <span>{saveStatus === "saving" ? "Сохранение…" : saveStatus === "error" ? "Ошибка сохранения" : "Сохранено"}</span>
             </div>
-            <button className="ibtn ai" onClick={onOpenChat} type="button">
+            <button className="ibtn ai" data-tooltip="Чат по заметке" onClick={onOpenChat} type="button">
               <Icon name="chat" />
               <span>Чат по заметке</span>
             </button>

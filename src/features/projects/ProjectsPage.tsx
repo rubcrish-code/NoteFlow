@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { AppSection, ProjectCard } from "../../app/types";
+import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
 import { PageShell } from "../navigation/PageShell";
 
@@ -22,24 +23,40 @@ export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote,
 
   return (
     <PageShell activeSection="projects" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
-      <div className="page-title">Проекты</div>
-      <div className="page-subtitle">Объединяйте заметки, задачи и материалы по направлениям работы.</div>
+      <header className="content-page-header">
+        <div>
+          <div className="page-title">Проекты</div>
+          <div className="page-subtitle">Организуйте заметки и материалы по направлениям работы.</div>
+        </div>
+        <button className="primary-btn compact" onClick={() => setIsProjectModalOpen(true)} type="button">
+          <Icon name="plus" />
+          Новый проект
+        </button>
+      </header>
       <div className="project-grid">
         {projects.map((project) => (
           <button className="project-card" key={project.id} onClick={() => onOpenProject(project.title)} type="button">
-            <div className="project-title">{project.title}</div>
-            <div className="project-description">{project.description}</div>
-            <div className="project-stats">
-              <span>{project.notes} заметки</span>
-              <span>{project.tasks} задач</span>
-              {project.files ? <span>{project.files} файлов</span> : null}
-            </div>
+            <span className="project-icon"><Icon name="folder" /></span>
+            <span className="project-copy">
+              <span className="project-title">{project.title}</span>
+              <span className="project-description">{project.description}</span>
+              <span className="project-stats">
+                <span>{project.notes} заметок</span>
+                {project.files ? <span>{project.files} файлов</span> : null}
+              </span>
+            </span>
+            <Icon className="project-open-icon" name="forward" />
           </button>
         ))}
-        <button className="project-card project-card-new" onClick={() => setIsProjectModalOpen(true)} type="button">
-          <div className="project-title">+ Новый проект</div>
-          <div className="project-description">Создать отдельное пространство</div>
-        </button>
+        {projects.length === 0 ? (
+          <div className="page-empty-state project-empty-state">
+            <span className="page-empty-icon"><Icon name="folder" /></span>
+            <div>
+              <b>Проектов пока нет</b>
+              <span>Создайте проект, чтобы собрать связанные заметки в одном месте.</span>
+            </div>
+          </div>
+        ) : null}
       </div>
       {isProjectModalOpen ? <NewProjectModal onClose={() => setIsProjectModalOpen(false)} onCreate={createProject} /> : null}
     </PageShell>

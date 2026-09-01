@@ -2,6 +2,7 @@ import { useEditorState, type Editor } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
 import type { NoteAiActionId, NoteAiStatus } from "../../services/noteAiService";
 import { Icon, type IconName } from "../../shared/Icon";
+import { MenuPopover } from "../../shared/MenuPopover";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
 import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
 import { FontFormatPopover, type FontFormatDraft } from "./FontFormatPopover";
@@ -82,6 +83,22 @@ const toolbarTools: ToolbarTool[] = [
 ];
 
 const deferredTools = new Set<ToolId>();
+const adaptiveToolbarTools = new Set<ToolId>([
+  "strike",
+  "inline-code",
+  "highlight",
+  "color",
+  "sup",
+  "sub",
+  "quote",
+  "code-block",
+  "align-left",
+  "align-center",
+  "align-right",
+  "link",
+  "clear",
+]);
+const narrowToolbarTools = new Set<ToolId>(["redo", "h2", "h3", "italic", "underline", "ol", "task"]);
 
 interface AiActionItem {
   id: NoteAiActionId;
@@ -132,13 +149,17 @@ const emptyToolbarState: ToolbarRuntimeState = {
 export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettings, onToast, pendingAiActionId }: FormattingToolbarProps) {
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
+  const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [fontDraft, setFontDraft] = useState<FontFormatDraft>({ fontFamily: "", fontSize: "" });
   const [popoverMode, setPopoverMode] = useState<EditorCommandPopoverMode | null>(null);
   const aiButtonRef = useRef<HTMLButtonElement>(null);
   const aiMenuRef = useRef<HTMLDivElement>(null);
   const aiActionWasPendingRef = useRef(false);
   const fontMenuRef = useRef<HTMLSpanElement>(null);
+  const overflowButtonRef = useRef<HTMLButtonElement>(null);
+  const toolbarWrapRef = useRef<HTMLDivElement>(null);
   const mouseCommandRef = useRef(false);
+  const [isNarrowToolbar, setIsNarrowToolbar] = useState(false);
   const aiMenuStyle = useFloatingPopoverPosition({
     anchorRef: aiButtonRef,
     isOpen: isAiMenuOpen,
@@ -154,6 +175,19 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
 
   const activeFontFamily = findFontFamilyValue(toolbarState.fontFamily);
   const activeFontSize = formatFontSize(toolbarState.fontSize);
+
+  useEffect(() => {
+    const toolbarWrap = toolbarWrapRef.current;
+    if (!toolbarWrap || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(([entry]) => {
+      setIsNarrowToolbar(entry.contentRect.width <= 560);
+    });
+    observer.observe(toolbarWrap);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!isAiMenuOpen && !isFontMenuOpen) {
@@ -228,6 +262,7 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
     }
 
     setIsFontMenuOpen(false);
+    setIsOverflowMenuOpen(false);
     setPopoverMode(null);
 
     if (toolId === "undo") {
@@ -384,14 +419,15 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
   const selectedText = getSelectedText(editor);
 
   return (
-    <div className="toolbar-wrap">
+    <div className="toolbar-wrap" ref={toolbarWrapRef}>
       <div aria-label="Лента форматирования" className="toolbar" role="toolbar">
         {toolbarTools.map((tool) => {
           const disabled = isToolDisabled(tool.id, editor, toolbarState);
           return (
-            <span className="toolbar-slot" key={tool.id}>
+            <span className={`toolbar-slot ${adaptiveToolbarTools.has(tool.id) ? "toolbar-slot-adaptive" : ""} ${narrowToolbarTools.has(tool.id) ? "toolbar-slot-narrow" : ""}`} key={tool.id}>
               <button
                 aria-label={tool.tip}
+                aria-pressed={toolbarState.active[tool.id] === undefined ? undefined : toolbarState.active[tool.id]}
                 className={`tb ${toolbarState.active[tool.id] ? "active" : ""} ${tool.id === "ai" ? "ai" : ""}`}
                 data-tooltip={tool.tip}
                 disabled={disabled}
@@ -461,6 +497,47 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
             </span>
           );
         })}
+        <span className="toolbar-overflow-slot">
+          <button
+            aria-expanded={isOverflowMenuOpen}
+            aria-haspopup="menu"
+            aria-label="Дополнительные инструменты форматирования"
+            className={`tb ${isOverflowMenuOpen ? "active" : ""}`}
+            data-tooltip="Дополнительные инструменты"
+            onClick={() => {
+              setIsAiMenuOpen(false);
+              setIsFontMenuOpen(false);
+              setIsOverflowMenuOpen((current) => !current);
+            }}
+            ref={overflowButtonRef}
+            type="button"
+          >
+            <Icon name="dots" />
+          </button>
+          <MenuPopover
+            anchorRef={overflowButtonRef}
+            ariaLabel="Дополнительные инструменты форматирования"
+            className="toolbar-overflow-menu"
+            isOpen={isOverflowMenuOpen}
+            onClose={() => setIsOverflowMenuOpen(false)}
+            preferredWidth={220}
+          >
+            {toolbarTools.filter((tool) => adaptiveToolbarTools.has(tool.id) || (isNarrowToolbar && narrowToolbarTools.has(tool.id))).map((tool) => (
+              <button
+                aria-checked={toolbarState.active[tool.id] ?? false}
+                disabled={isToolDisabled(tool.id, editor, toolbarState)}
+                key={tool.id}
+                onClick={() => runCommand(tool.id)}
+                role="menuitemcheckbox"
+                type="button"
+              >
+                {tool.icon ? <Icon name={tool.icon} /> : null}
+                <span>{toolbarMenuLabel(tool.tip)}</span>
+                {toolbarState.active[tool.id] ? <Icon className="toolbar-menu-check" name="check" /> : null}
+              </button>
+            ))}
+          </MenuPopover>
+        </span>
       </div>
 
       {isAiMenuOpen ? (
@@ -542,6 +619,10 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
       ) : null}
     </div>
   );
+}
+
+function toolbarMenuLabel(tip: string) {
+  return tip.replace(/\s*\([^)]*\)$/, "");
 }
 
 function toPopoverMode(toolId: ToolId): EditorCommandPopoverMode {

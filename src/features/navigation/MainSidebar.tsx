@@ -41,7 +41,7 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
       <button
         aria-current={isActive ? "page" : undefined}
         className={`nav-i ${isActive ? "on" : ""}`}
-        data-tooltip={collapsed ? item.label : undefined}
+        data-tooltip={item.label}
         key={item.section}
         onClick={() => onNavigate(item.section)}
         type="button"
@@ -77,14 +77,14 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
         )}
       </div>
 
-      <button className="new-btn" onClick={onNewNote} type="button">
+      <button className="new-btn" data-tooltip="Новая заметка" onClick={onNewNote} type="button">
         <Icon name="plus" />
         <span>Новая заметка</span>
       </button>
 
       <nav aria-label="Основная навигация">
         {primaryNavItems.map(renderNavItem)}
-        <div className="nav-sec">БИБЛИОТЕКА</div>
+        <div className="nav-sec">Библиотека</div>
         {libraryNavItems.map(renderNavItem)}
       </nav>
 
@@ -95,6 +95,7 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
           aria-expanded={isProfileOpen}
           aria-haspopup="menu"
           className="sb-user"
+          data-tooltip="Профиль"
           onClick={() => setIsProfileOpen((value) => !value)}
           ref={profileAnchorRef}
           type="button"

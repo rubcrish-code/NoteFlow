@@ -1295,7 +1295,7 @@ function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFram
   };
 
   return (
-    <div className={`app-zoom-root ${useCssZoomFallback ? "css-zoom-fallback" : ""}`} style={zoomStyle}>
+    <div className={`app-zoom-root ${zoomPercent >= 150 ? "app-zoom-high" : zoomPercent >= 125 ? "app-zoom-elevated" : ""} ${useCssZoomFallback ? "css-zoom-fallback" : ""}`} style={zoomStyle}>
       {children}
       {footer}
     </div>
