@@ -1,48 +1,21 @@
 import { useEditorState, type Editor } from "@tiptap/react";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { NoteAiActionId, NoteAiStatus } from "../../services/noteAiService";
-import { Icon, type IconName } from "../../shared/Icon";
+import { useAppZoomPercent } from "../../shared/AppZoomContext";
+import { Icon } from "../../shared/Icon";
 import { MenuPopover } from "../../shared/MenuPopover";
+import { toPhysicalLayoutPixels } from "../../shared/physicalLayout";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
+import { useObservedElementWidth } from "../../shared/useObservedElementWidth";
+import { EDITOR_AI_ACTION_GROUPS } from "./editorAiActions";
 import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
+import {
+  getEditorToolbarLayoutMode,
+  resolveEditorToolbarActions,
+  type EditorToolbarActionId,
+} from "./editorToolbarLayout";
 import { FontFormatPopover, type FontFormatDraft } from "./FontFormatPopover";
 import { findFontFamilyValue, formatFontSize, normalizeFontSizeValue } from "./fontFormatOptions";
-
-type ToolId =
-  | "ai"
-  | "align-center"
-  | "align-left"
-  | "align-right"
-  | "bold"
-  | "clear"
-  | "code-block"
-  | "color"
-  | "h1"
-  | "h2"
-  | "h3"
-  | "highlight"
-  | "inline-code"
-  | "italic"
-  | "link"
-  | "ol"
-  | "p"
-  | "quote"
-  | "redo"
-  | "strike"
-  | "sub"
-  | "sup"
-  | "task"
-  | "ul"
-  | "underline"
-  | "undo";
-
-interface ToolbarTool {
-  groupAfter?: boolean;
-  icon?: IconName;
-  id: ToolId;
-  label?: string;
-  tip: string;
-}
 
 interface FormattingToolbarProps {
   aiStatus: NoteAiStatus | null;
@@ -53,85 +26,9 @@ interface FormattingToolbarProps {
   pendingAiActionId?: NoteAiActionId;
 }
 
-const toolbarTools: ToolbarTool[] = [
-  { id: "undo", tip: "Отменить (Ctrl+Z)", icon: "undo" },
-  { id: "redo", tip: "Повторить (Ctrl+Y)", icon: "redo", groupAfter: true },
-  { id: "h1", tip: "Заголовок 1", label: "H1" },
-  { id: "h2", tip: "Заголовок 2", label: "H2" },
-  { id: "h3", tip: "Заголовок 3", label: "H3" },
-  { id: "p", tip: "Обычный текст", label: "¶", groupAfter: true },
-  { id: "bold", tip: "Жирный (Ctrl+B)", icon: "bold" },
-  { id: "italic", tip: "Курсив (Ctrl+I)", icon: "italic" },
-  { id: "underline", tip: "Подчёркнутый (Ctrl+U)", icon: "underline" },
-  { id: "strike", tip: "Зачёркнутый", icon: "strike" },
-  { id: "inline-code", tip: "Моноширинный код", icon: "code" },
-  { id: "highlight", tip: "Выделение", icon: "highlight" },
-  { id: "color", tip: "Цвет текста", icon: "color" },
-  { id: "sup", tip: "Надстрочный", icon: "sup" },
-  { id: "sub", tip: "Подстрочный", icon: "sub", groupAfter: true },
-  { id: "ul", tip: "Маркированный список", icon: "ul" },
-  { id: "ol", tip: "Нумерованный список", icon: "ol" },
-  { id: "task", tip: "Чек-лист", icon: "task" },
-  { id: "quote", tip: "Цитата", icon: "quote" },
-  { id: "code-block", tip: "Блок кода", icon: "codeBlock", groupAfter: true },
-  { id: "align-left", tip: "По левому краю", icon: "alignLeft" },
-  { id: "align-center", tip: "По центру", icon: "alignCenter" },
-  { id: "align-right", tip: "По правому краю", icon: "alignRight", groupAfter: true },
-  { id: "link", tip: "Ссылка", icon: "link" },
-  { id: "clear", tip: "Очистить форматирование", icon: "clear" },
-  { id: "ai", tip: "ИИ-помощник", label: "AI" },
-];
-
-const deferredTools = new Set<ToolId>();
-const adaptiveToolbarTools = new Set<ToolId>([
-  "strike",
-  "inline-code",
-  "highlight",
-  "color",
-  "sup",
-  "sub",
-  "quote",
-  "code-block",
-  "align-left",
-  "align-center",
-  "align-right",
-  "link",
-  "clear",
-]);
-const narrowToolbarTools = new Set<ToolId>(["redo", "h2", "h3", "italic", "underline", "ol", "task"]);
-
-interface AiActionItem {
-  id: NoteAiActionId;
-  label: string;
-}
-
-const aiActionGroups: Array<{ id: string; items: AiActionItem[] }> = [
-  {
-    id: "rewrite",
-    items: [
-      { id: "improve", label: "Улучшить текст" },
-      { id: "fix", label: "Исправить ошибки" },
-      { id: "shorten", label: "Сократить" },
-      { id: "expand", label: "Развернуть подробнее" },
-    ],
-  },
-  {
-    id: "transform",
-    items: [
-      { id: "tone", label: "Изменить тон" },
-      { id: "tasks", label: "Сделать список задач" },
-      { id: "translate", label: "Перевести" },
-      { id: "explain", label: "Объяснить простыми словами" },
-    ],
-  },
-  {
-    id: "knowledge",
-    items: [{ id: "ask", label: "Спросить по этому тексту" }],
-  },
-];
 
 interface ToolbarRuntimeState {
-  active: Partial<Record<ToolId, boolean>>;
+  active: Partial<Record<EditorToolbarActionId, boolean>>;
   canRedo: boolean;
   canUndo: boolean;
   fontFamily: string;
@@ -146,7 +43,7 @@ const emptyToolbarState: ToolbarRuntimeState = {
   fontSize: "",
 };
 
-export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettings, onToast, pendingAiActionId }: FormattingToolbarProps) {
+export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettings, pendingAiActionId }: FormattingToolbarProps) {
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
@@ -159,7 +56,11 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
   const toolbarWrapRef = useRef<HTMLDivElement>(null);
   const mouseCommandRef = useRef(false);
-  const [isNarrowToolbar, setIsNarrowToolbar] = useState(false);
+  const appZoomPercent = useAppZoomPercent();
+  const toolbarCssWidth = useObservedElementWidth(toolbarWrapRef);
+  const toolbarPhysicalWidth = toPhysicalLayoutPixels(toolbarCssWidth, appZoomPercent);
+  const toolbarLayoutMode = getEditorToolbarLayoutMode(toolbarPhysicalWidth);
+  const { overflowActions, visibleActions } = resolveEditorToolbarActions(toolbarCssWidth);
   const aiMenuStyle = useFloatingPopoverPosition({
     anchorRef: aiButtonRef,
     isOpen: isAiMenuOpen,
@@ -175,19 +76,6 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
 
   const activeFontFamily = findFontFamilyValue(toolbarState.fontFamily);
   const activeFontSize = formatFontSize(toolbarState.fontSize);
-
-  useEffect(() => {
-    const toolbarWrap = toolbarWrapRef.current;
-    if (!toolbarWrap || typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    const observer = new ResizeObserver(([entry]) => {
-      setIsNarrowToolbar(entry.contentRect.width <= 560);
-    });
-    observer.observe(toolbarWrap);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     if (!isAiMenuOpen && !isFontMenuOpen) {
@@ -238,16 +126,24 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
     }
   }, [pendingAiActionId]);
 
-  function runCommand(toolId: ToolId) {
+  useEffect(() => {
+    if (overflowActions.length === 0) {
+      setIsOverflowMenuOpen(false);
+    }
+  }, [overflowActions.length]);
+
+  function runCommand(toolId: EditorToolbarActionId) {
     if (toolId === "ai") {
       setIsFontMenuOpen(false);
+      setIsOverflowMenuOpen(false);
       setPopoverMode(null);
       setIsAiMenuOpen((value) => !value);
       return;
     }
 
-    if (deferredTools.has(toolId)) {
-      onToast("Используйте нижнее меню + для вставки этого блока");
+    if (toolId === "font") {
+      setIsOverflowMenuOpen(false);
+      toggleFontMenu();
       return;
     }
 
@@ -257,6 +153,7 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
 
     if (toolId === "link" || toolId === "color" || toolId === "highlight") {
       setIsFontMenuOpen(false);
+      setIsOverflowMenuOpen(false);
       setPopoverMode(toPopoverMode(toolId));
       return;
     }
@@ -419,16 +316,72 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
   const selectedText = getSelectedText(editor);
 
   return (
-    <div className="toolbar-wrap" ref={toolbarWrapRef}>
+    <div
+      className={`toolbar-wrap toolbar-layout-${toolbarLayoutMode}`}
+      data-layout={toolbarLayoutMode}
+      data-overflow-action-count={overflowActions.length}
+      data-visible-action-count={visibleActions.length}
+      ref={toolbarWrapRef}
+    >
       <div aria-label="Лента форматирования" className="toolbar" role="toolbar">
-        {toolbarTools.map((tool) => {
+        {visibleActions.map((tool, index) => {
           const disabled = isToolDisabled(tool.id, editor, toolbarState);
+          const nextTool = visibleActions[index + 1];
+          const separatorAfter = nextTool !== undefined && nextTool.group !== tool.group;
+
+          if (tool.id === "font") {
+            return (
+              <span className="toolbar-slot" key={tool.id}>
+                <span className="font-menu-anchor" data-toolbar-font-controls ref={fontMenuRef}>
+                  <button
+                    aria-expanded={isFontMenuOpen}
+                    aria-label={tool.tip}
+                    className={`tb font-trigger ${isFontMenuOpen || activeFontFamily || activeFontSize ? "active" : ""}`}
+                    data-toolbar-action={tool.id}
+                    data-toolbar-font-trigger
+                    data-tooltip={tool.tip}
+                    disabled={!editor}
+                    onClick={() => {
+                      if (mouseCommandRef.current) {
+                        mouseCommandRef.current = false;
+                        return;
+                      }
+                      toggleFontMenu();
+                    }}
+                    onMouseDown={(event) => {
+                      if (event.button !== 0) {
+                        return;
+                      }
+                      event.preventDefault();
+                      mouseCommandRef.current = true;
+                      toggleFontMenu();
+                    }}
+                    type="button"
+                  >
+                    <span className="lbl font-trigger-label">{tool.label}</span>
+                  </button>
+                  {isFontMenuOpen ? (
+                    <FontFormatPopover
+                      draft={fontDraft}
+                      onApply={applyFontDraft}
+                      onCancel={() => setIsFontMenuOpen(false)}
+                      onChange={setFontDraft}
+                      onReset={resetFontFormat}
+                    />
+                  ) : null}
+                </span>
+                {separatorAfter ? <span aria-hidden="true" className="tb-sep" /> : null}
+              </span>
+            );
+          }
+
           return (
-            <span className={`toolbar-slot ${adaptiveToolbarTools.has(tool.id) ? "toolbar-slot-adaptive" : ""} ${narrowToolbarTools.has(tool.id) ? "toolbar-slot-narrow" : ""}`} key={tool.id}>
+            <span className="toolbar-slot" key={tool.id}>
               <button
                 aria-label={tool.tip}
                 aria-pressed={toolbarState.active[tool.id] === undefined ? undefined : toolbarState.active[tool.id]}
                 className={`tb ${toolbarState.active[tool.id] ? "active" : ""} ${tool.id === "ai" ? "ai" : ""}`}
+                data-toolbar-action={tool.id}
                 data-tooltip={tool.tip}
                 disabled={disabled}
                 ref={tool.id === "ai" ? aiButtonRef : undefined}
@@ -451,93 +404,64 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
               >
                 {tool.icon ? <Icon name={tool.icon} /> : <span className="lbl">{tool.label}</span>}
               </button>
-              {tool.groupAfter ? <span className="tb-sep" /> : null}
-              {tool.id === "p" ? (
-                <>
-                  <span className="font-menu-anchor" data-toolbar-font-controls ref={fontMenuRef}>
-                    <button
-                      aria-expanded={isFontMenuOpen}
-                      aria-label="Шрифт и размер"
-                      className={`tb font-trigger ${isFontMenuOpen || activeFontFamily || activeFontSize ? "active" : ""}`}
-                      data-toolbar-font-trigger
-                      data-tooltip="Шрифт и размер"
-                      disabled={!editor}
-                      onClick={() => {
-                        if (mouseCommandRef.current) {
-                          mouseCommandRef.current = false;
-                          return;
-                        }
-                        toggleFontMenu();
-                      }}
-                      onMouseDown={(event) => {
-                        if (event.button !== 0) {
-                          return;
-                        }
-                        event.preventDefault();
-                        mouseCommandRef.current = true;
-                        toggleFontMenu();
-                      }}
-                      type="button"
-                    >
-                      <span className="lbl font-trigger-label">Aa</span>
-                    </button>
-                    {isFontMenuOpen ? (
-                      <FontFormatPopover
-                        draft={fontDraft}
-                        onApply={applyFontDraft}
-                        onCancel={() => setIsFontMenuOpen(false)}
-                        onChange={setFontDraft}
-                        onReset={resetFontFormat}
-                      />
-                    ) : null}
-                  </span>
-                  <span className="tb-sep" />
-                </>
-              ) : null}
+              {separatorAfter ? <span aria-hidden="true" className="tb-sep" /> : null}
             </span>
           );
         })}
-        <span className="toolbar-overflow-slot">
-          <button
-            aria-expanded={isOverflowMenuOpen}
-            aria-haspopup="menu"
-            aria-label="Дополнительные инструменты форматирования"
-            className={`tb ${isOverflowMenuOpen ? "active" : ""}`}
-            data-tooltip="Дополнительные инструменты"
-            onClick={() => {
-              setIsAiMenuOpen(false);
-              setIsFontMenuOpen(false);
-              setIsOverflowMenuOpen((current) => !current);
-            }}
-            ref={overflowButtonRef}
-            type="button"
-          >
-            <Icon name="dots" />
-          </button>
-          <MenuPopover
-            anchorRef={overflowButtonRef}
-            ariaLabel="Дополнительные инструменты форматирования"
-            className="toolbar-overflow-menu"
-            isOpen={isOverflowMenuOpen}
-            onClose={() => setIsOverflowMenuOpen(false)}
-            preferredWidth={220}
-          >
-            {toolbarTools.filter((tool) => adaptiveToolbarTools.has(tool.id) || (isNarrowToolbar && narrowToolbarTools.has(tool.id))).map((tool) => (
-              <button
-                aria-checked={toolbarState.active[tool.id] ?? false}
-                disabled={isToolDisabled(tool.id, editor, toolbarState)}
-                key={tool.id}
-                onClick={() => runCommand(tool.id)}
-                role="menuitemcheckbox"
-                type="button"
-              >
-                {tool.icon ? <Icon name={tool.icon} /> : null}
-                <span>{toolbarMenuLabel(tool.tip)}</span>
-                {toolbarState.active[tool.id] ? <Icon className="toolbar-menu-check" name="check" /> : null}
-              </button>
-            ))}
-          </MenuPopover>
-        </span>
+        {overflowActions.length > 0 ? (
+          <span className="toolbar-overflow-slot">
+            <button
+              aria-expanded={isOverflowMenuOpen}
+              aria-haspopup="menu"
+              aria-label="Дополнительные инструменты форматирования"
+              className={`tb ${isOverflowMenuOpen ? "active" : ""}`}
+              data-tooltip="Дополнительные инструменты"
+              onClick={() => {
+                setIsAiMenuOpen(false);
+                setIsFontMenuOpen(false);
+                setIsOverflowMenuOpen((current) => !current);
+              }}
+              onMouseDown={(event) => event.preventDefault()}
+              ref={overflowButtonRef}
+              type="button"
+            >
+              <Icon name="dots" />
+            </button>
+            <MenuPopover
+              anchorRef={overflowButtonRef}
+              ariaLabel="Дополнительные инструменты форматирования"
+              className="toolbar-overflow-menu"
+              isOpen={isOverflowMenuOpen}
+              onClose={() => setIsOverflowMenuOpen(false)}
+              preferredWidth={220}
+            >
+              {overflowActions.map((tool, index) => {
+                const isToggle = toolbarState.active[tool.id] !== undefined;
+                const previousTool = overflowActions[index - 1];
+                return (
+                  <Fragment key={tool.id}>
+                    {previousTool && previousTool.group !== tool.group ? (
+                      <span aria-hidden="true" className="toolbar-overflow-separator" role="separator" />
+                    ) : null}
+                    <button
+                      aria-checked={isToggle ? toolbarState.active[tool.id] : undefined}
+                      data-toolbar-overflow-action={tool.id}
+                      disabled={isToolDisabled(tool.id, editor, toolbarState)}
+                      onClick={() => runCommand(tool.id)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      role={isToggle ? "menuitemcheckbox" : "menuitem"}
+                      type="button"
+                    >
+                      {tool.icon ? <Icon name={tool.icon} /> : <span className="toolbar-menu-action-label">{tool.label}</span>}
+                      <span>{toolbarMenuLabel(tool.tip)}</span>
+                      {toolbarState.active[tool.id] ? <Icon className="toolbar-menu-check" name="check" /> : null}
+                    </button>
+                  </Fragment>
+                );
+              })}
+            </MenuPopover>
+          </span>
+        ) : null}
       </div>
 
       {isAiMenuOpen ? (
@@ -559,7 +483,7 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
             </span>
           </div>
           <div className="ai-menu-groups">
-            {aiActionGroups.map((group) => (
+            {EDITOR_AI_ACTION_GROUPS.map((group) => (
               <div className="ai-menu-group" key={group.id}>
                 {group.items.map((item) => (
                   <button
@@ -625,7 +549,7 @@ function toolbarMenuLabel(tip: string) {
   return tip.replace(/\s*\([^)]*\)$/, "");
 }
 
-function toPopoverMode(toolId: ToolId): EditorCommandPopoverMode {
+function toPopoverMode(toolId: EditorToolbarActionId): EditorCommandPopoverMode {
   if (toolId === "color") {
     return "color";
   }
@@ -699,10 +623,7 @@ function buildToolbarState(editor: Editor | null): ToolbarRuntimeState {
   };
 }
 
-function isToolDisabled(toolId: ToolId, editor: Editor | null, toolbarState: ToolbarRuntimeState) {
-  if (deferredTools.has(toolId)) {
-    return false;
-  }
+function isToolDisabled(toolId: EditorToolbarActionId, editor: Editor | null, toolbarState: ToolbarRuntimeState) {
   if (!editor) {
     return true;
   }

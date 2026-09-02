@@ -1,6 +1,9 @@
+import { useRef } from "react";
 import type { AppSection } from "../../app/types";
 import type { SemanticSearchResult } from "../../services/embeddingService";
-import { PageShell } from "../navigation/PageShell";
+import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysicalElementWidth";
+import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
+import { getRagLayoutMode } from "./ragResponsiveLayout";
 import { RagChatWorkspace } from "./RagChatWorkspace";
 
 interface RagChatPageProps {
@@ -14,13 +17,9 @@ interface RagChatPageProps {
   onRagSourcesCollapsedChange: (collapsed: boolean) => void;
   onRagSourcesReset: () => void;
   onRagSourcesResize: (deltaX: number) => void;
-  onSidebarReset: () => void;
-  onSidebarResize: (deltaX: number) => void;
-  onToggleSidebarCollapse: () => void;
   ragSourcesCollapsed: boolean;
   ragSourcesWidth: number;
-  sidebarCollapsed: boolean;
-  sidebarWidth: number;
+  sidebar: PageShellSidebarProps;
   onToast: (message: string) => void;
   ragConversationWidth: number;
 }
@@ -36,33 +35,29 @@ export function RagChatPage({
   onRagSourcesCollapsedChange,
   onRagSourcesReset,
   onRagSourcesResize,
-  onSidebarReset,
-  onSidebarResize,
-  onToggleSidebarCollapse,
   onToast,
   ragConversationWidth,
   ragSourcesCollapsed,
   ragSourcesWidth,
-  sidebarCollapsed,
-  sidebarWidth,
+  sidebar,
 }: RagChatPageProps) {
+  const shellRef = useRef<HTMLDivElement>(null);
+  const layoutMode = getRagLayoutMode(useObservedPhysicalElementWidth(shellRef));
+
   return (
     <PageShell
       activeSection="rag"
       contentClassName="rag-simple-page"
       onNavigate={onNavigate}
       onNewNote={onNewNote}
-      onSidebarReset={onSidebarReset}
-      onSidebarResize={onSidebarResize}
-      onToggleSidebarCollapse={onToggleSidebarCollapse}
       onToast={onToast}
-      sidebarCollapsed={sidebarCollapsed}
-      sidebarWidth={sidebarWidth}
+      sidebar={sidebar}
     >
-      <div className="rag-page-shell">
+      <div className="rag-page-shell" data-layout={layoutMode} ref={shellRef}>
         <RagChatWorkspace
           conversationWidth={ragConversationWidth}
           dataReloadGeneration={dataReloadGeneration}
+          layoutMode={layoutMode}
           onConversationReset={onRagConversationReset}
           onConversationResize={onRagConversationResize}
           onOpenModelSettings={onOpenModelSettings}
@@ -71,7 +66,7 @@ export function RagChatPage({
           onSourcesReset={onRagSourcesReset}
           onSourcesResize={onRagSourcesResize}
           onToast={onToast}
-          sourcesCollapsed={ragSourcesCollapsed}
+          preferredSourcesCollapsed={ragSourcesCollapsed}
           sourcesWidth={ragSourcesWidth}
         />
       </div>

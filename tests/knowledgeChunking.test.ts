@@ -6,6 +6,7 @@ import { formatKnowledgeCheckedAt, getKnowledgeStatusLabel } from "../src/featur
 const serviceSource = readFileSync(new URL("../src/services/knowledgeService.ts", import.meta.url), "utf8");
 const settingsSource = readFileSync(new URL("../src/features/settings/SettingsPage.tsx", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles/app.css", import.meta.url), "utf8");
+const settingsStylesSource = readFileSync(new URL("../src/styles/settings.css", import.meta.url), "utf8");
 
 describe("knowledge chunking frontend", () => {
   it("uses typed Tauri contracts without localStorage or direct SQL", () => {
@@ -73,7 +74,7 @@ describe("knowledge chunking frontend", () => {
     assert.match(settingsSource, /className="export-action secondary"/);
     assert.match(stylesSource, /\.knowledge-index-more summary[\s\S]*border-radius: var\(--button-radius\)/);
     assert.match(stylesSource, /\.knowledge-index-metrics[\s\S]*grid-template-columns: repeat\(3/);
-    assert.match(stylesSource, /\.knowledge-index-metrics \{\s*grid-template-columns: 1fr;/);
+    assert.match(settingsStylesSource, /\.settings-layout-narrow :is\(\.knowledge-index-metrics, \.provider-presets\)\s*\{\s*grid-template-columns: minmax\(0, 1fr\)/);
   });
 
   it("leaves the existing full-text search service available", () => {

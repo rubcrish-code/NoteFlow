@@ -36,11 +36,15 @@ describe("NoteFlow UI foundation", () => {
     }
   });
 
-  it("provides container-aware layouts and a reduced-motion fallback", () => {
+  it("provides physical-width layout policies and a reduced-motion fallback", () => {
     const foundation = readFileSync("src/styles/foundation.css", "utf8");
+    const pageShell = readFileSync("src/features/navigation/PageShell.tsx", "utf8");
+    const settings = readFileSync("src/features/settings/SettingsPage.tsx", "utf8");
+    const rag = readFileSync("src/features/rag/RagChatPage.tsx", "utf8");
 
-    assert.match(foundation, /@container simple-page/);
-    assert.match(foundation, /@container rag-workspace/);
+    assert.match(pageShell, /useObservedPhysicalElementWidth/);
+    assert.match(settings, /useObservedPhysicalElementWidth/);
+    assert.match(rag, /useObservedPhysicalElementWidth/);
     assert.match(foundation, /@media \(prefers-reduced-motion: reduce\)/);
     assert.match(foundation, /transition-duration: 1ms !important/);
     assert.match(foundation, /\.page-shell,[\s\S]*\.rag-page[\s\S]*transition: grid-template-columns var\(--motion-panel\)/);

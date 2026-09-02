@@ -166,10 +166,10 @@ describe("unified model settings UI", () => {
     assert.match(stylesSource, /\.model-profile-actions\s*\{[\s\S]*flex-wrap: wrap/);
     assert.match(stylesSource, /\.model-profile-actions button[\s\S]*white-space: normal/);
     assert.match(stylesSource, /grid-template-columns: repeat\(auto-fit, minmax\(min\(150px, 100%\), 1fr\)\)/);
-    assert.match(stylesSource, /@media \(max-width: 680px\)[\s\S]*\.model-load-control[\s\S]*flex-direction: column/);
+    assert.match(stylesSource, /\.settings-layout-narrow :is\(\.model-load-control, \.secret-wrap, \.input-action\)[\s\S]*flex-direction: column/);
     assert.match(stylesSource, /overflow-wrap: anywhere/);
     assert.match(appShellSource, /"--app-page-padding-x"/);
-    assert.match(appShellSource, /"--app-page-sidebar-max"/);
-    assert.match(appShellSource, /zoomPercent > 100/);
+    assert.match(appShellSource, /usePhysicalViewportWidth\(appZoom\.zoomPercent\)/);
+    assert.doesNotMatch(appShellSource, /"--app-page-sidebar-max"|app-zoom-(?:high|elevated)/);
   });
 });

@@ -3,7 +3,11 @@
   --listw: 376px;
   --chatw: 0px;
   display: grid;
-  grid-template-columns: var(--sbw) var(--listw) minmax(0, 1fr) var(--chatw);
+  grid-template-columns:
+    calc(var(--sbw) / var(--app-zoom, 1))
+    calc(var(--listw) / var(--app-zoom, 1))
+    minmax(0, 1fr)
+    calc(var(--chatw) / var(--app-zoom, 1));
   height: 100%;
   min-width: 0;
   overflow: hidden;
@@ -692,138 +696,6 @@
 
 .semantic-confirm-dialog {
   max-width: 470px;
-}
-
-@media (max-width: 960px) {
-  .semantic-profile-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 680px) {
-  .model-section-header,
-  .settings-subheading-row,
-  .semantic-profile-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .semantic-profile-head {
-    align-items: start;
-    grid-template-columns: 38px minmax(0, 1fr);
-  }
-
-  .semantic-profile-head .status-pill {
-    grid-column: 2;
-    justify-self: start;
-  }
-
-  .semantic-profile-metrics,
-  .semantic-profile-form {
-    grid-template-columns: 1fr;
-  }
-
-  .semantic-profile-form .full,
-  .semantic-profile-form .text-danger-action {
-    grid-column: auto;
-  }
-
-  .semantic-profile-actions > button,
-  .semantic-more-actions,
-  .semantic-more-actions > summary {
-    margin-left: 0;
-    width: 100%;
-  }
-
-  .semantic-more-menu {
-    left: 0;
-    right: auto;
-    width: 100%;
-  }
-
-  .model-section-action,
-  .model-section-action > button {
-    width: 100%;
-  }
-
-  .model-load-control {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .model-load-control > button {
-    width: 100%;
-  }
-}
-
-@container simple-page (max-width: 900px) {
-  .settings-layout-inner {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .settings-nav-col {
-    border-right: 0;
-    min-height: 0;
-    padding-right: 0;
-  }
-
-  .semantic-profile-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@container simple-page (max-width: 650px) {
-  .model-section-header,
-  .model-profile-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .model-section-action,
-  .model-section-action > button,
-  .model-profile-actions > button,
-  .semantic-more-actions,
-  .semantic-more-actions > summary {
-    margin-left: 0;
-    width: 100%;
-  }
-
-  .model-load-control,
-  .secret-wrap,
-  .input-action {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .model-load-control > button,
-  .secret-wrap > button,
-  .input-action > button {
-    width: 100%;
-  }
-
-  .semantic-profile-head,
-  .llm-provider-card-main {
-    align-items: start;
-    grid-template-columns: 38px minmax(0, 1fr);
-  }
-
-  .semantic-profile-head .status-pill,
-  .llm-provider-card-main .status-pill {
-    grid-column: 2;
-    justify-self: start;
-  }
-
-  .semantic-profile-metrics,
-  .semantic-profile-form,
-  .form-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .semantic-profile-form .full,
-  .semantic-profile-form .text-danger-action,
-  .field.full {
-    grid-column: auto;
-  }
 }
 
 .app-zoom-root {
@@ -3438,11 +3310,11 @@
 }
 
 .resize-sb {
-  left: var(--sbw);
+  left: calc(var(--sbw) / var(--app-zoom, 1));
 }
 
 .resize-list {
-  left: calc(var(--sbw) + var(--listw));
+  left: calc((var(--sbw) + var(--listw)) / var(--app-zoom, 1));
 }
 
 .chat-resize {
@@ -3507,7 +3379,7 @@
 .page-shell {
   --page-sbw: 250px;
   display: grid;
-  grid-template-columns: min(var(--page-sbw), var(--app-page-sidebar-max, 10000px)) minmax(0, 1fr);
+  grid-template-columns: calc(var(--page-sbw) / var(--app-zoom, 1)) minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
   position: relative;
@@ -3518,7 +3390,7 @@
 }
 
 .page-resize-sb {
-  left: min(var(--page-sbw), var(--app-page-sidebar-max, 10000px));
+  left: calc(var(--page-sbw) / var(--app-zoom, 1));
 }
 
 .simple-page {
@@ -6127,10 +5999,6 @@
   width: min(460px, 100%);
 }
 
-.new-note-dialog:has(.date-picker-popover) {
-  overflow: visible;
-}
-
 .new-note-dialog h2 {
   font-size: 20px;
   margin: 0;
@@ -6205,29 +6073,28 @@
   border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow: var(--shadow-pop);
-  left: 0;
-  max-height: min(430px, calc(100vh - 180px));
-  overflow-y: auto;
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+  overflow: auto;
   padding: 12px;
-  position: absolute;
-  top: calc(100% + 8px);
-  width: min(320px, calc(100vw - 36px));
-  z-index: 95;
+  position: fixed;
+  transform-origin: top center;
+  z-index: 1300;
 }
 
 .date-picker-nav {
   align-items: center;
   display: grid;
   gap: 6px;
-  grid-template-columns: 34px 34px minmax(0, 1fr) 34px 34px;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
   margin-bottom: 10px;
 }
 
 .date-picker-nav button,
 .date-picker-grid button,
 .date-picker-footer button {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 9px;
   color: var(--text);
   min-height: 34px;
@@ -6237,6 +6104,10 @@
 .date-picker-grid button:hover,
 .date-picker-footer button:hover {
   background: var(--bsoft);
+}
+
+.date-picker-nav button {
+  background: var(--surface-hover);
 }
 
 .date-picker-nav svg {
@@ -6274,8 +6145,16 @@
 .date-picker-grid button {
   aspect-ratio: 1;
   font-size: 12.5px;
-  min-height: 0;
+  min-height: 34px;
+  min-width: 0;
   padding: 0;
+}
+
+.date-picker-grid button:focus-visible,
+.date-picker-nav button:focus-visible,
+.date-picker-footer button:focus-visible {
+  box-shadow: 0 0 0 3px var(--field-ring);
+  outline: 0;
 }
 
 .date-picker-grid button.muted {
@@ -6310,6 +6189,41 @@
 .date-picker-footer span {
   color: var(--tsoft);
   font-size: 12px;
+}
+
+@media (max-height: 760px) {
+  .date-picker-popover {
+    padding: 10px;
+  }
+
+  .date-picker-nav {
+    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    margin-bottom: 6px;
+  }
+
+  .date-picker-nav button,
+  .date-picker-grid button,
+  .date-picker-footer button {
+    min-height: 32px;
+  }
+
+  .date-picker-weekdays,
+  .date-picker-grid {
+    gap: 2px;
+  }
+
+  .date-picker-weekdays {
+    margin-bottom: 4px;
+  }
+
+  .date-picker-grid button {
+    aspect-ratio: auto;
+    height: 32px;
+  }
+
+  .date-picker-footer {
+    margin-top: 6px;
+  }
 }
 
 .new-note-actions {
@@ -7260,185 +7174,6 @@
 
   .ed-scroll {
     --editor-page-gutter: clamp(18px, 3vw, 40px);
-  }
-}
-
-@media (max-width: 1100px) {
-  .archive-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .archive-row .tb {
-    justify-content: center;
-    width: 100%;
-  }
-
-  .rag-page {
-    grid-template-columns:
-      min(calc(var(--ragcw, 220px) / var(--app-zoom, 1)), 26%)
-      minmax(320px, 1fr)
-      min(calc(var(--ragsw, 260px) / var(--app-zoom, 1)), 30%);
-  }
-
-  .rag-page.sources-collapsed {
-    grid-template-columns:
-      min(calc(var(--ragcw, 220px) / var(--app-zoom, 1)), 30%)
-      minmax(320px, 1fr);
-  }
-
-  .rag-page.conversations-collapsed {
-    grid-template-columns:
-      minmax(320px, 1fr)
-      min(calc(var(--ragsw, 260px) / var(--app-zoom, 1)), 34%);
-  }
-
-  .rag-page.conversations-collapsed.sources-collapsed {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rag-chat-scroll,
-  .rag-input-wrap {
-    padding-left: 24px;
-    padding-right: 24px;
-  }
-
-  .rag-model-status {
-    align-items: stretch;
-  }
-
-  .rag-index-compact {
-    margin-left: 0;
-  }
-
-  .tag-row {
-    align-items: flex-start;
-    grid-template-columns: 18px minmax(0, 1fr);
-  }
-
-  .tag-row button {
-    grid-column: auto;
-    justify-self: auto;
-  }
-
-  .tag-row,
-  .archive-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .tag-row-actions,
-  .archive-row-actions {
-    justify-content: flex-start;
-  }
-
-  .archive-row-main {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .block-menu-grid,
-  .block-menu-tools,
-  .block-menu-inline,
-  .block-callout-variants {
-    grid-template-columns: 1fr;
-  }
-
-  .ed-body .file-attachment-card {
-    align-items: stretch;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .file-attachment-actions {
-    justify-content: flex-end;
-  }
-
-  .export-action-list {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .knowledge-index-metrics {
-    grid-template-columns: 1fr;
-  }
-
-  .knowledge-index-more summary {
-    justify-content: center;
-  }
-
-  .knowledge-index-more,
-  .knowledge-primary-action {
-    width: 100%;
-  }
-
-  .knowledge-repair-action {
-    min-width: 0;
-    position: static;
-    width: 100%;
-  }
-
-  .export-action {
-    justify-content: flex-start;
-    justify-self: stretch;
-    white-space: normal;
-    width: 100%;
-  }
-
-  .provider-presets,
-  .form-grid,
-  .project-grid,
-  .theme-options,
-  .settings-layout-inner {
-    grid-template-columns: 1fr;
-  }
-
-  .settings-nav-col {
-    border-right: none;
-    min-height: 0;
-    padding-right: 0;
-  }
-
-  .llm-action-bar {
-    align-items: stretch;
-    flex-direction: column-reverse;
-  }
-
-  .llm-main-actions,
-  .llm-danger-actions {
-    justify-content: stretch;
-    margin-left: 0;
-    width: 100%;
-  }
-
-  .llm-main-actions .primary-btn,
-  .llm-main-actions .secondary-btn,
-  .llm-danger-actions .danger-btn {
-    flex: 1 1 180px;
-    min-width: 0;
-  }
-
-  .llm-provider-card-main {
-    align-items: flex-start;
-    grid-template-columns: 22px minmax(0, 1fr);
-  }
-
-  .llm-default-badge,
-  .llm-provider-card-main .status-pill {
-    grid-column: 2;
-    justify-self: start;
-  }
-
-  .llm-provider-card-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .llm-provider-card-actions .secondary-btn,
-  .llm-provider-card-actions .danger-btn {
-    width: 100%;
-  }
-
-  .zoom-settings-card {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 

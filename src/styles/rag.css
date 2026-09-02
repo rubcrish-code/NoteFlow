@@ -5,6 +5,40 @@
   container-type: inline-size;
 }
 
+.rag-page.rag-layout-compact {
+  grid-template-columns: min(calc(240px / var(--app-zoom, 1)), calc(var(--ragcw, 280px) / var(--app-zoom, 1))) minmax(0, 1fr);
+}
+
+.rag-page.rag-layout-compact.conversations-collapsed,
+.rag-page.rag-layout-narrow,
+.rag-page.rag-layout-tight {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rag-page .rag-panel-overlay {
+  animation: nf-popover-in var(--motion-normal) var(--ease-standard) both;
+  bottom: var(--space-2);
+  box-shadow: var(--shadow-popover);
+  max-width: calc(100% - 2 * var(--space-2));
+  position: absolute;
+  top: var(--space-2);
+  z-index: 60;
+}
+
+.rag-page .rag-sources-panel.rag-panel-overlay {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  right: var(--space-2);
+  width: min(360px, calc(100% - 2 * var(--space-2)));
+}
+
+.rag-page .rag-conversations.rag-panel-overlay {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  left: var(--space-2);
+  width: min(300px, calc(100% - 2 * var(--space-2)));
+}
+
 .rag-conversations {
   background: color-mix(in srgb, var(--surface-sidebar) 72%, var(--surface-panel));
   border-right-color: var(--border-subtle);
@@ -61,12 +95,22 @@
   border-bottom: 1px solid var(--border-subtle);
   display: grid;
   flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  width: 100%;
+}
+
+.rag-chat-title,
+.rag-chat-top,
+.rag-top-actions {
+  min-width: 0;
 }
 
 .rag-chat-top {
   border-bottom: 0;
   min-height: 56px;
   padding: var(--space-2) clamp(var(--space-3), 2.5cqi, var(--space-5));
+  width: 100%;
 }
 
 .rag-chat-title > div {
@@ -100,7 +144,9 @@
   flex-wrap: nowrap;
   gap: var(--space-2);
   min-height: 32px;
+  min-width: 0;
   padding: 0 clamp(var(--space-3), 2.5cqi, var(--space-5)) var(--space-3);
+  width: 100%;
 }
 
 .rag-model-status.loading {
@@ -296,30 +342,6 @@
   font-size: var(--text-md-size);
 }
 
-.icon-send {
-  align-items: center;
-  background: var(--accent);
-  border: 0;
-  border-radius: var(--radius-pill);
-  color: var(--on-accent);
-  display: inline-flex;
-  flex-shrink: 0;
-  height: 32px;
-  justify-content: center;
-  padding: 0;
-  width: 32px;
-}
-
-.icon-send:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.icon-send svg {
-  height: 16px;
-  width: 16px;
-}
-
 .rag-stage-note {
   color: var(--text-muted);
   font-size: var(--text-xs-size);
@@ -389,75 +411,95 @@
   max-width: 26ch;
 }
 
-@container rag-chat (max-width: 980px) {
-  .rag-chat-scroll,
-  .rag-input-wrap {
-    padding-inline: var(--space-5);
-  }
+.rag-layout-compact .rag-model-summary > .rag-generator-summary,
+.rag-layout-compact .rag-model-summary > .rag-generator-summary + .rag-summary-separator,
+.rag-layout-compact .rag-locality-label,
+.rag-layout-narrow .rag-model-summary > .rag-generator-summary,
+.rag-layout-narrow .rag-model-summary > .rag-generator-summary + .rag-summary-separator,
+.rag-layout-narrow .rag-locality-label,
+.rag-layout-tight .rag-model-summary > .rag-generator-summary,
+.rag-layout-tight .rag-model-summary > .rag-generator-summary + .rag-summary-separator,
+.rag-layout-tight .rag-locality-label {
+  display: none;
 }
 
-@container rag-chat (max-width: 760px) {
-  .rag-model-summary > .rag-generator-summary,
-  .rag-model-summary > .rag-generator-summary + .rag-summary-separator,
-  .rag-locality-label {
-    display: none;
-  }
-
-  .rag-chat-top {
-    align-items: center;
-    flex-wrap: nowrap;
-  }
-
-  .rag-top-actions {
-    flex-wrap: nowrap;
-    margin-left: auto;
-    width: auto;
-  }
-
-  .rag-top-actions .secondary-btn {
-    font-size: 0;
-    padding: 0;
-    width: var(--control-height-compact);
-  }
-
-  .rag-top-actions .secondary-btn svg {
-    margin: 0;
-  }
-
-  .rag-model-status {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .rag-model-summary {
-    flex-basis: 100%;
-  }
-
-  .rag-index-compact {
-    margin-left: 0;
-  }
-
-  .rag-chat-scroll,
-  .rag-input-wrap {
-    padding-inline: var(--space-4);
-  }
-
-  .rag-user {
-    max-width: 88%;
-  }
+.rag-layout-compact .rag-top-actions .secondary-btn,
+.rag-layout-narrow .rag-top-actions .secondary-btn,
+.rag-layout-tight .rag-top-actions .secondary-btn {
+  font-size: 0;
+  min-width: var(--control-height-compact);
+  padding: 0;
+  width: var(--control-height-compact);
 }
 
-@container rag-chat (max-width: 560px) {
-  .rag-model-summary .rag-summary-separator,
-  .rag-index-label {
-    display: none;
-  }
+.rag-layout-compact .rag-top-actions .secondary-btn svg,
+.rag-layout-narrow .rag-top-actions .secondary-btn svg,
+.rag-layout-tight .rag-top-actions .secondary-btn svg {
+  margin: 0;
+}
 
-  .rag-chat-scroll {
-    padding-block: var(--space-5);
-  }
+:is(.rag-layout-compact, .rag-layout-narrow, .rag-layout-tight) :is(.rag-chat-scroll, .rag-input-wrap) {
+  padding-inline: var(--space-5);
+}
 
-  .rag-stage-note {
-    display: none;
-  }
+:is(.rag-layout-narrow, .rag-layout-tight) :is(.rag-model-summary > .rag-generator-summary, .rag-model-summary > .rag-generator-summary + .rag-summary-separator, .rag-locality-label) {
+  display: none;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-chat-top {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-top-actions {
+  flex-wrap: nowrap;
+  margin-left: auto;
+  width: auto;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-top-actions .secondary-btn {
+  font-size: 0;
+  padding: 0;
+  width: var(--control-height-compact);
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-top-actions .secondary-btn svg {
+  margin: 0;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-model-status {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-model-summary {
+  flex-basis: 100%;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-index-compact {
+  margin-left: 0;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) :is(.rag-index-compact .ghost-btn, .rag-setup-action) {
+  white-space: nowrap;
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) :is(.rag-chat-scroll, .rag-input-wrap) {
+  padding-inline: var(--space-4);
+}
+
+:is(.rag-layout-narrow, .rag-layout-tight) .rag-user {
+  max-width: 88%;
+}
+
+.rag-layout-tight :is(.rag-model-summary .rag-summary-separator, .rag-index-label, .rag-stage-note, .rag-chat-title span) {
+  display: none;
+}
+
+.rag-layout-tight .rag-chat-scroll {
+  padding-block: var(--space-5);
+}
+
+.rag-layout-tight .rag-model-status {
+  padding-bottom: var(--space-2);
 }

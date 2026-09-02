@@ -13,6 +13,7 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
   const [noteDate, setNoteDate] = useState(todayIsoDate);
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const dateTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -32,6 +33,7 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
       return false;
     }
     setIsDatePickerOpen(false);
+    window.requestAnimationFrame(() => dateTriggerRef.current?.focus());
     return true;
   }, [isDatePickerOpen]);
 
@@ -65,7 +67,7 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
         </label>
         <label>
           Дата заметки
-          <NoteDatePicker isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} value={noteDate} />
+          <NoteDatePicker isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} triggerRef={dateTriggerRef} value={noteDate} />
           <span className="date-picker-readable">Выбрана дата: {formatDisplayDate(noteDate)}</span>
         </label>
       </form>

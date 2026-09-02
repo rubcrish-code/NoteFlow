@@ -161,16 +161,16 @@ describe("editor UI polish contract", () => {
   it("keeps tags and archive rows compact with shared action styles", () => {
     const tagsPage = readFileSync("src/features/tags/TagsPage.tsx", "utf8");
     const archivePage = readFileSync("src/features/archive/ArchivePage.tsx", "utf8");
-    const css = readFileSync("src/styles/app.css", "utf8");
+    const legacyActionsCss = readFileSync("src/styles/app.css", "utf8");
+    const pageLayoutCss = readFileSync("src/styles/pages.css", "utf8");
 
     assert.match(tagsPage, /tag-row-main/);
     assert.match(tagsPage, /tag-row-actions/);
     assert.match(archivePage, /archive-row-main/);
     assert.match(archivePage, /archive-row-actions/);
-    assert.match(css, /\.tag-row\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
-    assert.match(css, /\.archive-row\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
-    assert.match(css, /:where\(\.tag-action, \.archive-action/);
-    assert.match(css, /\.tag-row \.tag-action\s*\{[\s\S]*border-radius:\s*var\(--button-radius\)/);
+    assert.match(pageLayoutCss, /\.tag-row,\s*\.archive-row\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
+    assert.match(legacyActionsCss, /:where\(\.tag-action, \.archive-action/);
+    assert.match(legacyActionsCss, /\.tag-row \.tag-action\s*\{[\s\S]*border-radius:\s*var\(--button-radius\)/);
   });
 
   it("keeps primary, secondary, and supporting text readable in both themes", () => {

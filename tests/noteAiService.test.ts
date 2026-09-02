@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { EDITOR_AI_ACTION_GROUPS } from "../src/features/editor/editorAiActions";
 
 const appShellSource = readFileSync("src/app/AppShell.tsx", "utf8");
 const editorAreaSource = readFileSync("src/features/editor/EditorArea.tsx", "utf8");
@@ -129,9 +130,10 @@ describe("current note AI contract", () => {
   });
 
   it("maps toolbar AI actions to explicit current-note actions and avoids RAG actions", () => {
-    for (const actionId of ["improve", "fix", "shorten", "expand", "tone", "tasks", "translate", "explain", "ask"]) {
-      assert.match(formattingToolbarSource, new RegExp(`id: "${actionId}"`));
-    }
+    assert.deepEqual(
+      EDITOR_AI_ACTION_GROUPS.flatMap((group) => group.items.map((item) => item.id)),
+      ["improve", "fix", "shorten", "expand", "tone", "tasks", "translate", "explain"],
+    );
 
     assert.match(formattingToolbarSource, /onAiAction\(item\.id\)/);
     assert.match(formattingToolbarSource, /pendingAiActionId/);

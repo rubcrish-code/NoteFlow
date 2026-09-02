@@ -3,7 +3,7 @@ import type { AppSection, ArchiveItem } from "../../app/types";
 import { Icon } from "../../shared/Icon";
 import { MenuPopover } from "../../shared/MenuPopover";
 import { ModalShell } from "../../shared/ModalShell";
-import { PageShell } from "../navigation/PageShell";
+import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 
 interface ArchivePageProps {
   archiveItems: ArchiveItem[];
@@ -12,9 +12,10 @@ interface ArchivePageProps {
   onNewNote: () => void;
   onRestoreItem: (item: ArchiveItem) => void;
   onToast: (message: string) => void;
+  sidebar: PageShellSidebarProps;
 }
 
-export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote, onRestoreItem, onToast }: ArchivePageProps) {
+export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote, onRestoreItem, onToast, sidebar }: ArchivePageProps) {
   const [query, setQuery] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ArchiveItem | null>(null);
   const [openItemMenuId, setOpenItemMenuId] = useState("");
@@ -46,14 +47,15 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
   const pendingDeleteVerb = pendingDelete?.kind === "Проект" ? "удалён" : "удалена";
 
   return (
-    <PageShell activeSection="archive" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
-      <div className="page-title">Архив</div>
-      <div className="page-subtitle">Завершённые и неактуальные материалы. Их можно восстановить в любой момент.</div>
-      <label className="search archive-search">
-        <Icon name="search" />
-        <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск в архиве…" type="search" value={query} />
-      </label>
-      <div className="archive-list">
+    <PageShell activeSection="archive" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
+      <div className="archive-page-content">
+        <div className="page-title">Архив</div>
+        <div className="page-subtitle">Завершённые и неактуальные материалы. Их можно восстановить в любой момент.</div>
+        <label className="search archive-search">
+          <Icon name="search" />
+          <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск в архиве…" type="search" value={query} />
+        </label>
+        <div className="archive-list">
         {filteredItems.map((item) => (
           <div className="archive-row" key={item.id}>
             <div className="archive-row-main">
@@ -99,6 +101,7 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
             <div><b>{query ? "Ничего не найдено" : "Архив пуст"}</b><span>{query ? "Попробуйте изменить запрос." : "Здесь появятся архивированные заметки и проекты."}</span></div>
           </div>
         ) : null}
+        </div>
       </div>
 
       {pendingDelete ? (

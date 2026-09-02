@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import type { AppSection, ProjectCard } from "../../app/types";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
-import { PageShell } from "../navigation/PageShell";
+import { FILE_COUNT_FORMS, formatRussianCount, NOTE_COUNT_FORMS } from "../../shared/russianPlural";
+import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 
 interface ProjectsPageProps {
   projects: ProjectCard[];
@@ -11,9 +12,10 @@ interface ProjectsPageProps {
   onNewNote: () => void;
   onOpenProject: (projectTitle: string) => void;
   onToast: (message: string) => void;
+  sidebar: PageShellSidebarProps;
 }
 
-export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast }: ProjectsPageProps) {
+export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast, sidebar }: ProjectsPageProps) {
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
 
   function createProject(title: string, description: string) {
@@ -22,8 +24,9 @@ export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote,
   }
 
   return (
-    <PageShell activeSection="projects" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
-      <header className="content-page-header">
+    <PageShell activeSection="projects" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
+      <div className="projects-page-content">
+        <header className="content-page-header">
         <div>
           <div className="page-title">Проекты</div>
           <div className="page-subtitle">Организуйте заметки и материалы по направлениям работы.</div>
@@ -32,8 +35,8 @@ export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote,
           <Icon name="plus" />
           Новый проект
         </button>
-      </header>
-      <div className="project-grid">
+        </header>
+        <div className="project-grid">
         {projects.map((project) => (
           <button className="project-card" key={project.id} onClick={() => onOpenProject(project.title)} type="button">
             <span className="project-icon"><Icon name="folder" /></span>
@@ -41,8 +44,8 @@ export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote,
               <span className="project-title">{project.title}</span>
               <span className="project-description">{project.description}</span>
               <span className="project-stats">
-                <span>{project.notes} заметок</span>
-                {project.files ? <span>{project.files} файлов</span> : null}
+                <span>{formatRussianCount(project.notes, NOTE_COUNT_FORMS)}</span>
+                {project.files ? <span>{formatRussianCount(project.files, FILE_COUNT_FORMS)}</span> : null}
               </span>
             </span>
             <Icon className="project-open-icon" name="forward" />
@@ -57,6 +60,7 @@ export function ProjectsPage({ projects, onCreateProject, onNavigate, onNewNote,
             </div>
           </div>
         ) : null}
+        </div>
       </div>
       {isProjectModalOpen ? <NewProjectModal onClose={() => setIsProjectModalOpen(false)} onCreate={createProject} /> : null}
     </PageShell>

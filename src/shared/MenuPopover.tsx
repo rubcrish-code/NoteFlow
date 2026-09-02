@@ -18,6 +18,8 @@ function isMenuNavigationKey(key: string): key is MenuNavigationKey {
   return key === "ArrowDown" || key === "ArrowUp" || key === "Home" || key === "End";
 }
 
+const MENU_ITEM_SELECTOR = "[role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio']";
+
 export function MenuPopover({
   anchorRef,
   ariaLabel,
@@ -43,7 +45,7 @@ export function MenuPopover({
     }
 
     const animationFrame = window.requestAnimationFrame(() => {
-      popoverRef.current?.querySelector<HTMLElement>("[role='menuitem']")?.focus();
+      popoverRef.current?.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
     });
 
     function handlePointerDown(event: PointerEvent) {
@@ -68,7 +70,11 @@ export function MenuPopover({
         return;
       }
 
-      const items = Array.from(popoverRef.current.querySelectorAll<HTMLElement>("[role='menuitem']:not([disabled])"));
+      const items = Array.from(
+        popoverRef.current.querySelectorAll<HTMLElement>(
+          "[role='menuitem']:not([disabled]), [role='menuitemcheckbox']:not([disabled]), [role='menuitemradio']:not([disabled])",
+        ),
+      );
       const currentIndex = items.indexOf(document.activeElement as HTMLElement);
       const targetIndex = getMenuTargetIndex(event.key, currentIndex, items.length);
       if (targetIndex >= 0) {

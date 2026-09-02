@@ -12,6 +12,7 @@ interface TooltipPosition {
 }
 
 const TOOLTIP_ID = "noteflow-tooltip";
+let suppressedPointerTooltip: string | null = null;
 
 function findTooltipTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) {
@@ -29,6 +30,34 @@ export function TooltipPortal() {
   const previousDescribedByRef = useRef<string | null>(null);
 
   useEffect(() => {
+    let triggerObserver: MutationObserver | null = null;
+
+    function restoreCurrentAnchor() {
+      triggerObserver?.disconnect();
+      triggerObserver = null;
+      if (!anchorElementRef.current) return;
+      const previousDescribedBy = previousDescribedByRef.current;
+      if (previousDescribedBy) {
+        anchorElementRef.current.setAttribute("aria-describedby", previousDescribedBy);
+      } else {
+        anchorElementRef.current.removeAttribute("aria-describedby");
+      }
+      anchorElementRef.current = null;
+      previousDescribedByRef.current = null;
+    }
+
+    function hideTooltip(event?: MouseEvent | FocusEvent | Event) {
+      if (event instanceof MouseEvent && event.type === "mouseout" && anchorElementRef.current) {
+        const relatedTarget = event.relatedTarget;
+        if (relatedTarget instanceof Node && anchorElementRef.current.contains(relatedTarget)) {
+          return;
+        }
+      }
+
+      restoreCurrentAnchor();
+      setAnchor(null);
+    }
+
     function showTooltip(target: EventTarget | null) {
       const tooltipTarget = findTooltipTarget(target);
       const text = tooltipTarget?.dataset.tooltip;
@@ -36,52 +65,69 @@ export function TooltipPortal() {
         return;
       }
 
+      const isNewTrigger = anchorElementRef.current !== tooltipTarget;
+      if (isNewTrigger) {
+        restoreCurrentAnchor();
+        previousDescribedByRef.current = tooltipTarget.getAttribute("aria-describedby");
+      }
       anchorElementRef.current = tooltipTarget;
-      previousDescribedByRef.current = tooltipTarget.getAttribute("aria-describedby");
       const describedBy = previousDescribedByRef.current?.split(/\s+/).filter(Boolean) ?? [];
       if (!describedBy.includes(TOOLTIP_ID)) {
         tooltipTarget.setAttribute("aria-describedby", [...describedBy, TOOLTIP_ID].join(" "));
       }
       setAnchor({ rect: tooltipTarget.getBoundingClientRect(), text });
+      triggerObserver?.disconnect();
+      triggerObserver = new MutationObserver(() => {
+        const activeTrigger = anchorElementRef.current;
+        if (!activeTrigger || !activeTrigger.isConnected || activeTrigger.dataset.tooltip !== text) {
+          hideTooltip();
+          return;
+        }
+        const style = window.getComputedStyle(activeTrigger);
+        if (activeTrigger.closest("[hidden]") || style.display === "none" || style.visibility === "hidden") {
+          hideTooltip();
+        }
+      });
+      triggerObserver.observe(document.body, {
+        attributeFilter: ["class", "data-tooltip", "hidden", "style"],
+        attributes: true,
+        childList: true,
+        subtree: true,
+      });
     }
 
     function handleMouseOver(event: MouseEvent) {
+      if (findTooltipTarget(event.target)?.dataset.tooltip === suppressedPointerTooltip) return;
       showTooltip(event.target);
     }
 
     function handleFocusIn(event: FocusEvent) {
+      if (findTooltipTarget(event.target)?.dataset.tooltip === suppressedPointerTooltip) return;
       showTooltip(event.target);
-    }
-
-    function hideTooltip(event?: MouseEvent | FocusEvent | Event) {
-      if (event instanceof MouseEvent && anchorElementRef.current) {
-        const relatedTarget = event.relatedTarget;
-        if (relatedTarget instanceof Node && anchorElementRef.current.contains(relatedTarget)) {
-          return;
-        }
-      }
-
-      if (anchorElementRef.current) {
-        const previousDescribedBy = previousDescribedByRef.current;
-        if (previousDescribedBy) {
-          anchorElementRef.current.setAttribute("aria-describedby", previousDescribedBy);
-        } else {
-          anchorElementRef.current.removeAttribute("aria-describedby");
-        }
-      }
-      anchorElementRef.current = null;
-      previousDescribedByRef.current = null;
-      setAnchor(null);
     }
 
     function handleMouseOut(event: MouseEvent) {
       hideTooltip(event);
     }
 
+    function handlePointerMove(event: PointerEvent) {
+      const nextTooltip = findTooltipTarget(event.target)?.dataset.tooltip ?? null;
+      if (nextTooltip !== suppressedPointerTooltip) {
+        suppressedPointerTooltip = null;
+      }
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         hideTooltip(event);
+      } else {
+        suppressedPointerTooltip = null;
       }
+    }
+
+    function handlePointerInteraction(event: Event) {
+      suppressedPointerTooltip = findTooltipTarget(event.target)?.dataset.tooltip ?? null;
+      hideTooltip(event);
     }
 
     document.addEventListener("mouseover", handleMouseOver);
@@ -89,6 +135,9 @@ export function TooltipPortal() {
     document.addEventListener("mouseout", handleMouseOut);
     document.addEventListener("focusout", hideTooltip);
     document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerdown", handlePointerInteraction, true);
+    document.addEventListener("click", handlePointerInteraction, true);
     window.addEventListener("resize", hideTooltip);
     window.addEventListener("scroll", hideTooltip, true);
 
@@ -98,8 +147,12 @@ export function TooltipPortal() {
       document.removeEventListener("mouseout", handleMouseOut);
       document.removeEventListener("focusout", hideTooltip);
       document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerdown", handlePointerInteraction, true);
+      document.removeEventListener("click", handlePointerInteraction, true);
       window.removeEventListener("resize", hideTooltip);
       window.removeEventListener("scroll", hideTooltip, true);
+      restoreCurrentAnchor();
     };
   }, []);
 

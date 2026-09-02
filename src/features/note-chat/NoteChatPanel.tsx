@@ -11,6 +11,7 @@ import {
   type PersistedNoteChatMessage,
 } from "../../services/noteAiService";
 import { Icon } from "../../shared/Icon";
+import { ChatComposer } from "../../shared/ChatComposer";
 import { ResizeHandle } from "../../shared/ResizeHandle";
 import { ChatMarkdown, getNoteChatSourceTitle } from "./ChatMarkdown";
 
@@ -279,7 +280,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
     <aside className="note-chat">
       <ResizeHandle className="chat-resize" label="Изменить ширину чата" onResize={(deltaX) => onResize(-deltaX)} onReset={onResetWidth} />
       <div className="nc-top">
-        <span className="t">Чат · по заметке</span>
+        <span className="t">Чат по заметке</span>
         <button className="x" onClick={onClose} type="button">
           <Icon name="x" />
         </button>
@@ -379,21 +380,16 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
         ) : null}
       </div>
       <div className="nc-in">
-        <div className="box">
-          <input
-            onChange={(event) => setDraft(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void handleSend();
-              }
-            }}
-            placeholder="Спросить по заметке…"
-            value={draft}
-          />
-          <button className="snd" disabled={isSending || !draft.trim() || !canSend} onClick={() => void handleSend()} type="button">
-            {isSending ? <span className="button-spinner" /> : <Icon name="send" />}
-          </button>
-        </div>
+        <ChatComposer
+          ariaLabel="Сообщение по текущей заметке"
+          className="note-chat-composer"
+          disabled={!canSend}
+          isSubmitting={isSending}
+          onChange={setDraft}
+          onSubmit={() => void handleSend()}
+          placeholder="Спросить по заметке…"
+          value={draft}
+        />
       </div>
     </aside>
   );

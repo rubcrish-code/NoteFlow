@@ -1,7 +1,9 @@
 import Image from "@tiptap/extension-image";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import { useEffect, useRef, useState, type PointerEvent, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type PointerEvent, type CSSProperties } from "react";
 import { Icon } from "../../shared/Icon";
+import { MenuPopover } from "../../shared/MenuPopover";
+import { ModalShell } from "../../shared/ModalShell";
 import { runtimeAssetUrl } from "../editor/assetUri";
 import type { ImageEditMode } from "./imageEditService";
 import { getResizeCursor, resizeHandles, resizeImageBox, type ResizeHandle, type Size } from "./imageGeometry";
@@ -97,8 +99,14 @@ function getImageAlignmentLabel(alignment: EditableImageAttributes["alignment"])
 
 function ImageNodeView(props: NodeViewProps) {
   const imageRef = useRef<HTMLImageElement>(null);
+  const moreActionsRef = useRef<HTMLButtonElement>(null);
+  const descriptionInputRef = useRef<HTMLInputElement>(null);
   const resizeRef = useRef<{ handle: ResizeHandle; lastSize: Size; pointerId: number; startSize: Size; startX: number; startY: number } | null>(null);
   const [draftSize, setDraftSize] = useState<Size | null>(null);
+  const [isMoreActionsOpen, setIsMoreActionsOpen] = useState(false);
+  const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const descriptionFormId = `image-description-${useId()}`;
   const attrs = readImageAttrs(props.node.attrs);
   const options = props.extension.options as EditableImageOptions;
   const renderedWidth = draftSize?.width ?? attrs.width ?? null;
@@ -110,7 +118,15 @@ function ImageNodeView(props: NodeViewProps) {
       document.body.style.userSelect = "";
     };
   }, []);
-  const title = attrs.title || attrs.alt || "Изображение";
+
+  useEffect(() => {
+    if (!props.selected) {
+      setIsMoreActionsOpen(false);
+      setIsDescriptionOpen(false);
+    }
+  }, [props.selected]);
+
+  const closeMoreActions = useCallback(() => setIsMoreActionsOpen(false), []);
 
   function updateImageAttrs(nextAttrs: Partial<EditableImageAttributes>) {
     props.updateAttributes(nextAttrs);
@@ -173,12 +189,17 @@ function ImageNodeView(props: NodeViewProps) {
     document.body.style.userSelect = "";
   }
 
-  function editCaption() {
-    const caption = window.prompt("Подпись к изображению", title);
-    if (caption === null) {
-      return;
-    }
-    updateImageAttrs({ alt: caption.trim(), title: caption.trim() });
+  function openDescription() {
+    setDescriptionDraft(attrs.alt ?? attrs.title ?? "");
+    setIsMoreActionsOpen(false);
+    setIsDescriptionOpen(true);
+    window.requestAnimationFrame(() => descriptionInputRef.current?.select());
+  }
+
+  function saveDescription() {
+    const description = descriptionDraft.trim();
+    updateImageAttrs({ alt: description, title: description });
+    setIsDescriptionOpen(false);
   }
 
   function resetImage() {
@@ -229,18 +250,32 @@ function ImageNodeView(props: NodeViewProps) {
           <button onClick={() => openEditor("crop")} type="button">
             Обрезать
           </button>
-          <button onClick={() => openEditor("draw")} type="button">
-            Рисовать
+          <button
+            aria-expanded={isMoreActionsOpen}
+            aria-haspopup="menu"
+            aria-label="Другие действия с изображением"
+            className="image-more-actions"
+            data-tooltip="Другие действия"
+            onClick={() => setIsMoreActionsOpen((current) => !current)}
+            ref={moreActionsRef}
+            type="button"
+          >
+            <Icon name="dots" />
           </button>
-          <button onClick={editCaption} type="button">
-            Подпись
-          </button>
-          <button onClick={resetImage} type="button">
-            Сбросить
-          </button>
-          <button aria-label="Удалить изображение" className="danger image-delete-action" data-tooltip="Удалить изображение" onClick={props.deleteNode} type="button">
-            <Icon name="x" />
-          </button>
+          <MenuPopover
+            anchorRef={moreActionsRef}
+            ariaLabel="Другие действия с изображением"
+            className="image-actions-menu"
+            isOpen={isMoreActionsOpen}
+            onClose={closeMoreActions}
+            preferredWidth={220}
+          >
+            <button onClick={() => { setIsMoreActionsOpen(false); openEditor("draw"); }} role="menuitem" type="button">Рисовать</button>
+            <button onClick={openDescription} role="menuitem" type="button">Описание изображения</button>
+            <button onClick={() => { setIsMoreActionsOpen(false); resetImage(); }} role="menuitem" type="button">Сбросить изменения</button>
+            <div className="nf-menu-separator" />
+            <button className="danger" onClick={() => { setIsMoreActionsOpen(false); props.deleteNode(); }} role="menuitem" type="button">Удалить изображение</button>
+          </MenuPopover>
         </div>
       ) : null}
       <figure style={getFigureStyle(renderedWidth, renderedHeight)}>
@@ -263,6 +298,32 @@ function ImageNodeView(props: NodeViewProps) {
           </div>
         ) : null}
       </figure>
+      {isDescriptionOpen ? (
+        <ModalShell
+          backdropClassName="modal-backdrop"
+          className="image-description-dialog"
+          description="Описание помогает понять содержание изображения, если оно не отображается."
+          footer={(
+            <div className="new-note-actions">
+              <button className="secondary-btn" onClick={() => setIsDescriptionOpen(false)} type="button">Отмена</button>
+              <button className="primary-btn" form={descriptionFormId} type="submit">Сохранить</button>
+            </div>
+          )}
+          initialFocusRef={descriptionInputRef}
+          onClose={() => setIsDescriptionOpen(false)}
+          open
+          size="compact"
+          title="Описание изображения"
+          titleId={`${descriptionFormId}-title`}
+        >
+          <form id={descriptionFormId} onSubmit={(event) => { event.preventDefault(); saveDescription(); }}>
+            <label className="field">
+              Описание
+              <input maxLength={240} onChange={(event) => setDescriptionDraft(event.currentTarget.value)} placeholder="Что изображено на картинке" ref={descriptionInputRef} value={descriptionDraft} />
+            </label>
+          </form>
+        </ModalShell>
+      ) : null}
     </NodeViewWrapper>
   );
 }

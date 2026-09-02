@@ -3,8 +3,9 @@
 .settings-layout-inner {
   gap: clamp(var(--space-6), 3cqi, var(--space-10));
   grid-template-columns: minmax(168px, 190px) minmax(0, 1fr);
-  margin: 0 auto;
-  max-width: 1280px;
+  margin: 0;
+  max-width: 1160px;
+  width: 100%;
 }
 
 .settings-nav-col {
@@ -23,8 +24,209 @@
 }
 
 .settings-content {
+  justify-self: start;
   max-width: 100%;
   padding-bottom: var(--space-12);
+  width: 100%;
+}
+
+.settings-content--general,
+.settings-content--appearance,
+.settings-content--shortcuts,
+.settings-content--about {
+  max-width: 820px;
+}
+
+.settings-info-list,
+.settings-language-list {
+  display: grid;
+  gap: 0;
+}
+
+.settings-info-row,
+.settings-language-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+  min-height: 62px;
+  padding: var(--space-2) 0;
+}
+
+.settings-info-row:last-child,
+.settings-language-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-info-row > span:last-child,
+.settings-language-row > span:first-child,
+.about-card > span:last-child {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-info-row small,
+.settings-language-row small,
+.about-card small {
+  color: var(--text-secondary);
+  font-size: var(--text-sm-size);
+  line-height: var(--text-sm-line);
+}
+
+.settings-info-icon,
+.about-mark {
+  align-items: center;
+  background: var(--surface-selected);
+  border-radius: var(--radius-control);
+  color: var(--accent);
+  display: inline-flex;
+  flex: 0 0 36px;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.settings-info-icon svg,
+.about-mark svg {
+  height: 18px;
+  width: 18px;
+}
+
+.settings-status-label {
+  background: var(--surface-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+  font-size: var(--text-xs-size);
+  padding: 4px var(--space-2);
+}
+
+.settings-language-row.unavailable {
+  color: var(--text-muted);
+}
+
+.settings-preference-group + .settings-preference-group {
+  margin-top: var(--space-8);
+}
+
+.settings-preference-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs-size);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--space-2);
+  padding-inline: var(--space-2);
+}
+
+.settings-preference-list,
+.shortcut-list {
+  border-bottom: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-preference-row,
+.shortcut-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: grid;
+  gap: var(--space-4);
+  min-height: 68px;
+  padding: var(--space-3) var(--space-2);
+}
+
+.settings-preference-row {
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+}
+
+.settings-preference-row:last-child,
+.shortcut-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-preference-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-preference-copy small {
+  color: var(--text-secondary);
+  font-size: var(--text-sm-size);
+  line-height: var(--text-sm-line);
+}
+
+.shortcut-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.shortcut-keys,
+.shortcut-key-part {
+  align-items: center;
+  display: inline-flex;
+}
+
+.shortcut-keys {
+  gap: 5px;
+  justify-content: flex-end;
+}
+
+.shortcut-key-part {
+  gap: 5px;
+}
+
+.shortcut-plus {
+  color: var(--text-muted);
+  font-size: var(--text-xs-size);
+}
+
+.shortcut-row kbd {
+  align-items: center;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-bottom-color: color-mix(in srgb, var(--border-strong) 74%, var(--border-default));
+  border-radius: var(--radius-control);
+  box-shadow: 0 1px 0 var(--border-subtle);
+  color: var(--text-primary);
+  display: inline-flex;
+  font-family: inherit;
+  font-size: var(--text-xs-size);
+  font-weight: var(--font-weight-semibold);
+  justify-content: center;
+  min-height: 28px;
+  min-width: 30px;
+  padding: 3px var(--space-2);
+}
+
+.settings-layout-narrow .settings-preference-row {
+  align-items: start;
+  grid-template-columns: 36px minmax(0, 1fr);
+}
+
+.settings-layout-narrow .settings-preference-row > :last-child:not(.settings-preference-copy) {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.settings-layout-narrow .shortcut-row {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-layout-narrow .shortcut-keys {
+  justify-content: flex-start;
+}
+
+.about-card {
+  align-items: center;
+  display: flex;
+  gap: var(--space-4);
+}
+
+.about-card > span:last-child > b {
+  font-size: var(--text-lg-size);
 }
 
 .settings-title {
@@ -325,6 +527,39 @@
   box-shadow: none;
 }
 
+.settings-layout-inner:is(.settings-layout-compact, .settings-layout-narrow) {
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+:is(.settings-layout-compact, .settings-layout-narrow) .settings-nav-col {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 0;
+  display: flex;
+  gap: var(--space-1);
+  min-height: 0;
+  overflow-x: auto;
+  padding: 0 0 var(--space-3);
+  scrollbar-width: thin;
+}
+
+:is(.settings-layout-compact, .settings-layout-narrow) .settings-nav-col .nav-sec {
+  display: none;
+}
+
+:is(.settings-layout-compact, .settings-layout-narrow) .settings-nav-col .settings-nav {
+  flex: 0 0 auto;
+  margin: 0;
+  min-height: 34px;
+  padding-inline: var(--space-3);
+  width: auto;
+}
+
+:is(.settings-layout-compact, .settings-layout-narrow) .settings-content {
+  max-width: 100%;
+}
+
 .export-card {
   display: grid;
   gap: var(--space-6);
@@ -347,60 +582,98 @@
   padding-top: 0;
 }
 
-@container simple-page (max-width: 920px) {
-  .settings-layout-inner {
-    gap: var(--space-6);
-  }
-
-  .provider-type-selector {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .semantic-profile-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .export-card {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .export-card .export-action-group.recovery {
-    border-left: 0;
-    border-top: 1px solid var(--border-subtle);
-    padding-left: 0;
-    padding-top: var(--space-5);
-  }
+:is(.settings-layout-compact, .settings-layout-narrow) .provider-type-selector,
+:is(.settings-layout-compact, .settings-layout-narrow) .semantic-profile-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-@container simple-page (max-width: 620px) {
-  .model-section-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
+.settings-layout-inner:is(.settings-layout-compact, .settings-layout-narrow) .export-card {
+  grid-template-columns: minmax(0, 1fr);
+}
 
-  .model-section-action {
-    align-self: flex-start;
-  }
+.settings-layout-inner:is(.settings-layout-compact, .settings-layout-narrow) .export-card .export-action-group.recovery {
+  border-left: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding-left: 0;
+  padding-top: var(--space-5);
+}
 
-  .llm-provider-card-main,
-  .semantic-profile-head {
-    grid-template-columns: 36px minmax(0, 1fr);
-  }
+.settings-layout-narrow .model-section-header {
+  align-items: stretch;
+  flex-direction: column;
+}
 
-  .model-status-badge {
-    grid-column: 2;
-    justify-self: start;
-  }
+.settings-layout-narrow :is(.model-profile-actions, .semantic-profile-actions) {
+  align-items: stretch;
+  flex-direction: column;
+}
 
-  .model-profile-actions,
-  .llm-provider-card-meta,
-  .model-card-operation,
-  .semantic-profile-metrics {
-    padding-left: 0;
-  }
+.settings-layout-narrow :is(
+    .model-section-action,
+    .model-section-action > button,
+    .model-profile-actions > button,
+    .semantic-profile-actions > button,
+    .semantic-more-actions,
+    .semantic-more-actions > summary
+  ) {
+  margin-left: 0;
+  width: 100%;
+}
 
-  .provider-type-selector,
-  .semantic-profile-metrics {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.settings-layout-narrow :is(.model-load-control, .secret-wrap, .input-action) {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.settings-layout-narrow :is(.model-load-control, .secret-wrap, .input-action) > button {
+  width: 100%;
+}
+
+.settings-layout-narrow :is(.llm-provider-card-main, .semantic-profile-head) {
+  grid-template-columns: 36px minmax(0, 1fr);
+}
+
+.settings-layout-narrow .model-status-badge {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.settings-layout-narrow :is(.model-profile-actions, .llm-provider-card-meta, .model-card-operation, .semantic-profile-metrics) {
+  padding-left: 0;
+}
+
+.settings-layout-narrow :is(.provider-type-selector, .semantic-profile-metrics, .theme-options) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-layout-narrow :is(.semantic-profile-form, .form-grid) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-layout-narrow :is(.semantic-profile-form .full, .semantic-profile-form .text-danger-action, .field.full) {
+  grid-column: auto;
+}
+
+.settings-layout-narrow .zoom-settings-card {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.settings-layout-narrow .settings-card {
+  padding: var(--space-4);
+}
+
+.settings-layout-narrow :is(.export-action-list, .llm-action-bar, .llm-provider-card-actions) {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.settings-layout-narrow :is(.knowledge-index-metrics, .provider-presets) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-layout-narrow :is(.knowledge-index-more, .knowledge-primary-action, .knowledge-repair-action, .export-action) {
+  min-width: 0;
+  position: static;
+  width: 100%;
 }

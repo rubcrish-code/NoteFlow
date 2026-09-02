@@ -17,14 +17,30 @@
   padding-inline: var(--space-3);
 }
 
+.toolbar .tb {
+  min-width: 30px;
+}
+
+.toolbar .font-menu-anchor {
+  flex-basis: 30px;
+  min-width: 30px;
+}
+
 .toolbar-slot,
 .toolbar-overflow-slot {
   flex: 0 0 auto;
 }
 
 .toolbar-overflow-slot {
-  display: none;
+  display: inline-flex;
+  flex: 0 0 30px;
   margin-left: auto;
+  min-width: 30px;
+}
+
+.toolbar-overflow-slot .tb {
+  flex: 0 0 30px;
+  width: 30px;
 }
 
 .toolbar-overflow-menu {
@@ -55,6 +71,21 @@
   flex: 0 0 15px;
   height: 15px;
   width: 15px;
+}
+
+.toolbar-overflow-menu .toolbar-menu-action-label {
+  color: var(--text-secondary);
+  flex: 0 0 17px;
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}
+
+.toolbar-overflow-separator {
+  background: var(--border-subtle);
+  display: block;
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
 }
 
 .ed-scroll {
@@ -242,12 +273,18 @@
 
 .image-action-panel {
   align-items: center;
+  flex-wrap: nowrap;
   gap: var(--space-1);
+  max-width: 100%;
+  overflow: visible;
   padding: var(--space-2);
+  white-space: nowrap;
+  width: max-content;
 }
 
 .image-action-panel button {
   border-radius: var(--radius-control);
+  flex: 0 0 auto;
   min-height: 32px;
   padding: 0 var(--space-3);
 }
@@ -266,6 +303,20 @@
   width: 15px;
 }
 
+.image-action-panel .image-more-actions {
+  padding: 0;
+  width: 32px;
+}
+
+.image-action-panel .image-more-actions svg {
+  height: 16px;
+  width: 16px;
+}
+
+.image-description-dialog form {
+  display: grid;
+}
+
 .image-align-actions {
   border-color: var(--border-subtle);
   border-radius: var(--radius-control);
@@ -277,79 +328,73 @@
   padding: 0;
 }
 
-@container editor-toolbar (max-width: 980px) {
-  .toolbar-slot-adaptive {
-    display: none;
-  }
-
-  .toolbar-overflow-slot {
-    display: inline-flex;
-  }
+.toolbar-layout-narrow .toolbar {
+  padding-inline: var(--space-2);
 }
 
-@container editor-toolbar (max-width: 700px) {
-  .toolbar {
-    padding-inline: var(--space-2);
-  }
-
-  .toolbar .tb {
-    height: 30px;
-    width: 29px;
-  }
-
-  .toolbar .tb-sep {
-    margin-inline: 2px;
-  }
+.toolbar-layout-narrow .toolbar .tb {
+  height: 30px;
+  min-width: 29px;
+  width: 29px;
 }
 
-@container editor-toolbar (max-width: 560px) {
-  .toolbar-slot-narrow {
-    display: none;
-  }
+.toolbar-layout-narrow .toolbar .tb-sep {
+  margin-inline: 2px;
 }
 
-@container editor-surface (max-width: 560px) {
-  .ed-top {
-    gap: var(--space-2);
-    min-height: 52px;
-    padding: var(--space-2) var(--space-3);
-  }
+.editor-surface-compact .ed-top {
+  gap: var(--space-2);
+  min-height: 52px;
+  padding: var(--space-2) var(--space-3);
+}
 
-  .crumb {
-    flex: 1 1 auto;
-    max-width: none;
-    overflow: hidden;
-  }
+.editor-surface-compact .crumb {
+  flex: 1 1 auto;
+  max-width: none;
+  overflow: hidden;
+}
 
-  .crumb > span:not(:last-child) {
-    display: none;
-  }
+.editor-surface-compact .crumb > span:not(:last-child) {
+  display: none;
+}
 
-  .crumb > span:last-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+.editor-surface-compact .crumb > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  .ed-act {
-    flex: 0 0 auto;
-    gap: 1px;
-  }
+.editor-surface-compact .ed-act {
+  flex: 0 0 auto;
+  gap: 1px;
+}
 
-  .saved {
-    margin-right: 0;
-  }
+.editor-surface-compact .saved {
+  margin-right: 0;
+}
 
-  .saved span,
-  .ibtn.ai span {
-    display: none;
-  }
+.editor-surface-compact .saved span,
+.editor-surface-compact .ibtn.ai span {
+  display: none;
+}
 
-  .ibtn,
-  .ibtn.ai {
-    height: 30px;
-    min-width: 30px;
-    padding: 0;
-    width: 30px;
-  }
+.editor-surface-compact .ibtn,
+.editor-surface-compact .ibtn.ai {
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
+  width: 30px;
+}
+
+.editor-surface-compact :is(.block-menu-grid, .block-menu-tools, .block-menu-inline, .block-callout-variants) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.editor-surface-compact .ed-body .file-attachment-card {
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.editor-surface-compact .file-attachment-actions {
+  justify-content: flex-end;
 }

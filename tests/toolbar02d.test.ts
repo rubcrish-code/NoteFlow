@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { EDITOR_TOOLBAR_ACTIONS } from "../src/features/editor/editorToolbarLayout";
 
 const blockInsertMenuSource = readFileSync("src/features/editor/BlockInsertMenu.tsx", "utf8");
 const formattingToolbarSource = readFileSync("src/features/editor/FormattingToolbar.tsx", "utf8");
@@ -42,7 +43,7 @@ describe("toolbar and block insert menu contract", () => {
 
   it("uses a compact Aa popover for font family, font size and reset", () => {
     assert.match(formattingToolbarSource, /data-toolbar-font-trigger/);
-    assert.match(formattingToolbarSource, /font-trigger-label">Aa</);
+    assert.equal(EDITOR_TOOLBAR_ACTIONS.find((action) => action.id === "font")?.label, "Aa");
     assert.doesNotMatch(formattingToolbarSource, /data-toolbar-font-family/);
     assert.doesNotMatch(formattingToolbarSource, /data-toolbar-font-size/);
     assert.doesNotMatch(formattingToolbarSource, /data-toolbar-font-reset/);
@@ -64,13 +65,13 @@ describe("toolbar and block insert menu contract", () => {
   });
 
   it("uses the shared sidebar width state on the RAG page", () => {
-    assert.match(pageShellSource, /sidebarWidth/);
+    assert.match(pageShellSource, /sidebar\?\.width/);
     assert.match(pageShellSource, /page-resize-sb/);
-    assert.match(ragChatPageSource, /onSidebarResize/);
-    assert.match(ragChatPageSource, /sidebarCollapsed/);
+    assert.match(ragChatPageSource, /sidebar: PageShellSidebarProps/);
+    assert.match(ragChatPageSource, /sidebar=\{sidebar\}/);
     assert.match(legacyUiSettingsMigrationSource, /noteflow\.sidebarWidth/);
     assert.doesNotMatch(appShellSource, /localStorage/);
-    assert.match(appShellSource, /<RagChatPage[\s\S]*sidebarWidth=\{sidebarWidth\}/);
+    assert.match(appShellSource, /<RagChatPage[\s\S]*sidebar=\{sharedPageSidebar\}/);
   });
 
   it("exposes note pinning explicitly", () => {

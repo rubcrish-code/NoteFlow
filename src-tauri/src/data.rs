@@ -343,6 +343,8 @@ pub struct UiSettingsDto {
     pub last_section: String,
     #[serde(default = "default_ui_language")]
     pub language: String,
+    #[serde(default = "default_ui_local_profile_name")]
+    pub local_profile_name: String,
     #[serde(default = "default_ui_editor_content_width")]
     pub editor_content_width: i64,
     #[serde(default)]
@@ -363,6 +365,7 @@ impl Default for UiSettingsDto {
             rag_sources_collapsed: false,
             last_section: "notes".to_string(),
             language: "ru".to_string(),
+            local_profile_name: default_ui_local_profile_name(),
             editor_content_width: 840,
             editor_content_offset: 0,
         }
@@ -383,6 +386,7 @@ impl UiSettingsDto {
             rag_sources_collapsed: self.rag_sources_collapsed,
             last_section: normalize_app_section(&self.last_section),
             language: normalize_app_language(&self.language),
+            local_profile_name: normalize_local_profile_name(&self.local_profile_name),
             editor_content_width: clamp_i64(self.editor_content_width, 560, 1440),
             editor_content_offset: clamp_i64(self.editor_content_offset, -720, 720),
         }
@@ -486,6 +490,7 @@ pub struct CreateProjectRequest {
 pub struct CreateTagRequest {
     pub name: String,
     pub color: String,
+    pub custom_color: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -499,6 +504,15 @@ pub struct RenameTagRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTagColorRequest {
     pub tag_id: String,
+    pub color: String,
+    pub custom_color: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTagRequest {
+    pub tag_id: String,
+    pub name: String,
     pub color: String,
     pub custom_color: Option<String>,
 }
@@ -2344,12 +2358,56 @@ impl DataStore {
     }
 
     fn create_tag(&mut self, request: CreateTagRequest) -> DataResult<TagRowDto> {
-        let name = normalize_required_text(&request.name, "Название тега")?;
-        let tag_id = self.ensure_tag(&name, &request.color)?;
+        let name = normalize_tag_name(&request.name)?;
+        if tag_name_exists(&self.conn, &name, None)? {
+            return Err(DataError::InvalidInput(
+                "Тег с таким названием уже существует".to_string(),
+            ));
+        }
+        let tag_id = Uuid::new_v4().to_string();
+        let now = now_iso();
+        let icon_key = infer_tag_icon_key(&name);
+        self.conn.execute(
+            "INSERT INTO tags (id, name, color, custom_color, icon_key, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![
+                tag_id,
+                name,
+                normalize_tag_color(&request.color),
+                normalize_tag_custom_color(request.custom_color)?,
+                icon_key,
+                now
+            ],
+        )?;
         self.list_tags(None)?
             .into_iter()
             .find(|tag| tag.id == tag_id)
             .ok_or_else(|| DataError::NotFound("Тег не найден после создания".to_string()))
+    }
+
+    fn update_tag(&mut self, request: UpdateTagRequest) -> DataResult<Vec<TagRowDto>> {
+        let name = normalize_tag_name(&request.name)?;
+        if tag_name_exists(&self.conn, &name, Some(&request.tag_id))? {
+            return Err(DataError::InvalidInput(
+                "Тег с таким названием уже существует".to_string(),
+            ));
+        }
+        let changed = self.conn.execute(
+            "UPDATE tags
+             SET name = ?1, color = ?2, custom_color = ?3, updated_at = ?4
+             WHERE id = ?5",
+            params![
+                name,
+                normalize_tag_color(&request.color),
+                normalize_tag_custom_color(request.custom_color)?,
+                now_iso(),
+                request.tag_id
+            ],
+        )?;
+        if changed == 0 {
+            return Err(DataError::NotFound("Тег не найден".to_string()));
+        }
+        self.list_tags(None)
     }
 
     fn rename_tag(&mut self, request: RenameTagRequest) -> DataResult<Vec<TagRowDto>> {
@@ -2403,10 +2461,6 @@ impl DataStore {
 
     fn ensure_project(&mut self, title: &str, description: &str) -> DataResult<String> {
         ensure_project_on(&self.conn, title, description)
-    }
-
-    fn ensure_tag(&mut self, name: &str, color: &str) -> DataResult<String> {
-        ensure_tag_on(&self.conn, name, color)
     }
 
     fn list_archive(&self, query: Option<String>) -> DataResult<Vec<ArchiveItemDto>> {
@@ -5304,6 +5358,57 @@ fn normalize_required_text(value: &str, field_name: &str) -> DataResult<String> 
     Ok(trimmed.to_string())
 }
 
+fn normalize_tag_name(value: &str) -> DataResult<String> {
+    let name = normalize_required_text(value, "Название тега")?;
+    let normalized = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() > 80 {
+        return Err(DataError::InvalidInput(
+            "Название тега не должно быть длиннее 80 символов".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn tag_name_exists(
+    connection: &Connection,
+    name: &str,
+    excluded_tag_id: Option<&str>,
+) -> DataResult<bool> {
+    let normalized_name = name.to_lowercase();
+    let mut statement = connection.prepare("SELECT id, name FROM tags")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (tag_id, existing_name) = row?;
+        if excluded_tag_id == Some(tag_id.as_str()) {
+            continue;
+        }
+        if existing_name.to_lowercase() == normalized_name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn normalize_tag_custom_color(value: Option<String>) -> DataResult<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let normalized = value.trim().to_ascii_uppercase();
+    if normalized.len() != 7
+        || !normalized.starts_with('#')
+        || !normalized[1..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(DataError::InvalidInput(
+            "Цвет тега имеет некорректный формат".to_string(),
+        ));
+    }
+    Ok(Some(normalized))
+}
+
 fn normalize_tag_color(color: &str) -> String {
     match color {
         "blue" | "green" | "purple" | "amber" | "pink" => color.to_string(),
@@ -5345,6 +5450,18 @@ fn default_ui_last_section() -> String {
 
 fn default_ui_language() -> String {
     "ru".to_string()
+}
+
+fn default_ui_local_profile_name() -> String {
+    "Локальный профиль".to_string()
+}
+
+fn normalize_local_profile_name(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return default_ui_local_profile_name();
+    }
+    normalized.chars().take(48).collect()
 }
 
 fn default_ui_editor_content_width() -> i64 {
@@ -6423,6 +6540,16 @@ pub fn create_tag(
 }
 
 #[tauri::command]
+pub fn update_tag(
+    request: UpdateTagRequest,
+    state: State<'_, AppState>,
+) -> Result<Vec<TagRowDto>, String> {
+    state
+        .with_store(|store| store.update_tag(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
 pub fn rename_tag(
     request: RenameTagRequest,
     state: State<'_, AppState>,
@@ -7206,6 +7333,7 @@ mod tests {
                     rag_sources_collapsed: true,
                     last_section: "rag".to_string(),
                     language: "en".to_string(),
+                    local_profile_name: "  Рубен   Локальный  ".to_string(),
                     editor_content_width: 2000,
                     editor_content_offset: -900,
                 })
@@ -7213,6 +7341,7 @@ mod tests {
 
             assert_eq!(saved.theme, "dark");
             assert_eq!(saved.app_zoom_percent, 125);
+            assert_eq!(saved.local_profile_name, "Рубен Локальный");
             assert_eq!(saved.sidebar_width, 360);
             assert_eq!(saved.list_width, 260);
             assert_eq!(saved.rag_sources_width, 460);
@@ -7234,6 +7363,7 @@ mod tests {
         let settings = reopened_store.get_ui_settings().expect("load ui settings");
         assert_eq!(settings.theme, "dark");
         assert_eq!(settings.app_zoom_percent, 125);
+        assert_eq!(settings.local_profile_name, "Рубен Локальный");
         assert!(settings.sidebar_collapsed);
         assert!(settings.rag_sources_collapsed);
         assert_eq!(settings.last_section, "rag");
@@ -7782,12 +7912,113 @@ mod tests {
             .create_tag(CreateTagRequest {
                 name: "тест".to_string(),
                 color: "purple".to_string(),
+                custom_color: None,
             })
             .expect("create tag");
 
         assert_eq!(updated.plain_text, "Текст");
         assert_eq!(moved.project, "Проект теста");
         assert_eq!(tag.name, "тест");
+    }
+
+    #[test]
+    fn tag_name_and_curated_color_create_update_and_persist_together() {
+        let mut store = temp_store();
+        let dir = store.base_dir.clone();
+        let created = store
+            .create_tag(CreateTagRequest {
+                name: "  Важные   идеи  ".to_string(),
+                color: "blue".to_string(),
+                custom_color: Some("#3b6ef2".to_string()),
+            })
+            .expect("create tag with explicit color");
+        assert_eq!(created.name, "Важные идеи");
+        assert_eq!(created.color, "blue");
+        assert_eq!(created.custom_color.as_deref(), Some("#3B6EF2"));
+
+        let updated = store
+            .update_tag(UpdateTagRequest {
+                tag_id: created.id.clone(),
+                name: "Проекты".to_string(),
+                color: "purple".to_string(),
+                custom_color: Some("#7c5cf0".to_string()),
+            })
+            .expect("update name and color");
+        let updated_tag = updated
+            .into_iter()
+            .find(|tag| tag.id == created.id)
+            .expect("updated tag remains available");
+        assert_eq!(updated_tag.name, "Проекты");
+        assert_eq!(updated_tag.color, "purple");
+        assert_eq!(updated_tag.custom_color.as_deref(), Some("#7C5CF0"));
+
+        drop(store);
+        let reopened = DataStore::open(dir).expect("store reopens");
+        let persisted = reopened
+            .list_tags(None)
+            .expect("list persisted tags")
+            .into_iter()
+            .find(|tag| tag.id == created.id)
+            .expect("tag persists after restart");
+        assert_eq!(persisted.name, "Проекты");
+        assert_eq!(persisted.custom_color.as_deref(), Some("#7C5CF0"));
+    }
+
+    #[test]
+    fn tag_create_and_update_reject_duplicates_and_invalid_colors_without_partial_changes() {
+        let mut store = temp_store();
+        let original = store
+            .create_tag(CreateTagRequest {
+                name: "Smoke Работа".to_string(),
+                color: "blue".to_string(),
+                custom_color: Some("#3B6EF2".to_string()),
+            })
+            .expect("create original tag");
+        let second = store
+            .create_tag(CreateTagRequest {
+                name: "Личное smoke".to_string(),
+                color: "green".to_string(),
+                custom_color: Some("#1EA463".to_string()),
+            })
+            .expect("create second tag");
+
+        assert!(matches!(
+            store.create_tag(CreateTagRequest {
+                name: " smoke работа ".to_string(),
+                color: "pink".to_string(),
+                custom_color: Some("#E05272".to_string()),
+            }),
+            Err(DataError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            store.update_tag(UpdateTagRequest {
+                tag_id: second.id.clone(),
+                name: original.name.clone(),
+                color: "purple".to_string(),
+                custom_color: Some("#7C5CF0".to_string()),
+            }),
+            Err(DataError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            store.update_tag(UpdateTagRequest {
+                tag_id: second.id.clone(),
+                name: "Личное smoke".to_string(),
+                color: "purple".to_string(),
+                custom_color: Some("not-a-color".to_string()),
+            }),
+            Err(DataError::InvalidInput(_))
+        ));
+
+        let persisted = store
+            .list_tags(None)
+            .expect("list tags after rejected writes");
+        assert!(persisted.len() >= 2);
+        let unchanged = persisted
+            .into_iter()
+            .find(|tag| tag.id == second.id)
+            .expect("second tag remains");
+        assert_eq!(unchanged.name, "Личное smoke");
+        assert_eq!(unchanged.custom_color.as_deref(), Some("#1EA463"));
     }
 
     #[test]

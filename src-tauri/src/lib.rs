@@ -182,6 +182,7 @@ pub fn run() {
             data::update_note_content,
             data::update_embedding_index,
             data::update_ui_settings,
+            data::update_tag,
             data::update_tag_color
         ])
         .build(tauri::generate_context!())

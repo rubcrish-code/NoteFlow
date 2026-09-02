@@ -1,117 +1,105 @@
-import { useCallback, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import type { AppSection, TagColor, TagRow } from "../../app/types";
+import { useCallback, useMemo, useRef, useState } from "react";
+import type { AppSection, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
 import { MenuPopover } from "../../shared/MenuPopover";
-import { PageShell } from "../navigation/PageShell";
-import { TagColorPopover, tagColorPalette } from "./TagColorPopover";
+import { ModalShell } from "../../shared/ModalShell";
+import { formatRussianCount, NOTE_COUNT_FORMS } from "../../shared/russianPlural";
+import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
+import { TagEditorModal, type TagEditorValue } from "./TagEditorModal";
+import { validateTagName } from "./tagEditor";
+import { getTagDisplayColor } from "./tagPalette";
 
 interface TagsPageProps {
   tags: TagRow[];
-  onCreateTag: () => void;
+  onCreateTag: (value: TagEditorValue) => Promise<void>;
   onDeleteTag: (tagId: string) => void;
-  onMergeTags: (sourceTagId: string, targetTagId: string) => void;
+  onMergeTags: (sourceTagId: string, targetTagId: string) => Promise<void>;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
   onOpenTag: (tagName: string) => void;
-  onRenameTag: (tagId: string, name: string) => void;
   onToast: (message: string) => void;
-  onUpdateTagColor: (tagId: string, color: TagColor, customColor?: string) => void;
+  onUpdateTag: (tagId: string, value: TagEditorValue) => Promise<void>;
+  sidebar: PageShellSidebarProps;
 }
 
-interface ColorEditorState {
-  position: {
-    left: number;
-    top: number;
-  };
-  tagId: string;
-  trigger: HTMLButtonElement;
+type TagDialogState =
+  | { kind: "create"; trigger: HTMLButtonElement | null }
+  | { kind: "edit"; tag: TagRow; trigger: HTMLButtonElement | null }
+  | { kind: "merge"; tag: TagRow; trigger: HTMLButtonElement | null }
+  | null;
+
+export function validateTagRename(tags: TagRow[], sourceTagId: string, draft: string) {
+  return validateTagName(tags, sourceTagId, draft);
 }
 
-function getTagHex(tag: TagRow) {
-  return tag.customColor ?? tagColorPalette.find((paletteItem) => paletteItem.color === tag.color)?.hex ?? tagColorPalette[0].hex;
-}
-
-function getPopoverPosition(rect: DOMRect) {
-  const popoverWidth = 300;
-  const popoverHeight = 380;
-  const padding = 12;
-  const left = Math.min(window.innerWidth - popoverWidth - padding, Math.max(padding, rect.left));
-  const preferredTop = rect.bottom + 8;
-  const top = preferredTop + popoverHeight > window.innerHeight - padding ? Math.max(padding, rect.top - popoverHeight - 8) : preferredTop;
-
-  return { left, top };
-}
-
-export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNavigate, onNewNote, onOpenTag, onRenameTag, onToast, onUpdateTagColor }: TagsPageProps) {
+export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNavigate, onNewNote, onOpenTag, onToast, onUpdateTag, sidebar }: TagsPageProps) {
   const [query, setQuery] = useState("");
-  const [colorEditor, setColorEditor] = useState<ColorEditorState | null>(null);
   const [openTagMenuId, setOpenTagMenuId] = useState("");
+  const [tagDialog, setTagDialog] = useState<TagDialogState>(null);
+  const [mergeTargetId, setMergeTargetId] = useState("");
+  const [dialogError, setDialogError] = useState("");
+  const [isDialogSaving, setIsDialogSaving] = useState(false);
   const tagMenuAnchorRef = useRef<HTMLButtonElement>(null);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
   const closeTagMenu = useCallback(() => setOpenTagMenuId(""), []);
 
   const filteredTags = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return tags;
-    }
-    return tags.filter((tag) => tag.name.toLowerCase().includes(normalizedQuery));
+    return normalizedQuery ? tags.filter((tag) => tag.name.toLowerCase().includes(normalizedQuery)) : tags;
   }, [query, tags]);
 
-  function openColorPopover(tagId: string, event: ReactMouseEvent<HTMLButtonElement>) {
-    setColorEditor({
-      tagId,
-      position: getPopoverPosition(event.currentTarget.getBoundingClientRect()),
-      trigger: tagMenuAnchorRef.current ?? event.currentTarget,
-    });
+  const mergeTargets = useMemo(
+    () => tagDialog?.kind === "merge" ? tags.filter((tag) => tag.id !== tagDialog.tag.id) : [],
+    [tagDialog, tags],
+  );
+
+  function openCreateDialog() {
+    setDialogError("");
+    setTagDialog({ kind: "create", trigger: createButtonRef.current });
+  }
+
+  function openEditDialog(tag: TagRow) {
     setOpenTagMenuId("");
+    setDialogError("");
+    setTagDialog({ kind: "edit", tag, trigger: tagMenuAnchorRef.current });
   }
 
-  function applyTagColor(hex: string) {
-    if (!colorEditor) {
-      return;
+  function openMergeDialog(tag: TagRow) {
+    const firstTarget = tags.find((candidate) => candidate.id !== tag.id);
+    setOpenTagMenuId("");
+    setMergeTargetId(firstTarget?.id ?? "");
+    setDialogError("");
+    setTagDialog({ kind: "merge", tag, trigger: tagMenuAnchorRef.current });
+  }
+
+  function closeTagDialog() {
+    const trigger = tagDialog?.trigger;
+    setTagDialog(null);
+    setDialogError("");
+    window.requestAnimationFrame(() => trigger?.focus());
+  }
+
+  async function submitMerge() {
+    if (tagDialog?.kind !== "merge" || !mergeTargetId || isDialogSaving) return;
+    setIsDialogSaving(true);
+    try {
+      await onMergeTags(tagDialog.tag.id, mergeTargetId);
+      closeTagDialog();
+    } catch {
+      setDialogError("Не удалось объединить теги. Попробуйте ещё раз.");
+    } finally {
+      setIsDialogSaving(false);
     }
-
-    const preset = tagColorPalette.find((paletteItem) => paletteItem.hex.toUpperCase() === hex.toUpperCase());
-    onUpdateTagColor(colorEditor.tagId, preset?.color ?? "blue", hex);
-    colorEditor.trigger.focus();
-    setColorEditor(null);
   }
-
-  function closeColorPopover() {
-    colorEditor?.trigger.focus();
-    setColorEditor(null);
-  }
-
-  function renameTag(tag: TagRow) {
-    const nextName = window.prompt("Новое название тега", tag.name)?.trim();
-    if (nextName) {
-      onRenameTag(tag.id, nextName);
-    }
-  }
-
-  function mergeTag(tag: TagRow) {
-    const targetName = window.prompt(`С каким тегом объединить «${tag.name}»?`)?.trim().toLowerCase();
-    if (!targetName) {
-      return;
-    }
-    const targetTag = tags.find((currentTag) => currentTag.name.toLowerCase() === targetName);
-    if (!targetTag) {
-      onToast("Целевой тег не найден");
-      return;
-    }
-    onMergeTags(tag.id, targetTag.id);
-  }
-
-  const editedTag = colorEditor ? tags.find((tag) => tag.id === colorEditor.tagId) : undefined;
 
   return (
-    <PageShell activeSection="tags" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
+    <PageShell activeSection="tags" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
       <div className="tags-head">
         <div>
           <div className="page-title">Теги</div>
-          <div className="page-subtitle">Создавайте, переименовывайте, объединяйте и удаляйте теги. Нажмите на тег, чтобы увидеть связанные заметки.</div>
+          <div className="page-subtitle">Создавайте, редактируйте, объединяйте и удаляйте теги. Нажмите на тег, чтобы увидеть связанные заметки.</div>
         </div>
-        <button className="primary-btn tags-new" onClick={onCreateTag} type="button">
+        <button className="primary-btn tags-new" onClick={openCreateDialog} ref={createButtonRef} type="button">
           <Icon name="plus" />
           Новый тег
         </button>
@@ -126,10 +114,10 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
         {filteredTags.map((tag) => (
           <div className="tag-row" key={tag.id}>
             <button className="tag-row-main" onClick={() => onOpenTag(tag.name)} type="button">
-              <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagHex(tag) }} />
+              <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagDisplayColor(tag) }} />
               <div>
                 <b>{tag.name}</b>
-                <small>{tag.count} заметок</small>
+                <small>{formatRussianCount(tag.count, NOTE_COUNT_FORMS)}</small>
               </div>
             </button>
             <div className="tag-row-actions">
@@ -154,9 +142,8 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
                 onClose={closeTagMenu}
                 preferredWidth={190}
               >
-                <button onClick={() => { setOpenTagMenuId(""); renameTag(tag); }} role="menuitem" type="button">Переименовать</button>
-                <button onClick={(event) => openColorPopover(tag.id, event)} role="menuitem" type="button">Изменить цвет</button>
-                <button onClick={() => { setOpenTagMenuId(""); mergeTag(tag); }} role="menuitem" type="button">Объединить</button>
+                <button onClick={() => openEditDialog(tag)} role="menuitem" type="button">Редактировать</button>
+                <button onClick={() => openMergeDialog(tag)} role="menuitem" type="button">Объединить</button>
                 <div className="nf-menu-separator" />
                 <button className="danger" onClick={() => { setOpenTagMenuId(""); onDeleteTag(tag.id); }} role="menuitem" type="button">Удалить</button>
               </MenuPopover>
@@ -170,14 +157,47 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
           </div>
         ) : null}
       </div>
-      {colorEditor && editedTag ? (
-        <TagColorPopover
-          currentHex={getTagHex(editedTag)}
-          onApply={applyTagColor}
-          onCancel={closeColorPopover}
-          position={colorEditor.position}
-          tagName={editedTag.name}
-        />
+
+      {tagDialog?.kind === "create" ? (
+        <TagEditorModal mode="create" onClose={closeTagDialog} onSubmit={onCreateTag} open tags={tags} />
+      ) : null}
+      {tagDialog?.kind === "edit" ? (
+        <TagEditorModal mode="edit" onClose={closeTagDialog} onSubmit={(value) => onUpdateTag(tagDialog.tag.id, value)} open tag={tagDialog.tag} tags={tags} />
+      ) : null}
+      {tagDialog?.kind === "merge" ? (
+        <ModalShell
+          backdropClassName="confirm-backdrop"
+          className="tag-dialog"
+          closeDisabled={isDialogSaving}
+          description={`Все заметки с тегом «${tagDialog.tag.name}» получат выбранный тег. Исходный тег будет удалён.`}
+          dismissOnBackdrop={false}
+          footer={(
+            <div className="new-note-actions">
+              <button className="secondary-btn" disabled={isDialogSaving} onClick={closeTagDialog} type="button">Отмена</button>
+              <button className="danger-btn" disabled={!mergeTargetId || isDialogSaving} form="merge-tag-form" type="submit">{isDialogSaving ? "Объединяем…" : "Объединить"}</button>
+            </div>
+          )}
+          onClose={closeTagDialog}
+          open
+          size="compact"
+          title="Объединить теги?"
+          titleId="merge-tag-title"
+        >
+          <form id="merge-tag-form" onSubmit={(event) => { event.preventDefault(); void submitMerge(); }}>
+            <div aria-label="Направление объединения" className="tag-merge-flow">
+              <span><small>Исходный тег</small><b>{tagDialog.tag.name}</b></span>
+              <Icon name="forward" />
+              <label className="field">
+                Целевой тег
+                <select disabled={mergeTargets.length === 0} onChange={(event) => { setMergeTargetId(event.currentTarget.value); setDialogError(""); }} value={mergeTargetId}>
+                  {mergeTargets.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
+                </select>
+              </label>
+            </div>
+            {mergeTargets.length === 0 ? <div className="field-error" role="status">Создайте ещё один тег, чтобы выполнить объединение.</div> : null}
+            {dialogError ? <div className="field-error" role="alert">{dialogError}</div> : null}
+          </form>
+        </ModalShell>
       ) : null}
     </PageShell>
   );

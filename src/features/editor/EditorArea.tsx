@@ -10,6 +10,7 @@ import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import type { EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, SaveStatus } from "../../app/types";
 import { acceptNoteAiPrivacy, createNoteAiContext, getNoteAiStatus, runNoteAi, type NoteAiActionId, type NoteAiScope, type NoteAiStatus } from "../../services/noteAiService";
@@ -32,6 +33,8 @@ import { NoteFlowTaskItem } from "./taskExtensions";
 import { useEditorPageLayout } from "./useEditorPageLayout";
 import type { EditorPageLayoutSettings } from "../../shared/editorPageLayout";
 import type { SemanticSearchResult } from "../../services/embeddingService";
+import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysicalElementWidth";
+import { getEditorSurfaceLayoutMode } from "./editorToolbarLayout";
 
 interface EditorAreaProps {
   documentReloadGeneration: number;
@@ -84,6 +87,17 @@ interface AiSelectionSnapshot {
   to: number;
 }
 
+export function clearImageNodeSelection(editor: Editor) {
+  const selection = editor.state.selection;
+  if (!(selection instanceof NodeSelection) || selection.node.type.name !== "image") {
+    return false;
+  }
+
+  const position = Math.min(selection.to, editor.state.doc.content.size);
+  editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(position))));
+  return true;
+}
+
 interface AiPreviewState {
   actionId: NoteAiActionId;
   actionLabel: string;
@@ -102,7 +116,7 @@ interface AiPendingAction {
 
 const aiActionLabels: Record<NoteAiActionId, string> = {
   ask: "Спросить по этому тексту",
-  expand: "Развернуть подробнее",
+  expand: "Расписать подробнее",
   explain: "Объяснить простыми словами",
   fix: "Исправить ошибки",
   improve: "Улучшить текст",
@@ -214,7 +228,9 @@ export function EditorArea({
   const isMountedRef = useRef(false);
   const loadedDocumentTokenRef = useRef<EditorDocumentLoadToken | null>(null);
   const noteIdRef = useRef(note.id);
+  const editorSurfaceRef = useRef<HTMLElement>(null);
   const onOpenNoteRef = useRef(onOpenNote);
+  const editorSurfaceLayoutMode = getEditorSurfaceLayoutMode(useObservedPhysicalElementWidth(editorSurfaceRef));
   const editorExtensions = useMemo(
     () =>
       createEditorExtensions({
@@ -307,6 +323,33 @@ export function EditorArea({
   }, [editor]);
 
   useEffect(() => {
+    if (!editor) return undefined;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target;
+      if (event.key !== "Escape" || (target instanceof Element && target.closest("[role='dialog']"))) return;
+      if (clearImageNodeSelection(editor)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(".note-image-node.selected, .nf-popover, .nf-modal-shell")) return;
+      clearImageNodeSelection(editor);
+    }
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [editor]);
+
+  useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
@@ -358,6 +401,7 @@ export function EditorArea({
     });
     loadedDocumentTokenRef.current = nextToken;
     if (shouldReload) {
+      clearImageNodeSelection(editor);
       editor.commands.setContent(note.editorDocument, { emitUpdate: false });
     }
   }, [documentReloadGeneration, editor, note.contentVersion, note.editorDocument, note.id]);
@@ -579,7 +623,7 @@ export function EditorArea({
   }
 
   return (
-    <section className="editor-col">
+    <section className={`editor-col editor-surface-${editorSurfaceLayoutMode}`} data-layout={editorSurfaceLayoutMode} ref={editorSurfaceRef}>
       {!isFocusMode ? (
         <div className="ed-top">
           <div className="crumb">
@@ -655,9 +699,6 @@ export function EditorArea({
                 </span>
               ))}
               {note.isNew ? <span className="note-date-chip">{note.noteDate}</span> : null}
-              <button className="add" data-tooltip="Добавить тег" onClick={() => onToast("Добавление тегов появится на следующем этапе данных")} type="button">
-                +
-              </button>
             </div>
             <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
               <TableToolsPopover editor={editor} onToast={onToast} />

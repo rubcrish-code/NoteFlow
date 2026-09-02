@@ -4,7 +4,7 @@ export type { EditorDocument };
 
 export type AppSection = "notes" | "projects" | "rag" | "tags" | "archive" | "settings";
 
-export type SettingsPanel = "models" | "appearance" | "language" | "data" | "shortcuts";
+export type SettingsPanel = "general" | "models" | "appearance" | "data" | "shortcuts" | "about";
 
 export type ThemeMode = "light" | "dark" | "system";
 

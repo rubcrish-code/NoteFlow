@@ -1,9 +1,12 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { AppLanguage, AppSection, SettingsPanel, ThemeMode } from "../../app/types";
+import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
 import type { BackupPreview, ImportBackupResult } from "../../services/dataService";
 import { Icon } from "../../shared/Icon";
-import { PageShell } from "../navigation/PageShell";
+import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
+import { APP_SHORTCUTS, EDITOR_SHORTCUTS, type ShortcutReference } from "../../shared/appShortcuts";
+import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysicalElementWidth";
 import * as llmProviderService from "../../services/llmProviderService";
 import type { LlmProvider, LlmProviderType } from "../../services/llmProviderService";
 import * as knowledgeService from "../../services/knowledgeService";
@@ -17,6 +20,7 @@ import {
 import type { LlmNetworkAction, LlmNetworkOperation } from "./llmNetworkOperation";
 import { ModelStatusBadge, ProviderTypeSelector, SettingsModalShell, SettingsSectionHeader } from "./ModelSettingsUi";
 import { SemanticSearchSettings } from "./SemanticSearchSettings";
+import { getSettingsLayoutMode } from "./settingsResponsive";
 import {
   formatBackupDate,
   getBackupPreviewErrorMessage,
@@ -29,7 +33,7 @@ import {
 
 interface SettingsPageProps {
   appZoomPercent: number;
-  language: AppLanguage;
+  localProfileName: string;
   theme: ThemeMode;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
@@ -38,20 +42,22 @@ interface SettingsPageProps {
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
   onImportBackup: (file: File) => Promise<ImportBackupResult>;
-  onLanguageChange: (language: AppLanguage) => void;
+  onEditLocalProfile: () => void;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
   onZoomDecrease: () => void;
   onZoomIncrease: () => void;
   onZoomReset: () => void;
+  sidebar: PageShellSidebarProps;
 }
 
 const settingsPanels: Array<{ id: SettingsPanel; label: string }> = [
+  { id: "general", label: "Основные" },
   { id: "models", label: "Модели ИИ" },
   { id: "appearance", label: "Внешний вид" },
-  { id: "language", label: "Язык" },
   { id: "data", label: "Данные и экспорт" },
   { id: "shortcuts", label: "Горячие клавиши" },
+  { id: "about", label: "О приложении" },
 ];
 
 const providerPresets = [
@@ -127,14 +133,14 @@ interface ProviderFormState {
 
 export function SettingsPage({
   appZoomPercent,
-  language,
+  localProfileName,
   theme,
   onBackupCreate,
   onBackupPreview,
   onExportCurrentNote,
   onExportCurrentProject,
   onImportBackup,
-  onLanguageChange,
+  onEditLocalProfile,
   onNavigate,
   onNewNote,
   onThemeChange,
@@ -142,13 +148,16 @@ export function SettingsPage({
   onZoomDecrease,
   onZoomIncrease,
   onZoomReset,
+  sidebar,
 }: SettingsPageProps) {
   const [activePanel, setActivePanel] = useState<SettingsPanel>("models");
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const layoutMode = getSettingsLayoutMode(useObservedPhysicalElementWidth(layoutRef));
 
   return (
-    <PageShell activeSection="settings" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast}>
-      <div className="settings-layout-inner">
-        <aside className="settings-nav-col">
+    <PageShell activeSection="settings" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
+      <div className={`settings-layout-inner settings-layout-${layoutMode}`} data-layout={layoutMode} ref={layoutRef}>
+        <aside aria-label="Разделы настроек" className="settings-nav-col">
           <div className="nav-sec">Настройки</div>
           {settingsPanels.map((panel) => (
             <button
@@ -163,7 +172,8 @@ export function SettingsPage({
           ))}
         </aside>
 
-        <section className="settings-content">
+        <section className={`settings-content settings-content--${activePanel}`}>
+          {activePanel === "general" ? <GeneralSettings localProfileName={localProfileName} onEditLocalProfile={onEditLocalProfile} /> : null}
           {activePanel === "models" ? <ModelsSettings onToast={onToast} /> : null}
           {activePanel === "appearance" ? (
             <AppearanceSettings
@@ -176,7 +186,6 @@ export function SettingsPage({
               theme={theme}
             />
           ) : null}
-          {activePanel === "language" ? <LanguageSettings language={language} onLanguageChange={onLanguageChange} onToast={onToast} /> : null}
           {activePanel === "data" ? (
             <DataSettings
               onBackupCreate={onBackupCreate}
@@ -188,9 +197,48 @@ export function SettingsPage({
             />
           ) : null}
           {activePanel === "shortcuts" ? <ShortcutsSettings /> : null}
+          {activePanel === "about" ? <AboutSettings /> : null}
         </section>
       </div>
     </PageShell>
+  );
+}
+
+interface GeneralSettingsProps {
+  localProfileName: string;
+  onEditLocalProfile: () => void;
+}
+
+function GeneralSettings({ localProfileName, onEditLocalProfile }: GeneralSettingsProps) {
+  return (
+    <div>
+      <div className="settings-title">Основные</div>
+      <div className="settings-subtitle">Профиль, язык и основные сведения о локальной работе NoteFlow.</div>
+      <section className="settings-preference-group" aria-labelledby="general-profile-heading">
+        <div className="settings-preference-label" id="general-profile-heading">Профиль</div>
+        <div className="settings-preference-list">
+          <div className="settings-preference-row">
+            <span className="settings-info-icon"><Icon name="person" /></span>
+            <span className="settings-preference-copy"><b>{localProfileName}</b><small>Локальный профиль · на этом устройстве</small></span>
+            <button className="secondary-btn compact" onClick={onEditLocalProfile} type="button">Изменить имя</button>
+          </div>
+        </div>
+      </section>
+      <section className="settings-preference-group" aria-labelledby="general-app-heading">
+        <div className="settings-preference-label" id="general-app-heading">Приложение</div>
+        <div className="settings-preference-list">
+          <div className="settings-preference-row">
+            <span className="settings-info-icon"><Icon name="doc" /></span>
+            <span className="settings-preference-copy"><b>Данные на устройстве</b><small>Заметки и настройки хранятся локально. Регистрация не требуется.</small></span>
+          </div>
+          <div className="settings-preference-row">
+            <span className="settings-info-icon"><Icon name="gear" /></span>
+            <span className="settings-preference-copy"><b>Язык интерфейса</b><small>Другие языки интерфейса появятся в следующих версиях.</small></span>
+            <span className="settings-status-label">Русский</span>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1307,49 +1355,18 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
           <div>
             <b>Масштаб интерфейса</b>
           </div>
-          <span className="zoom-current">{appZoomPercent}%</span>
         </div>
         <div className="zoom-settings-row">
           <button className="zoom-step-btn" data-tooltip="Уменьшить масштаб" disabled={appZoomPercent <= APP_ZOOM_MIN} onClick={onZoomDecrease} type="button">
             <Icon name="minus" />
           </button>
           <button className="zoom-reset-btn" data-tooltip="Сбросить масштаб" onClick={onZoomReset} type="button">
-            100%
+            {appZoomPercent}%
           </button>
           <button className="zoom-step-btn" data-tooltip="Увеличить масштаб" disabled={appZoomPercent >= APP_ZOOM_MAX} onClick={onZoomIncrease} type="button">
             <Icon name="plus" />
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-interface LanguageSettingsProps {
-  language: AppLanguage;
-  onLanguageChange: (language: AppLanguage) => void;
-  onToast: (message: string) => void;
-}
-
-function LanguageSettings({ language, onLanguageChange, onToast }: LanguageSettingsProps) {
-  return (
-    <div>
-      <div className="settings-title">Язык</div>
-      <div className="settings-subtitle">Русский используется по умолчанию.</div>
-      <div className="settings-card">
-        <label className="field">
-          Язык интерфейса
-          <select
-            onChange={(event) => {
-              onLanguageChange(event.currentTarget.value === "en" ? "en" : "ru");
-              onToast("Смена языка пока демонстрационная");
-            }}
-            value={language}
-          >
-            <option value="ru">Русский</option>
-            <option value="en">English</option>
-          </select>
-        </label>
       </div>
     </div>
   );
@@ -1731,25 +1748,66 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
 }
 
 function ShortcutsSettings() {
-  const shortcuts = [
-    ["Новая заметка", "Ctrl + N"],
-    ["Поиск и команды", "Ctrl + K"],
-    ["Свернуть сайдбар", "Ctrl + B"],
-    ["Режим фокуса", "Ctrl + \\"],
-  ] as const;
-
   return (
     <div>
       <div className="settings-title">Горячие клавиши</div>
-      <div className="settings-subtitle">Основные сочетания для быстрой работы.</div>
-      <div className="settings-card shortcuts-card">
-        {shortcuts.map(([label, keys]) => (
-          <div className="archive-row" key={label}>
-            <span>{label}</span>
-            <kbd>{keys}</kbd>
-            <span />
+      <div className="settings-subtitle">Сочетания, которые уже работают в приложении. На macOS используйте ⌘ вместо Ctrl.</div>
+      <ShortcutGroup label="Навигация" shortcuts={APP_SHORTCUTS} />
+      <ShortcutGroup label="Редактор" shortcuts={EDITOR_SHORTCUTS} />
+    </div>
+  );
+}
+
+function ShortcutGroup({ label, shortcuts }: { label: string; shortcuts: readonly ShortcutReference[] }) {
+  return (
+    <section className="settings-preference-group shortcuts-group" aria-label={label}>
+      <div className="settings-preference-label">{label}</div>
+      <div className="shortcut-list">
+        {shortcuts.map((shortcut) => (
+          <div className="shortcut-row" key={shortcut.id}>
+            <span>{shortcut.label}</span>
+            <span className="shortcut-keys" aria-label={shortcut.keys.join(" плюс ")}>
+              {shortcut.keys.map((key, index) => (
+                <span className="shortcut-key-part" key={`${shortcut.id}-${key}`}>
+                  {index > 0 ? <span aria-hidden="true" className="shortcut-plus">+</span> : null}
+                  <kbd>{key}</kbd>
+                </span>
+              ))}
+            </span>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function AboutSettings() {
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+    void getVersion()
+      .then((value) => {
+        if (isActive) setVersion(value);
+      })
+      .catch(() => {
+        if (isActive) setVersion("");
+      });
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  return (
+    <div>
+      <div className="settings-title">О приложении</div>
+      <div className="settings-subtitle">Локальные заметки, Markdown-first редактор и ИИ-инструменты с контролем приватности.</div>
+      <div className="settings-card about-card">
+        <span className="about-mark"><Icon name="logo" /></span>
+        <span>
+          <b>NoteFlow</b>
+          <small aria-live="polite">{version === null ? "Получаем версию…" : version ? `Версия ${version}` : "Версия недоступна"}</small>
+        </span>
       </div>
     </div>
   );

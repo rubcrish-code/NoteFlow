@@ -513,8 +513,15 @@ export async function listTags(query = "") {
   return tags.map(mapTagRow);
 }
 
-export async function createTag(name: string, color: TagColor) {
-  return mapTagRow(await invoke<TagDto>("create_tag", { request: { color, name } }));
+export async function createTag(name: string, color: TagColor, customColor?: string) {
+  return mapTagRow(await invoke<TagDto>("create_tag", { request: { color, customColor: customColor ?? null, name } }));
+}
+
+export async function updateTag(tagId: string, name: string, color: TagColor, customColor?: string) {
+  const tags = await invoke<TagDto[]>("update_tag", {
+    request: { color, customColor: customColor ?? null, name, tagId },
+  });
+  return tags.map(mapTagRow);
 }
 
 export async function renameTag(tagId: string, name: string) {

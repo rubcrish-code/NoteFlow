@@ -10,6 +10,52 @@ interface FloatingPopoverPositionOptions<TAnchor extends HTMLElement, TPopover e
   preferredWidth?: number;
 }
 
+export interface FloatingPopoverGeometryInput {
+  anchorRect: Pick<DOMRect, "bottom" | "left" | "right" | "top">;
+  gap: number;
+  maxHeight: number;
+  padding: number;
+  preferredWidth: number;
+  scrollHeight: number;
+  viewportHeight: number;
+  viewportWidth: number;
+}
+
+export interface FloatingPopoverGeometry {
+  left: number;
+  maxHeight: number;
+  opensUp: boolean;
+  top: number;
+  width: number;
+}
+
+export function calculateFloatingPopoverGeometry({
+  anchorRect,
+  gap,
+  maxHeight,
+  padding,
+  preferredWidth,
+  scrollHeight,
+  viewportHeight,
+  viewportWidth,
+}: FloatingPopoverGeometryInput): FloatingPopoverGeometry {
+  const availableWidth = Math.max(0, viewportWidth - padding * 2);
+  const width = Math.min(preferredWidth, availableWidth);
+  const spaceBelow = Math.max(0, viewportHeight - anchorRect.bottom - gap - padding);
+  const spaceAbove = Math.max(0, anchorRect.top - gap - padding);
+  const opensUp = spaceBelow < Math.min(scrollHeight, maxHeight) && spaceAbove > spaceBelow;
+  const availableHeight = opensUp ? spaceAbove : spaceBelow;
+  const nextMaxHeight = Math.max(0, Math.min(maxHeight, availableHeight, viewportHeight - padding * 2));
+  const renderedHeight = Math.min(scrollHeight, nextMaxHeight);
+  const top = opensUp
+    ? Math.max(padding, anchorRect.top - gap - renderedHeight)
+    : Math.max(padding, Math.min(viewportHeight - padding - renderedHeight, anchorRect.bottom + gap));
+  const preferredLeft = anchorRect.left;
+  const left = Math.max(padding, Math.min(viewportWidth - padding - width, preferredLeft));
+
+  return { left, maxHeight: nextMaxHeight, opensUp, top, width };
+}
+
 export function useFloatingPopoverPosition<TAnchor extends HTMLElement, TPopover extends HTMLElement>({
   anchorRef,
   gap = 8,
@@ -43,23 +89,22 @@ export function useFloatingPopoverPosition<TAnchor extends HTMLElement, TPopover
         const anchorRect = anchorElement.getBoundingClientRect();
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
-        const availableWidth = Math.max(240, viewportWidth - padding * 2);
-        const width = Math.min(preferredWidth, availableWidth);
-        const scrollHeight = popoverElement.scrollHeight;
-        const spaceBelow = viewportHeight - anchorRect.bottom - gap - padding;
-        const spaceAbove = anchorRect.top - gap - padding;
-        const opensUp = spaceBelow < Math.min(scrollHeight, maxHeight) && spaceAbove > spaceBelow;
-        const availableHeight = Math.max(120, opensUp ? spaceAbove : spaceBelow);
-        const nextMaxHeight = Math.min(maxHeight, availableHeight, viewportHeight - padding * 2);
-        const renderedHeight = Math.min(scrollHeight, nextMaxHeight);
-        const top = opensUp ? Math.max(padding, anchorRect.top - gap - renderedHeight) : Math.min(viewportHeight - padding - renderedHeight, anchorRect.bottom + gap);
-        const left = Math.min(viewportWidth - padding - width, Math.max(padding, anchorRect.right - width));
+        const geometry = calculateFloatingPopoverGeometry({
+          anchorRect,
+          gap,
+          maxHeight,
+          padding,
+          preferredWidth,
+          scrollHeight: popoverElement.scrollHeight,
+          viewportHeight,
+          viewportWidth,
+        });
 
         setStyle({
-          left,
-          maxHeight: nextMaxHeight,
-          top,
-          width,
+          left: geometry.left,
+          maxHeight: geometry.maxHeight,
+          top: geometry.top,
+          width: geometry.width,
         });
       });
     }

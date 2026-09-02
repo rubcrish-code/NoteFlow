@@ -1,18 +1,22 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import * as embeddingService from "../../services/embeddingService";
 import type { EmbeddingIndexStatus, EmbeddingProfile, SemanticSearchResult } from "../../services/embeddingService";
 import { getNoteAiStatus, type NoteAiStatus } from "../../services/noteAiService";
 import * as ragChatService from "../../services/ragChatService";
 import type { RagChat, RagChatMessage } from "../../services/ragChatService";
 import { Icon } from "../../shared/Icon";
+import { ChatComposer } from "../../shared/ChatComposer";
 import { MenuPopover } from "../../shared/MenuPopover";
 import { ResizeHandle } from "../../shared/ResizeHandle";
+import { formatRussianCount, FRAGMENT_COUNT_FORMS } from "../../shared/russianPlural";
 import { ChatMarkdown } from "../note-chat/ChatMarkdown";
 import { SettingsModalShell } from "../settings/ModelSettingsUi";
+import { isRagHistoryOverlayMode, resolveRagPanelVisibility, type RagLayoutMode } from "./ragResponsiveLayout";
 
 interface RagChatWorkspaceProps {
   conversationWidth: number;
   dataReloadGeneration: number;
+  layoutMode: RagLayoutMode;
   onConversationReset: () => void;
   onConversationResize: (deltaX: number) => void;
   onOpenModelSettings: () => void;
@@ -21,7 +25,7 @@ interface RagChatWorkspaceProps {
   onSourcesReset: () => void;
   onSourcesResize: (deltaX: number) => void;
   onToast: (message: string) => void;
-  sourcesCollapsed: boolean;
+  preferredSourcesCollapsed: boolean;
   sourcesWidth: number;
 }
 
@@ -37,6 +41,7 @@ const emptyResponse = "Источники не найдены. Попробуй�
 export function RagChatWorkspace({
   conversationWidth,
   dataReloadGeneration,
+  layoutMode,
   onConversationReset,
   onConversationResize,
   onOpenModelSettings,
@@ -45,7 +50,7 @@ export function RagChatWorkspace({
   onSourcesReset,
   onSourcesResize,
   onToast,
-  sourcesCollapsed,
+  preferredSourcesCollapsed,
   sourcesWidth,
 }: RagChatWorkspaceProps) {
   const [chats, setChats] = useState<RagChat[]>([]);
@@ -62,7 +67,9 @@ export function RagChatWorkspace({
   const [retrievalState, setRetrievalState] = useState<RetrievalState>("idle");
   const [retrievalError, setRetrievalError] = useState("");
   const [activeSources, setActiveSources] = useState<SemanticSearchResult[]>([]);
-  const [conversationsCollapsed, setConversationsCollapsed] = useState(false);
+  const [preferredHistoryCollapsed, setPreferredHistoryCollapsed] = useState(false);
+  const [historyOverlayOpen, setHistoryOverlayOpen] = useState(false);
+  const [sourcesOverlayOpen, setSourcesOverlayOpen] = useState(false);
   const [openChatMenuId, setOpenChatMenuId] = useState("");
   const [pendingDialog, setPendingDialog] = useState<PendingDialog>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -71,6 +78,54 @@ export function RagChatWorkspace({
   const messagesRef = useRef<HTMLDivElement>(null);
   const chatMenuAnchorRef = useRef<HTMLButtonElement>(null);
   const closeChatMenu = useCallback(() => setOpenChatMenuId(""), []);
+
+  const panelVisibility = resolveRagPanelVisibility({
+    historyOverlayOpen,
+    layoutMode,
+    preferredHistoryCollapsed,
+    preferredSourcesCollapsed,
+    sourcesOverlayOpen,
+  });
+  const { historyIsOverlay, historyVisible, sourcesIsOverlay, sourcesVisible } = panelVisibility;
+
+  useEffect(() => {
+    setHistoryOverlayOpen(false);
+    setSourcesOverlayOpen(false);
+  }, [layoutMode]);
+
+  function openHistory() {
+    if (isRagHistoryOverlayMode(layoutMode)) {
+      setSourcesOverlayOpen(false);
+      setHistoryOverlayOpen(true);
+    } else {
+      setPreferredHistoryCollapsed(false);
+    }
+  }
+
+  function closeHistory() {
+    if (isRagHistoryOverlayMode(layoutMode)) {
+      setHistoryOverlayOpen(false);
+    } else {
+      setPreferredHistoryCollapsed(true);
+    }
+  }
+
+  function openSources() {
+    if (layoutMode === "wide") {
+      onSourcesCollapsedChange(false);
+    } else {
+      setHistoryOverlayOpen(false);
+      setSourcesOverlayOpen(true);
+    }
+  }
+
+  function closeSources() {
+    if (layoutMode === "wide") {
+      onSourcesCollapsedChange(true);
+    } else {
+      setSourcesOverlayOpen(false);
+    }
+  }
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
@@ -222,7 +277,7 @@ export function RagChatWorkspace({
       if (requestIdRef.current !== requestId) return;
       setMessages((current) => [...current, assistantMessage]);
       setActiveSources(results);
-      if (results.length > 0 && sourcesCollapsed) onSourcesCollapsedChange(false);
+      if (results.length > 0) openSources();
       if (chat.title === "Новый чат") {
         const renamed = await ragChatService.renameRagChat(chat.id, titleFromQuestion(question));
         setChats((current) => current.map((item) => item.id === renamed.id ? renamed : item));
@@ -284,13 +339,6 @@ export function RagChatWorkspace({
     }
   }
 
-  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void sendQuestion();
-    }
-  }
-
   async function copyMessage(message: RagChatMessage) {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -307,18 +355,18 @@ export function RagChatWorkspace({
   } as CSSProperties;
 
   return (
-    <div className={`rag-page rag-production-chat ${sourcesCollapsed ? "sources-collapsed" : ""} ${conversationsCollapsed ? "conversations-collapsed" : ""}`} style={pageStyle}>
-      {!conversationsCollapsed ? (
+    <div className={`rag-page rag-production-chat rag-layout-${layoutMode} ${!sourcesVisible ? "sources-collapsed" : ""} ${!historyVisible ? "conversations-collapsed" : ""}`} style={pageStyle}>
+      {historyVisible ? (
         <>
-          <aside aria-label="История диалогов" className="rag-conversations">
+          <aside aria-label="История диалогов" className={`rag-conversations ${historyIsOverlay ? "rag-panel-overlay" : ""}`}>
             <button className="secondary-btn rag-new-chat" onClick={() => void createChat()} type="button">
               <Icon name="plus" />
               Новый чат
             </button>
             <div className="rag-conversation-head">
               <span>Недавние чаты</span>
-              <button aria-label="Скрыть историю чатов" className="icon-close-btn" onClick={() => setConversationsCollapsed(true)} title="Скрыть историю" type="button">
-                <Icon name="back" />
+              <button aria-label="Скрыть историю чатов" className="icon-close-btn" onClick={closeHistory} title="Скрыть историю" type="button">
+                <Icon name={historyIsOverlay ? "x" : "back"} />
               </button>
             </div>
             <div className="rag-history">
@@ -364,7 +412,7 @@ export function RagChatWorkspace({
               {!isLoading && chats.length === 0 ? <div className="rag-history-empty">Создайте первый чат по базе заметок.</div> : null}
             </div>
           </aside>
-          <ResizeHandle className="rag-conversation-resize" label="Изменить ширину истории диалогов" onReset={onConversationReset} onResize={onConversationResize} />
+          {!historyIsOverlay ? <ResizeHandle className="rag-conversation-resize" label="Изменить ширину истории диалогов" onReset={onConversationReset} onResize={onConversationResize} /> : null}
         </>
       ) : null}
 
@@ -372,8 +420,8 @@ export function RagChatWorkspace({
         <header className="rag-chat-header">
           <div className="rag-chat-top">
             <div className="rag-chat-title">
-              {conversationsCollapsed ? (
-                <button aria-label="Показать историю чатов" className="icon-close-btn" onClick={() => setConversationsCollapsed(false)} title="Показать историю" type="button">
+              {!historyVisible ? (
+                <button aria-label="Показать историю чатов" className="icon-close-btn" onClick={openHistory} title="Показать историю" type="button">
                   <Icon name="forward" />
                 </button>
               ) : null}
@@ -386,8 +434,8 @@ export function RagChatWorkspace({
               <button aria-label="Настроить модели" className="icon-close-btn" data-tooltip="Настроить модели" onClick={onOpenModelSettings} type="button">
                 <Icon name="gear" />
               </button>
-              {sourcesCollapsed ? (
-                <button className="secondary-btn compact" onClick={() => onSourcesCollapsedChange(false)} type="button">
+              {!sourcesVisible ? (
+                <button className="secondary-btn compact" onClick={openSources} type="button">
                   <Icon name="doc" /> Источники
                 </button>
               ) : null}
@@ -430,7 +478,7 @@ export function RagChatWorkspace({
                     {message.sources.length > 0 ? (
                       <button className="rag-inline-sources" onClick={() => {
                         setActiveSources(message.sources);
-                        onSourcesCollapsedChange(false);
+                        openSources();
                       }} type="button">
                         <Icon name="doc" /> Источники: {message.sources.length}
                       </button>
@@ -448,29 +496,26 @@ export function RagChatWorkspace({
 
         <div className="rag-input-wrap">
           <div className="rag-stage-note">NoteFlow найдёт релевантные фрагменты и покажет источники для проверки.</div>
-          <div className="rag-input">
-            <textarea
-              disabled={!canRetrieve}
-              onChange={(event) => setDraft(event.currentTarget.value)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder={selectedProfile ? "Спросить по всем заметкам…" : "Сначала настройте модель смыслового поиска"}
-              rows={1}
-              value={draft}
-            />
-            <button aria-label="Отправить" className="icon-send" disabled={!draft.trim() || !canRetrieve || retrievalState === "searching"} onClick={() => void sendQuestion()} type="button">
-              <Icon name="send" />
-            </button>
-          </div>
+          <ChatComposer
+            ariaLabel="Сообщение по всей базе заметок"
+            className="rag-input"
+            disabled={!canRetrieve}
+            isSubmitting={retrievalState === "searching"}
+            onChange={setDraft}
+            onSubmit={() => void sendQuestion()}
+            placeholder={selectedProfile ? "Спросить по всем заметкам…" : "Сначала настройте модель смыслового поиска"}
+            value={draft}
+          />
         </div>
       </main>
 
-      {!sourcesCollapsed ? (
+      {sourcesVisible ? (
         <>
-          <ResizeHandle className="rag-sources-resize" label="Изменить ширину источников RAG" onReset={onSourcesReset} onResize={onSourcesResize} />
-          <aside aria-label="Источники ответа" className="rag-sources-panel">
+          {!sourcesIsOverlay ? <ResizeHandle className="rag-sources-resize" label="Изменить ширину источников RAG" onReset={onSourcesReset} onResize={onSourcesResize} /> : null}
+          <aside aria-label="Источники ответа" className={`rag-sources-panel ${sourcesIsOverlay ? "rag-panel-overlay" : ""}`}>
             <div className="rag-sources-panel-head">
-              <span className="rag-sources-panel-title"><b>Источники</b><span>{activeSources.length > 0 ? `${activeSources.length} фрагментов` : "Пока нет результатов"}</span></span>
-              <button aria-label="Скрыть источники" className="rag-sources-close" onClick={() => onSourcesCollapsedChange(true)} type="button"><Icon name="x" /></button>
+              <span className="rag-sources-panel-title"><b>Источники</b><span>{activeSources.length > 0 ? formatRussianCount(activeSources.length, FRAGMENT_COUNT_FORMS) : "Пока нет результатов"}</span></span>
+              <button aria-label="Скрыть источники" className="rag-sources-close" onClick={closeSources} type="button"><Icon name="x" /></button>
             </div>
             <div className="rag-source-list">
               {activeSources.map((source) => (

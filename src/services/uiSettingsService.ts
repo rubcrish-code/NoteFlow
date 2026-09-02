@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppLanguage, AppSection, ThemeMode } from "../app/types";
 import { normalizeAppZoom } from "../shared/appZoom";
 import { EDITOR_CONTENT_DEFAULT_OFFSET, EDITOR_CONTENT_DEFAULT_WIDTH, clampEditorContentOffset, clampEditorContentWidth } from "../shared/editorPageLayout";
+import { DEFAULT_LOCAL_PROFILE_NAME, normalizeLocalProfileName } from "../shared/localProfile";
 
 export interface UiSettings {
   appZoomPercent: number;
@@ -11,6 +12,7 @@ export interface UiSettings {
   language: AppLanguage;
   lastSection: AppSection;
   listWidth: number;
+  localProfileName: string;
   ragConversationWidth: number;
   ragSourcesCollapsed: boolean;
   ragSourcesWidth: number;
@@ -33,6 +35,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   language: "ru",
   lastSection: "notes",
   listWidth: 376,
+  localProfileName: DEFAULT_LOCAL_PROFILE_NAME,
   ragConversationWidth: 280,
   ragSourcesCollapsed: false,
   ragSourcesWidth: 320,
@@ -66,6 +69,7 @@ export function normalizeUiSettings(settings: UiSettings): UiSettings {
     language: normalizeChoice(settings.language, appLanguages, DEFAULT_UI_SETTINGS.language),
     lastSection: normalizeChoice(settings.lastSection, appSections, DEFAULT_UI_SETTINGS.lastSection),
     listWidth: clampInteger(settings.listWidth, 260, 560, DEFAULT_UI_SETTINGS.listWidth),
+    localProfileName: normalizeLocalProfileName(settings.localProfileName) || DEFAULT_LOCAL_PROFILE_NAME,
     ragConversationWidth: clampInteger(settings.ragConversationWidth, 220, 380, DEFAULT_UI_SETTINGS.ragConversationWidth),
     ragSourcesCollapsed: settings.ragSourcesCollapsed,
     ragSourcesWidth: clampInteger(settings.ragSourcesWidth, 260, 460, DEFAULT_UI_SETTINGS.ragSourcesWidth),

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, ProjectCard, SaveStatus, TagColor, TagRow } from "./types";
+import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, ProjectCard, SaveStatus, TagRow } from "./types";
 import * as dataService from "../services/dataService";
 import * as searchService from "../services/searchService";
 import type { SearchNoteResult } from "../services/searchService";
@@ -8,6 +8,7 @@ import type { SemanticSearchResult } from "../services/embeddingService";
 import { ArchivePage } from "../features/archive/ArchivePage";
 import { EditorArea } from "../features/editor/EditorArea";
 import { MainSidebar } from "../features/navigation/MainSidebar";
+import type { PageShellSidebarProps } from "../features/navigation/PageShell";
 import { NewNoteModal } from "../features/notes/NewNoteModal";
 import { NoteListPanel, type NoteSearchStatus } from "../features/notes/NoteListPanel";
 import { NoteChatPanel } from "../features/note-chat/NoteChatPanel";
@@ -15,11 +16,18 @@ import { ProjectsPage } from "../features/projects/ProjectsPage";
 import { RagChatPage } from "../features/rag/RagChatPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { TagsPage } from "../features/tags/TagsPage";
+import type { TagEditorValue } from "../features/tags/TagEditorModal";
+import { mergeTagInNotes, removeTagFromNotes, replaceTagInNotes } from "../features/tags/tagState";
 import { createNotePreview } from "../features/notes/notePreview";
 import { ResizeHandle } from "../shared/ResizeHandle";
 import { Toast, type ToastAction } from "../shared/Toast";
 import { TooltipPortal } from "../shared/TooltipPortal";
+import { AppZoomProvider } from "../shared/AppZoomContext";
+import { LocalProfileModal } from "../shared/LocalProfileModal";
+import { matchesAppShortcut } from "../shared/appShortcuts";
 import { useAppZoom } from "../shared/useAppZoom";
+import { shouldTemporarilyHideNoteList } from "../shared/physicalLayout";
+import { usePhysicalViewportWidth } from "../shared/usePhysicalViewportWidth";
 import { clearLegacyUiSettings, migrateLegacyUiSettings } from "../services/legacyUiSettingsMigration";
 import { DEFAULT_UI_SETTINGS, getUiSettings, normalizeUiSettings, updateUiSettings as persistUiSettings, type UiSettings } from "../services/uiSettingsService";
 import { advancePendingSaveVersion, hasNewerPendingSave, shouldRestoreFailedSave } from "./noteAutosaveCoordinator";
@@ -38,7 +46,6 @@ type AppZoomStyle = CSSProperties & {
   "--app-viewport-height": string;
   "--app-page-padding-x": string;
   "--app-page-padding-y": string;
-  "--app-page-sidebar-max": string;
 };
 
 interface PendingNoteSave {
@@ -105,6 +112,7 @@ export function AppShell() {
   const [editorSelectionText, setEditorSelectionText] = useState("");
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isNewNoteModalOpen, setIsNewNoteModalOpen] = useState(false);
+  const [isProfileNameModalOpen, setIsProfileNameModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [editorReloadGeneration, setEditorReloadGeneration] = useState(0);
   const [workspaceReloadGeneration, setWorkspaceReloadGeneration] = useState(0);
@@ -133,6 +141,15 @@ export function AppShell() {
   const listWidth = uiSettings.listWidth;
   const chatWidth = uiSettings.chatWidth;
   const isSidebarCollapsed = uiSettings.sidebarCollapsed;
+  const physicalViewportWidth = usePhysicalViewportWidth(appZoom.zoomPercent);
+  const hideNoteListForChat = shouldTemporarilyHideNoteList({
+    chatOpen: isChatOpen,
+    chatWidth,
+    listWidth,
+    physicalWidth: physicalViewportWidth,
+    sidebarCollapsed: isSidebarCollapsed,
+    sidebarWidth,
+  });
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0] ?? null;
 
@@ -362,26 +379,25 @@ export function AppShell() {
         return;
       }
 
-      const key = event.key.toLowerCase();
-      if (key === "n" || key === "т") {
+      if (matchesAppShortcut(event, "newNote")) {
         event.preventDefault();
         openNewNoteModal();
       }
 
-      if (key === "k" || key === "л") {
+      if (matchesAppShortcut(event, "search")) {
         event.preventDefault();
         activateSection("notes");
         window.setTimeout(() => document.getElementById("note-search")?.focus(), 0);
       }
 
-      if ((key === "b" || key === "и") && !isTextInputTarget(event.target)) {
+      if (matchesAppShortcut(event, "sidebar") && !isTextInputTarget(event.target)) {
         event.preventDefault();
         updateUiSettings((currentSettings) => ({
           sidebarCollapsed: !currentSettings.sidebarCollapsed,
         }));
       }
 
-      if (event.key === "\\") {
+      if (matchesAppShortcut(event, "focus")) {
         event.preventDefault();
         toggleFocusMode();
       }
@@ -869,34 +885,30 @@ export function AppShell() {
       .catch((error) => showToast(`Не удалось создать проект: ${String(error)}`));
   }
 
-  function createTag() {
-    const nextNumber = tags.length + 1;
-    void dataService
-      .createTag(`новый тег ${nextNumber}`, "blue")
-      .then((tag) => {
-        setTags((currentTags) => [...currentTags, tag]);
-        showToast("Тег создан");
-      })
-      .catch((error) => showToast(`Не удалось создать тег: ${String(error)}`));
+  async function createTag(value: TagEditorValue) {
+    try {
+      const tag = await dataService.createTag(value.name, value.color, value.customColor);
+      setTags((currentTags) => [...currentTags, tag].sort((first, second) => first.name.localeCompare(second.name, "ru-RU")));
+      setSearchRevision((revision) => revision + 1);
+      showToast("Тег создан");
+    } catch (error) {
+      showToast(`Не удалось создать тег: ${String(error)}`);
+      throw error;
+    }
   }
 
-  function renameTag(tagId: string, name: string) {
-    void dataService
-      .renameTag(tagId, name)
-      .then((nextTags) => {
-        setTags(nextTags);
-        setSearchRevision((revision) => revision + 1);
-      })
-      .then(() => showToast("Тег переименован"))
-      .catch((error) => showToast(`Не удалось переименовать тег: ${String(error)}`));
-  }
-
-  function updateTagColor(tagId: string, color: TagColor, customColor?: string) {
-    void dataService
-      .updateTagColor(tagId, color, customColor)
-      .then(setTags)
-      .then(() => showToast("Цвет тега изменён"))
-      .catch((error) => showToast(`Не удалось изменить цвет тега: ${String(error)}`));
+  async function updateTag(tagId: string, value: TagEditorValue) {
+    try {
+      const nextTags = await dataService.updateTag(tagId, value.name, value.color, value.customColor);
+      const updatedTag = nextTags.find((tag) => tag.id === tagId);
+      setTags(nextTags);
+      if (updatedTag) setNotes((currentNotes) => replaceTagInNotes(currentNotes, updatedTag));
+      setSearchRevision((revision) => revision + 1);
+      showToast("Тег обновлён");
+    } catch (error) {
+      showToast(`Не удалось обновить тег: ${String(error)}`);
+      throw error;
+    }
   }
 
   function deleteTag(tagId: string) {
@@ -904,21 +916,25 @@ export function AppShell() {
       .deleteTag(tagId)
       .then((nextTags) => {
         setTags(nextTags);
+        setNotes((currentNotes) => removeTagFromNotes(currentNotes, tagId));
         setSearchRevision((revision) => revision + 1);
       })
       .then(() => showToast("Тег удалён"))
       .catch((error) => showToast(`Не удалось удалить тег: ${String(error)}`));
   }
 
-  function mergeTags(sourceTagId: string, targetTagId: string) {
-    void dataService
-      .mergeTags(sourceTagId, targetTagId)
-      .then((nextTags) => {
-        setTags(nextTags);
-        setSearchRevision((revision) => revision + 1);
-      })
-      .then(() => showToast("Теги объединены"))
-      .catch((error) => showToast(`Не удалось объединить теги: ${String(error)}`));
+  async function mergeTags(sourceTagId: string, targetTagId: string) {
+    try {
+      const nextTags = await dataService.mergeTags(sourceTagId, targetTagId);
+      const targetTag = nextTags.find((tag) => tag.id === targetTagId);
+      setTags(nextTags);
+      if (targetTag) setNotes((currentNotes) => mergeTagInNotes(currentNotes, sourceTagId, targetTag));
+      setSearchRevision((revision) => revision + 1);
+      showToast("Теги объединены");
+    } catch (error) {
+      showToast(`Не удалось объединить теги: ${String(error)}`);
+      throw error;
+    }
   }
 
   function openTagNotes(tagName: string) {
@@ -1024,18 +1040,41 @@ export function AppShell() {
 
   const workspaceStyle: WorkspaceStyle = {
     "--sbw": `${isFocusMode ? 0 : isSidebarCollapsed ? 74 : sidebarWidth}px`,
-    "--listw": `${isFocusMode ? 0 : listWidth}px`,
+    "--listw": `${isFocusMode || hideNoteListForChat ? 0 : listWidth}px`,
     "--chatw": `${isFocusMode || !isChatOpen ? 0 : chatWidth}px`,
   };
   const sharedFooter = (
     <SharedOverlays
       isNewNoteModalOpen={isNewNoteModalOpen}
+      isProfileNameModalOpen={isProfileNameModalOpen}
+      localProfileName={uiSettings.localProfileName}
       onCloseNewNote={() => setIsNewNoteModalOpen(false)}
+      onCloseProfileName={() => setIsProfileNameModalOpen(false)}
       onCreateNote={createNote}
+      onSaveProfileName={(localProfileName) => {
+        updateUiSettings({ localProfileName });
+        setIsProfileNameModalOpen(false);
+        showToast("Имя локального профиля обновлено");
+      }}
       toastAction={toastAction}
       toastMessage={toastMessage}
     />
   );
+  const sharedPageSidebar: PageShellSidebarProps = {
+    collapsed: isSidebarCollapsed,
+    localProfileName: uiSettings.localProfileName,
+    onEditLocalProfile: () => setIsProfileNameModalOpen(true),
+    onReset: () => updateUiSettings({ sidebarWidth: 250 }),
+    onResize: (deltaX) =>
+      updateUiSettings((currentSettings) => ({
+        sidebarWidth: clamp(currentSettings.sidebarWidth + deltaX, 190, 360),
+      })),
+    onToggleCollapse: () =>
+      updateUiSettings((currentSettings) => ({
+        sidebarCollapsed: !currentSettings.sidebarCollapsed,
+      })),
+    width: sidebarWidth,
+  };
 
   function renderAppFrame(children: ReactNode) {
     return (
@@ -1047,7 +1086,7 @@ export function AppShell() {
 
   if (activeSection === "projects") {
     return renderAppFrame(
-      <ProjectsPage onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} projects={projects} />,
+      <ProjectsPage onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} projects={projects} sidebar={sharedPageSidebar} />,
     );
   }
 
@@ -1077,23 +1116,11 @@ export function AppShell() {
             ragSourcesWidth: clamp(currentSettings.ragSourcesWidth - deltaX, 260, 460),
           }))
         }
-        onSidebarReset={() => updateUiSettings({ sidebarWidth: 250 })}
-        onSidebarResize={(deltaX) =>
-          updateUiSettings((currentSettings) => ({
-            sidebarWidth: clamp(currentSettings.sidebarWidth + deltaX, 190, 360),
-          }))
-        }
-        onToggleSidebarCollapse={() =>
-          updateUiSettings((currentSettings) => ({
-            sidebarCollapsed: !currentSettings.sidebarCollapsed,
-          }))
-        }
         onToast={showToast}
         ragConversationWidth={uiSettings.ragConversationWidth}
         ragSourcesCollapsed={uiSettings.ragSourcesCollapsed}
         ragSourcesWidth={uiSettings.ragSourcesWidth}
-        sidebarCollapsed={isSidebarCollapsed}
-        sidebarWidth={sidebarWidth}
+        sidebar={sharedPageSidebar}
       />,
     );
   }
@@ -1107,9 +1134,9 @@ export function AppShell() {
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
         onOpenTag={openTagNotes}
-        onRenameTag={renameTag}
         onToast={showToast}
-        onUpdateTagColor={updateTagColor}
+        onUpdateTag={updateTag}
+        sidebar={sharedPageSidebar}
         tags={tags}
       />,
     );
@@ -1124,6 +1151,7 @@ export function AppShell() {
         onNewNote={openNewNoteModal}
         onRestoreItem={restoreArchiveItem}
         onToast={showToast}
+        sidebar={sharedPageSidebar}
       />,
     );
   }
@@ -1132,6 +1160,7 @@ export function AppShell() {
     return renderAppFrame(
       <SettingsPage
         appZoomPercent={appZoom.zoomPercent}
+        localProfileName={uiSettings.localProfileName}
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
         onBackupCreate={createBackup}
@@ -1139,25 +1168,30 @@ export function AppShell() {
         onExportCurrentNote={exportCurrentNoteZip}
         onExportCurrentProject={exportCurrentProjectZip}
         onImportBackup={importBackup}
-        language={uiSettings.language}
-        onLanguageChange={(language) => updateUiSettings({ language })}
+        onEditLocalProfile={() => setIsProfileNameModalOpen(true)}
         onThemeChange={(nextTheme) => updateUiSettings({ theme: nextTheme })}
         onToast={showToast}
         onZoomDecrease={appZoom.decreaseZoom}
         onZoomIncrease={appZoom.increaseZoom}
         onZoomReset={appZoom.resetZoom}
+        sidebar={sharedPageSidebar}
         theme={theme}
       />,
     );
   }
 
   return renderAppFrame(
-      <div className={`workspace ${isSidebarCollapsed ? "collapse-sb" : ""} ${isFocusMode ? "focus" : ""} ${isChatOpen ? "chat-open" : ""}`} style={workspaceStyle}>
+      <div
+        className={`workspace ${isSidebarCollapsed ? "collapse-sb" : ""} ${isFocusMode ? "focus" : ""} ${isChatOpen ? "chat-open" : ""} ${hideNoteListForChat ? "workspace-hide-list-for-chat" : ""}`}
+        style={workspaceStyle}
+      >
         {!isFocusMode ? (
           <>
             <MainSidebar
               activeSection="notes"
               collapsed={isSidebarCollapsed}
+              localProfileName={uiSettings.localProfileName}
+              onEditLocalProfile={() => setIsProfileNameModalOpen(true)}
               onNavigate={navigate}
               onNewNote={openNewNoteModal}
               onToast={showToast}
@@ -1291,29 +1325,35 @@ function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFram
     "--app-viewport-height": `${100 / zoomFactor}vh`,
     "--app-page-padding-x": `${36 / zoomFactor}px`,
     "--app-page-padding-y": `${28 / zoomFactor}px`,
-    "--app-page-sidebar-max": zoomPercent > 100 ? `${250 / zoomFactor}px` : "10000px",
   };
 
   return (
-    <div className={`app-zoom-root ${zoomPercent >= 150 ? "app-zoom-high" : zoomPercent >= 125 ? "app-zoom-elevated" : ""} ${useCssZoomFallback ? "css-zoom-fallback" : ""}`} style={zoomStyle}>
-      {children}
-      {footer}
-    </div>
+    <AppZoomProvider zoomPercent={zoomPercent}>
+      <div className={`app-zoom-root ${useCssZoomFallback ? "css-zoom-fallback" : ""}`} data-zoom-percent={zoomPercent} style={zoomStyle}>
+        {children}
+        {footer}
+      </div>
+    </AppZoomProvider>
   );
 }
 
 interface SharedOverlaysProps {
   isNewNoteModalOpen: boolean;
+  isProfileNameModalOpen: boolean;
+  localProfileName: string;
   toastAction: ToastAction | null;
   toastMessage: string | null;
   onCloseNewNote: () => void;
+  onCloseProfileName: () => void;
   onCreateNote: (title: string, noteDate: string) => void;
+  onSaveProfileName: (name: string) => void;
 }
 
-function SharedOverlays({ isNewNoteModalOpen, toastAction, toastMessage, onCloseNewNote, onCreateNote }: SharedOverlaysProps) {
+function SharedOverlays({ isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onSaveProfileName }: SharedOverlaysProps) {
   return (
     <>
       <NewNoteModal isOpen={isNewNoteModalOpen} onClose={onCloseNewNote} onCreate={onCreateNote} />
+      <LocalProfileModal name={localProfileName} onClose={onCloseProfileName} onSave={onSaveProfileName} open={isProfileNameModalOpen} />
       <Toast action={toastAction} message={toastMessage} />
       <TooltipPortal />
     </>

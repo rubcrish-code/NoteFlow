@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { AppSection } from "../../app/types";
 import { Icon, type IconName } from "../../shared/Icon";
+import { getLocalProfileInitial } from "../../shared/localProfile";
 import { MenuPopover } from "../../shared/MenuPopover";
 
 interface NavItem {
@@ -24,13 +25,15 @@ const libraryNavItems: NavItem[] = [
 interface MainSidebarProps {
   activeSection: AppSection;
   collapsed?: boolean;
+  localProfileName: string;
+  onEditLocalProfile: () => void;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
   onToggleCollapse?: () => void;
   onToast: (message: string) => void;
 }
 
-export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNewNote, onToggleCollapse, onToast }: MainSidebarProps) {
+export function MainSidebar({ activeSection, collapsed = false, localProfileName, onEditLocalProfile, onNavigate, onNewNote, onToggleCollapse }: MainSidebarProps) {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const profileAnchorRef = useRef<HTMLButtonElement>(null);
   const closeProfileMenu = useCallback(() => setIsProfileOpen(false), []);
@@ -39,6 +42,7 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
     const isActive = activeSection === item.section;
     return (
       <button
+        aria-label={item.label}
         aria-current={isActive ? "page" : undefined}
         className={`nav-i ${isActive ? "on" : ""}`}
         data-tooltip={item.label}
@@ -71,13 +75,13 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
             <Icon name={collapsed ? "forward" : "back"} />
           </button>
         ) : (
-          <button className="col" data-tooltip="К заметкам" onClick={() => onNavigate("notes")} type="button">
+          <button aria-label="К заметкам" className="col" data-tooltip="К заметкам" onClick={() => onNavigate("notes")} type="button">
             <Icon name="back" />
           </button>
         )}
       </div>
 
-      <button className="new-btn" data-tooltip="Новая заметка" onClick={onNewNote} type="button">
+      <button aria-label="Новая заметка" className="new-btn" data-tooltip="Новая заметка" onClick={onNewNote} type="button">
         <Icon name="plus" />
         <span>Новая заметка</span>
       </button>
@@ -92,18 +96,19 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
 
       <div className="profile-wrap">
         <button
+          aria-label={`${localProfileName}, локальный профиль`}
           aria-expanded={isProfileOpen}
           aria-haspopup="menu"
           className="sb-user"
-          data-tooltip="Профиль"
+          data-tooltip={localProfileName}
           onClick={() => setIsProfileOpen((value) => !value)}
           ref={profileAnchorRef}
           type="button"
         >
-          <div className="av">В</div>
+          <div className="av">{getLocalProfileInitial(localProfileName)}</div>
           <div className="info">
-            <div className="nm">Уильям</div>
-            <div className="em">noteflow@local</div>
+            <div className="nm">{localProfileName}</div>
+            <div className="em">Локальный профиль</div>
           </div>
         </button>
         <MenuPopover
@@ -117,34 +122,25 @@ export function MainSidebar({ activeSection, collapsed = false, onNavigate, onNe
         >
           <button
             onClick={() => {
+              onEditLocalProfile();
+              setIsProfileOpen(false);
+            }}
+            role="menuitem"
+            type="button"
+          >
+            Изменить имя
+          </button>
+          <button
+            onClick={() => {
               onNavigate("settings");
               setIsProfileOpen(false);
             }}
             role="menuitem"
             type="button"
           >
-            Профиль и настройки
+            Открыть настройки
           </button>
-          <button
-            onClick={() => {
-              onToast("Локальный профиль активен");
-              setIsProfileOpen(false);
-            }}
-            role="menuitem"
-            type="button"
-          >
-            Локальный профиль
-          </button>
-          <button
-            onClick={() => {
-              onToast("Профиль локальный, облачный выход не требуется");
-              setIsProfileOpen(false);
-            }}
-            role="menuitem"
-            type="button"
-          >
-            Выйти
-          </button>
+          <div className="profile-local-note">NoteFlow не использует онлайн-аккаунт. Данные остаются на этом устройстве.</div>
         </MenuPopover>
       </div>
     </aside>
