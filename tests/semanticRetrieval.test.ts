@@ -78,7 +78,8 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   it("keeps provider configuration forms out of the RAG chat", () => {
     assert.doesNotMatch(workspaceSource, /SemanticSearchSettings|ProviderTypeSelector|SettingsSectionHeader|>\s*API key\s*<|>\s*Base URL\s*<|batch size/i);
     assert.match(workspaceSource, /Настроить модели/);
-    assert.match(appShellSource, /semantic-search-settings/);
+    assert.match(appShellSource, /setSettingsTarget\("semantic-search"\)/);
+    assert.match(settingsPageSource, /getElementById\("semantic-search-settings"\)/);
   });
 
   it("restores a full RAG chat shell with new chat, history, composer and sources", () => {

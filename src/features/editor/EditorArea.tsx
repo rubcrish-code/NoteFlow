@@ -16,7 +16,6 @@ import type { EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, S
 import { acceptNoteAiPrivacy, createNoteAiContext, getNoteAiStatus, runNoteAi, type NoteAiActionId, type NoteAiScope, type NoteAiStatus } from "../../services/noteAiService";
 import { Icon } from "../../shared/Icon";
 import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNodeView";
-import { ImageEditorModal } from "../imageEditor/ImageEditorModal";
 import { createEditedImageFileName, dataUrlToFile, type ImageEditMode, type ImageEditMetadata } from "../imageEditor/imageEditService";
 import { BlockInsertMenu, type EditorInsertSelection, type EditorInsertTarget } from "./BlockInsertMenu";
 import { runtimeAssetUrl } from "./assetUri";
@@ -33,6 +32,9 @@ import { NoteFlowTaskItem } from "./taskExtensions";
 import { useEditorPageLayout } from "./useEditorPageLayout";
 import type { EditorPageLayoutSettings } from "../../shared/editorPageLayout";
 import type { SemanticSearchResult } from "../../services/embeddingService";
+import { LazyImageEditorModal } from "../../app/lazyFeatures";
+import { FeatureLoadState, LazyFeatureBoundary } from "../../shared/LazyFeatureBoundary";
+import { ModalShell } from "../../shared/ModalShell";
 import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysicalElementWidth";
 import { getEditorSurfaceLayoutMode } from "./editorToolbarLayout";
 
@@ -744,13 +746,18 @@ export function EditorArea({
       ) : null}
 
       {imageEditTarget ? (
-        <ImageEditorModal
-          mode={imageEditTarget.mode}
-          onApply={(dataUrl, mode) => void applyImageEdit(dataUrl, mode)}
-          onClose={() => setImageEditTarget(null)}
-          src={runtimeAssetUrl(imageEditTarget.attrs.src)}
-          title={imageEditTarget.attrs.title ?? imageEditTarget.attrs.alt ?? "Изображение"}
-        />
+        <LazyFeatureBoundary
+          errorFallback={<ImageEditorLoadState kind="error" onClose={() => setImageEditTarget(null)} />}
+          loadingFallback={<ImageEditorLoadState kind="loading" onClose={() => setImageEditTarget(null)} />}
+        >
+          <LazyImageEditorModal
+            mode={imageEditTarget.mode}
+            onApply={(dataUrl, mode) => void applyImageEdit(dataUrl, mode)}
+            onClose={() => setImageEditTarget(null)}
+            src={runtimeAssetUrl(imageEditTarget.attrs.src)}
+            title={imageEditTarget.attrs.title ?? imageEditTarget.attrs.alt ?? "Изображение"}
+          />
+        </LazyFeatureBoundary>
       ) : null}
 
       <div className="ed-bottom">
@@ -788,6 +795,22 @@ export function EditorArea({
         <span className="words">{note.wordCount} слов</span>
       </div>
     </section>
+  );
+}
+
+function ImageEditorLoadState({ kind, onClose }: { kind: "error" | "loading"; onClose: () => void }) {
+  const [visible, setVisible] = useState(kind === "error");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), 150);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  if (!visible) return null;
+
+  return (
+    <ModalShell open onClose={onClose} title="Редактор изображения">
+      <FeatureLoadState kind={kind} label="редактор изображения" />
+    </ModalShell>
   );
 }
 

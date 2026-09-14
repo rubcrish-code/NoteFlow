@@ -32,6 +32,7 @@ import {
 } from "./backupImportFlow";
 
 interface SettingsPageProps {
+  initialTarget?: "semantic-search";
   appZoomPercent: number;
   localProfileName: string;
   theme: ThemeMode;
@@ -132,6 +133,7 @@ interface ProviderFormState {
 }
 
 export function SettingsPage({
+  initialTarget,
   appZoomPercent,
   localProfileName,
   theme,
@@ -153,6 +155,12 @@ export function SettingsPage({
   const [activePanel, setActivePanel] = useState<SettingsPanel>("models");
   const layoutRef = useRef<HTMLDivElement>(null);
   const layoutMode = getSettingsLayoutMode(useObservedPhysicalElementWidth(layoutRef));
+
+  useEffect(() => {
+    if (initialTarget === "semantic-search") {
+      document.getElementById("semantic-search-settings")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [initialTarget]);
 
   return (
     <PageShell activeSection="settings" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>

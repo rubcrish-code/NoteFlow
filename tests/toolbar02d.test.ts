@@ -71,7 +71,7 @@ describe("toolbar and block insert menu contract", () => {
     assert.match(ragChatPageSource, /sidebar=\{sidebar\}/);
     assert.match(legacyUiSettingsMigrationSource, /noteflow\.sidebarWidth/);
     assert.doesNotMatch(appShellSource, /localStorage/);
-    assert.match(appShellSource, /<RagChatPage[\s\S]*sidebar=\{sharedPageSidebar\}/);
+    assert.match(appShellSource, /<LazyRagChatPage[\s\S]*sidebar=\{sharedPageSidebar\}/);
   });
 
   it("exposes note pinning explicitly", () => {

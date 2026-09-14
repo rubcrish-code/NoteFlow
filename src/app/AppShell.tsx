@@ -5,17 +5,12 @@ import * as dataService from "../services/dataService";
 import * as searchService from "../services/searchService";
 import type { SearchNoteResult } from "../services/searchService";
 import type { SemanticSearchResult } from "../services/embeddingService";
-import { ArchivePage } from "../features/archive/ArchivePage";
 import { EditorArea } from "../features/editor/EditorArea";
 import { MainSidebar } from "../features/navigation/MainSidebar";
 import type { PageShellSidebarProps } from "../features/navigation/PageShell";
 import { NewNoteModal } from "../features/notes/NewNoteModal";
 import { NoteListPanel, type NoteSearchStatus } from "../features/notes/NoteListPanel";
 import { NoteChatPanel } from "../features/note-chat/NoteChatPanel";
-import { ProjectsPage } from "../features/projects/ProjectsPage";
-import { RagChatPage } from "../features/rag/RagChatPage";
-import { SettingsPage } from "../features/settings/SettingsPage";
-import { TagsPage } from "../features/tags/TagsPage";
 import type { TagEditorValue } from "../features/tags/TagEditorModal";
 import { mergeTagInNotes, removeTagFromNotes, replaceTagInNotes } from "../features/tags/tagState";
 import { createNotePreview } from "../features/notes/notePreview";
@@ -32,6 +27,9 @@ import { clearLegacyUiSettings, migrateLegacyUiSettings } from "../services/lega
 import { DEFAULT_UI_SETTINGS, getUiSettings, normalizeUiSettings, updateUiSettings as persistUiSettings, type UiSettings } from "../services/uiSettingsService";
 import { advancePendingSaveVersion, hasNewerPendingSave, shouldRestoreFailedSave } from "./noteAutosaveCoordinator";
 import { restoreWorkspaceBackup } from "./backupImportCoordinator";
+import { LazyArchivePage, LazyProjectsPage, LazyRagChatPage, LazySettingsPage, LazyTagsPage } from "./lazyFeatures";
+import { PageShell } from "../features/navigation/PageShell";
+import { FeatureLoadState, LazyFeatureBoundary } from "../shared/LazyFeatureBoundary";
 
 const closeFlushTimeoutMs = 3500;
 
@@ -96,6 +94,7 @@ function sortNotesForDisplay(notes: Note[]) {
 
 export function AppShell() {
   const [activeSection, setActiveSection] = useState<AppSection>("notes");
+  const [settingsTarget, setSettingsTarget] = useState<"semantic-search" | undefined>();
   const [notes, setNotes] = useState<Note[]>([]);
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [tags, setTags] = useState<TagRow[]>([]);
@@ -711,6 +710,7 @@ export function AppShell() {
   }
 
   function navigate(section: AppSection) {
+    setSettingsTarget(undefined);
     void (async () => {
       await flushPendingSave();
       activateSection(section);
@@ -1084,23 +1084,45 @@ export function AppShell() {
     );
   }
 
-  if (activeSection === "projects") {
+  function renderFeatureLoadState(section: Exclude<AppSection, "notes">, label: string, kind: "error" | "loading") {
+    return (
+      <PageShell activeSection={section} onNavigate={navigate} onNewNote={openNewNoteModal} onToast={showToast} sidebar={sharedPageSidebar}>
+        <FeatureLoadState kind={kind} label={label} />
+      </PageShell>
+    );
+  }
+
+  function renderLazyFeaturePage(section: Exclude<AppSection, "notes">, label: string, children: ReactNode) {
     return renderAppFrame(
-      <ProjectsPage onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} projects={projects} sidebar={sharedPageSidebar} />,
+      <LazyFeatureBoundary
+        key={section}
+        errorFallback={renderFeatureLoadState(section, label, "error")}
+        loadingFallback={renderFeatureLoadState(section, label, "loading")}
+      >
+        {children}
+      </LazyFeatureBoundary>,
+    );
+  }
+
+  if (activeSection === "projects") {
+    return renderLazyFeaturePage(
+      "projects",
+      "проекты",
+      <LazyProjectsPage onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} projects={projects} sidebar={sharedPageSidebar} />,
     );
   }
 
   if (activeSection === "rag") {
-    return renderAppFrame(
-      <RagChatPage
+    return renderLazyFeaturePage(
+      "rag",
+      "ИИ-чат по базе",
+      <LazyRagChatPage
         dataReloadGeneration={workspaceReloadGeneration}
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
         onOpenModelSettings={() => {
           navigate("settings");
-          window.setTimeout(() => {
-            document.getElementById("semantic-search-settings")?.scrollIntoView({ behavior: "smooth", block: "start" });
-          }, 80);
+          setSettingsTarget("semantic-search");
         }}
         onOpenSemanticResult={(result) => void openSemanticResult(result)}
         onRagConversationReset={() => updateUiSettings({ ragConversationWidth: 280 })}
@@ -1126,8 +1148,10 @@ export function AppShell() {
   }
 
   if (activeSection === "tags") {
-    return renderAppFrame(
-      <TagsPage
+    return renderLazyFeaturePage(
+      "tags",
+      "теги",
+      <LazyTagsPage
         onCreateTag={createTag}
         onDeleteTag={deleteTag}
         onMergeTags={mergeTags}
@@ -1143,8 +1167,10 @@ export function AppShell() {
   }
 
   if (activeSection === "archive") {
-    return renderAppFrame(
-      <ArchivePage
+    return renderLazyFeaturePage(
+      "archive",
+      "архив",
+      <LazyArchivePage
         archiveItems={archiveItems}
         onDeleteItem={deleteArchiveItem}
         onNavigate={navigate}
@@ -1157,8 +1183,11 @@ export function AppShell() {
   }
 
   if (activeSection === "settings") {
-    return renderAppFrame(
-      <SettingsPage
+    return renderLazyFeaturePage(
+      "settings",
+      "настройки",
+      <LazySettingsPage
+        initialTarget={settingsTarget}
         appZoomPercent={appZoom.zoomPercent}
         localProfileName={uiSettings.localProfileName}
         onNavigate={navigate}
