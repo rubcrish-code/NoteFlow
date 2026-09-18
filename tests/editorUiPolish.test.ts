@@ -140,14 +140,14 @@ describe("editor UI polish contract", () => {
     assert.match(tableTools, /if \(didRun\) \{\s*captureTableSelection\(\);/);
   });
 
-  it("uses shared pill-shaped button tokens for compact actions across editor surfaces", () => {
+  it("uses shared lightweight button tokens for compact actions across editor surfaces", () => {
     const tokens = readFileSync("src/styles/tokens.css", "utf8");
     const css = readFileSync("src/styles/app.css", "utf8");
 
     assert.match(tokens, /--radius-pill:\s*999px/);
-    assert.match(tokens, /--button-radius:\s*var\(--radius-pill\)/);
+    assert.match(tokens, /--button-radius:\s*var\(--radius-button\)/);
     assert.match(tokens, /--button-height-sm:\s*32px/);
-    assert.match(tokens, /--button-height-md:\s*40px/);
+    assert.match(tokens, /--button-height-md:\s*38px/);
     assert.match(tokens, /--button-primary-bg:\s*var\(--accent\)/);
     assert.match(tokens, /--button-danger-bg:/);
     assert.match(css, /border-radius:\s*var\(--button-radius\)/);

@@ -4,7 +4,7 @@
   border-right-color: var(--border-subtle);
   overflow-x: hidden;
   overflow-y: auto;
-  padding: var(--space-5) var(--space-3);
+  padding: var(--space-4) var(--space-3);
   scrollbar-gutter: stable;
 }
 
@@ -20,30 +20,30 @@
 }
 
 .sb-brand {
-  padding: var(--space-1) var(--space-2) var(--space-5);
+  padding: 2px 5px 14px;
 }
 
 .sb-brand .mark {
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: var(--shadow-sm);
 }
 
 .new-btn {
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 24%, transparent);
-  margin-bottom: var(--space-5);
-  min-height: var(--control-height-spacious);
+  box-shadow: none;
+  margin-bottom: var(--space-3);
+  min-height: 40px;
 }
 
 .new-btn:hover {
-  box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: var(--shadow-sm);
 }
 
 .nav-i {
   border-radius: var(--radius-control);
   font-size: var(--text-md-size);
-  gap: var(--space-3);
+  gap: 10px;
   margin-bottom: 1px;
   min-height: var(--control-height-default);
-  padding: 0 var(--space-3);
+  padding: 0 10px;
 }
 
 .nav-i.on {
@@ -54,7 +54,7 @@
 .nav-sec {
   font-size: var(--text-xs-size);
   letter-spacing: 0;
-  padding: var(--space-5) var(--space-3) var(--space-2);
+  padding: var(--space-4) 10px var(--space-1);
   text-transform: none;
 }
 
@@ -737,7 +737,7 @@ details[open] > .row-menu-trigger {
 .search-result-card.on {
   background: var(--surface-selected);
   border-color: transparent;
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: none;
 }
 
 .simple-page:is(.page-layout-compact, .page-layout-tight) :is(.content-page-header, .tags-head) {
