@@ -169,7 +169,7 @@
 
 .projects-page-content {
   margin-inline: auto;
-  max-width: 1240px;
+  max-width: 1080px;
   width: 100%;
 }
 
@@ -195,9 +195,11 @@
 
 .project-grid {
   display: grid;
-  gap: var(--space-3);
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  max-width: 1240px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-subtle);
+  gap: 0;
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1080px;
   width: 100%;
 }
 
@@ -239,8 +241,9 @@
 
 .tag-editor-palette {
   display: grid;
-  gap: var(--space-2);
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  grid-template-columns: repeat(5, 48px);
+  justify-content: start;
 }
 
 .tag-editor-palette button {
@@ -252,10 +255,22 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--tag-swatch-color) 62%, var(--border-default));
   color: #fff;
   display: inline-flex;
+  height: 48px;
   justify-content: center;
-  min-height: 38px;
+  min-height: 48px;
   padding: 0;
   transition: box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
+}
+
+@media (max-width: 520px) {
+  .tag-editor-palette {
+    grid-template-columns: repeat(5, minmax(40px, 1fr));
+  }
+
+  .tag-editor-palette button {
+    height: auto;
+    min-height: 40px;
+  }
 }
 
 .tag-editor-palette button:hover {
@@ -316,15 +331,16 @@
 .project-card {
   align-items: center;
   background: transparent;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-card);
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
   box-shadow: none;
   color: var(--text-primary);
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: 40px minmax(0, 1fr) 20px;
-  min-height: 116px;
-  padding: var(--space-4);
+  grid-template-columns: 38px minmax(0, 1fr) 20px;
+  min-height: 78px;
+  padding: var(--space-3) var(--space-2);
   text-align: left;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
@@ -333,13 +349,16 @@
     transform var(--motion-fast) var(--ease-standard);
 }
 
+.project-card:last-child {
+  border-bottom: 0;
+}
+
 .project-card:hover,
 .project-card:focus-visible {
-  background: var(--surface-hover);
-  border-color: var(--border-default);
-  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--surface-hover) 72%, transparent);
+  box-shadow: none;
   outline: 0;
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .project-icon,
@@ -351,9 +370,9 @@
   color: var(--accent);
   display: inline-flex;
   flex: 0 0 auto;
-  height: 40px;
+  height: 38px;
   justify-content: center;
-  width: 40px;
+  width: 38px;
 }
 
 .project-icon svg,
@@ -369,7 +388,7 @@
 }
 
 .project-title {
-  font-size: var(--text-lg-size);
+  font-size: var(--text-md-size);
   font-weight: var(--font-weight-semibold);
   line-height: var(--text-lg-line);
   margin: 0;
@@ -386,7 +405,7 @@
   margin: 0;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .project-stats {
@@ -416,7 +435,7 @@
 .archive-search,
 .tags-search {
   margin-bottom: var(--space-5);
-  max-width: 520px;
+  max-width: 460px;
 }
 
 .archive-list,
@@ -444,7 +463,7 @@
   gap: var(--space-4);
   grid-template-columns: minmax(0, 1fr) auto;
   margin: 0;
-  min-height: 64px;
+  min-height: 60px;
   padding: var(--space-2) var(--space-2);
 }
 
@@ -495,7 +514,7 @@
 
 .tag-dot {
   border-radius: 50%;
-  box-shadow: 0 0 0 3px var(--surface-panel), 0 0 0 4px var(--border-subtle);
+  box-shadow: 0 0 0 2px var(--surface-panel), 0 0 0 3px var(--border-subtle);
   flex: 0 0 auto;
   height: 10px;
   width: 10px;
@@ -709,7 +728,13 @@ details[open] > .row-menu-trigger {
   color: var(--text-secondary);
   display: flex;
   gap: var(--space-4);
+  min-height: 180px;
   padding: var(--space-8) var(--space-4);
+}
+
+.page-empty-state .page-empty-icon {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border-subtle));
 }
 
 .page-empty-state b,
@@ -754,11 +779,7 @@ details[open] > .row-menu-trigger {
   align-items: flex-start;
 }
 
-.simple-page:is(.page-layout-compact, .page-layout-tight) .project-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.simple-page.page-layout-tight :is(.project-grid, .archive-row) {
+.simple-page.page-layout-tight .archive-row {
   grid-template-columns: minmax(0, 1fr);
 }
 
