@@ -23,6 +23,7 @@ const stylesSource = ["app.css", "pages.css", "settings.css", "rag.css"]
 const rustEmbeddingSource = readFileSync("src-tauri/src/embedding.rs", "utf8");
 const rustDataSource = readFileSync("src-tauri/src/data.rs", "utf8");
 const rustLibSource = readFileSync("src-tauri/src/lib.rs", "utf8");
+const rustRagSource = readFileSync("src-tauri/src/rag.rs", "utf8");
 
 describe("semantic retrieval placement and RAG chat contracts", () => {
   it("keeps typed embedding Tauri contracts without direct SQL or localStorage", () => {
@@ -53,6 +54,7 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
       "delete_rag_chat",
       "list_rag_chat_messages",
       "save_rag_chat_message",
+      "run_rag_generation",
     ]) {
       assert.match(ragChatServiceSource, new RegExp(`"${command}"`));
       assert.match(rustLibSource, new RegExp(`data::${command}`));
@@ -116,14 +118,20 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   it("performs real hybrid retrieval and persists user, assistant and sources", () => {
     assert.match(workspaceSource, /embeddingService\.hybridSearch/);
     assert.match(workspaceSource, /includeNeighbors: true/);
-    assert.match(workspaceSource, /saveRagChatMessage\(chat\.id, "user", question\)/);
-    assert.match(workspaceSource, /saveRagChatMessage\([\s\S]*"assistant"[\s\S]*results/);
-    assert.match(ragChatServiceSource, /sources: SemanticSearchResult\[\]/);
+    assert.match(workspaceSource, /saveRagChatMessage\(chatId, "user", question\)/);
+    assert.match(workspaceSource, /runRagGeneration\(chatId, userMessage\.id, results\)/);
+    assert.match(ragChatServiceSource, /sources: RagMessageSource\[\]/);
+    assert.match(rustRagSource, /persist_assistant_message/);
+    assert.match(rustRagSource, /sources_json/);
   });
 
-  it("does not fake a generated RAG answer before 06D", () => {
-    assert.match(workspaceSource, /NoteFlow найдёт релевантные фрагменты и покажет источники для проверки/);
-    assert.match(workspaceSource, /Генерация ответа на основе найденных фрагментов будет подключена на следующем этапе/);
+  it("generates grounded answers without the former 06C placeholder", () => {
+    assert.match(workspaceSource, /Ищу по базе…/);
+    assert.match(workspaceSource, /Формирую ответ…/);
+    assert.match(workspaceSource, /runRagGeneration/);
+    assert.match(rustRagSource, /GROUNDED_SYSTEM_PROMPT/);
+    assert.match(rustRagSource, /\[\[NO_EVIDENCE\]\]/);
+    assert.doesNotMatch(workspaceSource, /Генерация ответа на основе найденных фрагментов будет подключена на следующем этапе/);
     assert.doesNotMatch(workspaceSource, />[^<]*06D[^<]*</);
     assert.doesNotMatch(workspaceSource, /runNoteAi|run_note_ai|rerank →|vector search/);
   });
@@ -168,13 +176,13 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
     assert.match(workspaceSource, /onSourcesCollapsedChange\(true\)/);
     assert.match(workspaceSource, /onOpenResult\(source\)/);
     assert.match(workspaceSource, /<ResizeHandle[\s\S]*onResize=\{onSourcesResize\}/);
-    assert.match(appShellSource, /await openNote\(result\.noteId, result\.archived\)/);
+    assert.match(appShellSource, /await openNote\([\s\S]*?result\.noteId,[\s\S]*?result\.archived,[\s\S]*?Заметка больше недоступна/);
     assert.match(appShellSource, /setSemanticOpenTarget\(result\)/);
     assert.match(editorSource, /classList\.add\("semantic-search-target"\)/);
   });
 
   it("renders source metadata and assistant Markdown safely", () => {
-    assert.match(workspaceSource, /<ChatMarkdown content=\{message\.content\}/);
+    assert.match(workspaceSource, /<ChatMarkdown[\s\S]*?content=\{message\.content\}/);
     assert.match(workspaceSource, /source\.headingPath\.join/);
     assert.match(workspaceSource, /source\.project/);
     assert.match(workspaceSource, /matchLabel\(source\.matchType\)/);

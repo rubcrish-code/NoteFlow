@@ -18,7 +18,7 @@ export function getRagLayoutMode(containerWidth: number): RagLayoutMode {
 }
 
 export function isRagHistoryOverlayMode(layoutMode: RagLayoutMode) {
-  return layoutMode === "narrow" || layoutMode === "tight";
+  return layoutMode !== "wide";
 }
 
 interface RagPanelVisibilityInput {

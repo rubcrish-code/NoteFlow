@@ -267,7 +267,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
     }, 1600);
   }
 
-  async function handleCopyAssistantMessage(message: ChatMessage) {
+  async function handleCopyMessage(message: ChatMessage) {
     try {
       await copyAssistantMessageText(message.text);
       showCopyFeedback(message.id, "copied");
@@ -336,6 +336,15 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
           message.role === "user" ? (
             <div className="bub-u" key={message.id}>
               <span className="plain-chat-text">{message.text}</span>
+              <button
+                aria-label="Скопировать сообщение"
+                className={`note-chat-copy chat-copy-icon ${copyFeedback?.messageId === message.id ? copyFeedback.status : ""}`}
+                onClick={() => void handleCopyMessage(message)}
+                title={copyTitle(copyFeedback, message.id)}
+                type="button"
+              >
+                <Icon name={copyFeedback?.messageId === message.id && copyFeedback.status === "copied" ? "check" : "copy"} />
+              </button>
             </div>
           ) : (
             <div className={`bub-a ${message.status ?? ""}`} key={message.id}>
@@ -356,13 +365,13 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
                     <span>источник: «{sourceTitle}»</span>
                   </div>
                   <button
-                    className={`note-chat-copy ${copyFeedback?.messageId === message.id ? copyFeedback.status : ""}`}
-                    onClick={() => void handleCopyAssistantMessage(message)}
+                    aria-label="Скопировать сообщение"
+                    className={`note-chat-copy chat-copy-icon ${copyFeedback?.messageId === message.id ? copyFeedback.status : ""}`}
+                    onClick={() => void handleCopyMessage(message)}
                     title={copyTitle(copyFeedback, message.id)}
                     type="button"
                   >
                     <Icon name={copyFeedback?.messageId === message.id && copyFeedback.status === "copied" ? "check" : "copy"} />
-                    <span>{copyLabel(copyFeedback, message.id)}</span>
                   </button>
                 </div>
               ) : null}
@@ -409,13 +418,6 @@ function getSelectedTextFromWindow() {
 }
 
 function copyTitle(copyFeedback: CopyFeedback | null, messageId: string) {
-  if (copyFeedback?.messageId !== messageId) {
-    return "Скопировать";
-  }
-  return copyFeedback.status === "copied" ? "Скопировано" : "Не удалось скопировать";
-}
-
-function copyLabel(copyFeedback: CopyFeedback | null, messageId: string) {
   if (copyFeedback?.messageId !== messageId) {
     return "Скопировать";
   }

@@ -101,9 +101,149 @@
   line-height: 1.16;
 }
 
+.ed-title-editable {
+  border-radius: var(--radius-sm);
+  cursor: text;
+  min-height: 1.16em;
+  overflow-wrap: anywhere;
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+
+.ed-title-editable:hover {
+  background: var(--surface-hover);
+}
+
+.ed-title-editable:focus {
+  background: transparent;
+  outline: 0;
+}
+
+.ed-title-editable:focus-visible {
+  box-shadow: 0 2px 0 var(--accent);
+}
+
 .ed-tags {
   gap: var(--space-2);
   margin: var(--space-4) 0 var(--space-6);
+}
+
+.ed-tag-chip {
+  align-items: center;
+  display: inline-flex;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.ed-tag-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-tag-chip button,
+.ed-tag-add {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: inherit;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.ed-tag-chip button {
+  height: 20px;
+  padding: 0;
+  width: 20px;
+}
+
+.ed-tag-chip button svg {
+  height: 12px;
+  width: 12px;
+}
+
+.ed-tag-add {
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  height: 26px;
+  width: 26px;
+}
+
+.ed-tag-add svg {
+  height: 14px;
+  width: 14px;
+}
+
+.ed-tag-chip button:hover,
+.ed-tag-add:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.ed-tag-popover {
+  display: grid;
+  gap: var(--space-2);
+  overflow: auto;
+  padding: var(--space-3);
+}
+
+.ed-tag-search {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ed-tag-search svg {
+  color: var(--text-muted);
+  height: 16px;
+  width: 16px;
+}
+
+.ed-tag-search input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ed-tag-options {
+  display: grid;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.ed-tag-options button,
+.ed-tag-create {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  display: flex;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: var(--space-2);
+  text-align: left;
+}
+
+.ed-tag-options button:hover,
+.ed-tag-create:hover {
+  background: var(--surface-hover);
+}
+
+.ed-tag-options button > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-tag-options button svg,
+.ed-tag-create svg {
+  height: 16px;
+  width: 16px;
+}
+
+.ed-tag-empty {
+  color: var(--text-muted);
+  padding: var(--space-3);
 }
 
 .ed-body {

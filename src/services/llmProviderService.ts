@@ -54,6 +54,7 @@ export interface SaveLlmProviderInput {
 }
 
 export interface DraftLlmProviderInput {
+  providerId?: string;
   providerType: LlmProviderType;
   baseUrl: string;
   apiKey?: string;
@@ -77,6 +78,13 @@ export interface LlmModelsResult {
   status: LlmActionStatus;
   message: string;
   models: string[];
+  options: ModelDiscoveryOption[];
+}
+
+export interface ModelDiscoveryOption {
+  id: string;
+  supportsChat: boolean | null;
+  supportsEmbeddings: boolean | null;
 }
 
 export interface LlmConnectionTestResult {
@@ -126,6 +134,13 @@ interface LlmModelsResultDto {
   status: string;
   message: string;
   models: string[];
+  options?: ModelDiscoveryOptionDto[];
+}
+
+interface ModelDiscoveryOptionDto {
+  id: string;
+  supportsChat?: boolean | null;
+  supportsEmbeddings?: boolean | null;
 }
 
 interface LlmConnectionTestResultDto {
@@ -170,7 +185,7 @@ function diagnosticProviderInput(input: DraftLlmProviderInput | SaveLlmProviderI
 }
 
 export function logLlmDiagnostic(event: string, fields: Record<string, LlmDiagnosticValue> = {}) {
-  if (!import.meta.env.DEV) {
+  if (!import.meta.env?.DEV) {
     return;
   }
   console.debug("[NoteFlow LLM]", event, fields);
@@ -205,7 +220,20 @@ function validateModelsResultDto(value: unknown): LlmModelsResultDto {
     status: dto.status,
     message: dto.message,
     models: dto.models,
+    options: Array.isArray(dto.options)
+      ? dto.options.filter(isModelDiscoveryOptionDto)
+      : undefined,
   };
+}
+
+function isModelDiscoveryOptionDto(value: unknown): value is ModelDiscoveryOptionDto {
+  const option = value as Partial<ModelDiscoveryOptionDto> | null;
+  return Boolean(
+    option
+      && typeof option.id === "string"
+      && (option.supportsChat == null || typeof option.supportsChat === "boolean")
+      && (option.supportsEmbeddings == null || typeof option.supportsEmbeddings === "boolean"),
+  );
 }
 
 function validateConnectionTestResultDto(value: unknown): LlmConnectionTestResultDto {
@@ -263,10 +291,16 @@ function mapProvider(dto: LlmProviderDto): LlmProvider {
 
 function mapModelsResult(value: unknown): LlmModelsResult {
   const dto = validateModelsResultDto(value);
+  const options = dto.options?.map((option) => ({
+    id: option.id,
+    supportsChat: option.supportsChat ?? null,
+    supportsEmbeddings: option.supportsEmbeddings ?? null,
+  })) ?? dto.models.map((id) => ({ id, supportsChat: null, supportsEmbeddings: null }));
   return {
     status: normalizeActionStatus(dto.status),
     message: dto.message,
     models: dto.models,
+    options,
   };
 }
 
@@ -409,6 +443,7 @@ export async function listLlmModels(providerId: string, trace?: LlmNetworkTraceC
 
 function draftRequest(input: DraftLlmProviderInput) {
   return {
+    providerId: input.providerId ?? null,
     providerType: input.providerType,
     baseUrl: input.baseUrl,
     apiKey: input.apiKey?.trim() ? input.apiKey : null,

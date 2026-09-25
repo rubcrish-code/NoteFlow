@@ -1,7 +1,7 @@
 use crate::{
     data::{DataError, DataResult},
     knowledge,
-    llm::{HttpClient, HttpRequest, SecretStorage},
+    llm::{self, HttpClient, HttpRequest, SecretStorage},
 };
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -224,6 +224,7 @@ pub struct EmbeddingModelListRequest {
 pub struct EmbeddingModelListResultDto {
     pub status: String,
     pub models: Vec<String>,
+    pub options: Vec<llm::ModelDiscoveryOptionDto>,
     pub message: String,
 }
 
@@ -608,16 +609,13 @@ pub fn list_models<H: HttpClient>(
     let manual_result = || EmbeddingModelListResultDto {
         status: "manual".to_string(),
         models: Vec::new(),
+        options: Vec::new(),
         message: "Не удалось получить список моделей. Укажите название вручную.".to_string(),
     };
     let provider_type = request.provider_type.trim();
     if !matches!(provider_type, "ollama" | "openai" | "custom") {
         return manual_result();
     }
-    let base_url = match normalize_base_url(&request.base_url) {
-        Ok(value) => value,
-        Err(_) => return manual_result(),
-    };
     let endpoint = if provider_type == "ollama" {
         "/api/tags"
     } else {
@@ -629,33 +627,34 @@ pub fn list_models<H: HttpClient>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or(saved_api_key);
-    let mut headers = Vec::new();
-    if let Some(api_key) = api_key {
-        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
-    }
-    let response = match http.send(HttpRequest {
-        method: "GET".to_string(),
-        url: join_url(&base_url, endpoint),
-        headers,
-        body: None,
-        timeout_ms: request.timeout_seconds.clamp(5, 15) * 1_000,
-    }) {
-        Ok(response) if (200..300).contains(&response.status) => response,
-        _ => return manual_result(),
+    let options = match llm::discover_model_catalog(
+        provider_type,
+        &request.base_url,
+        endpoint,
+        api_key.map(str::to_string),
+        request.timeout_seconds.clamp(5, 15) * 1_000,
+        http,
+    ) {
+        Ok(options) => options,
+        Err(_) => return manual_result(),
     };
-    let mut models = match parse_model_list(&response.body) {
-        Some(models) => models,
-        None => return manual_result(),
-    };
-    models.sort();
-    models.dedup();
+    let models = options
+        .iter()
+        .map(|option| option.id.clone())
+        .collect::<Vec<_>>();
     if models.is_empty() {
-        return manual_result();
+        return EmbeddingModelListResultDto {
+            status: "success".to_string(),
+            models,
+            options,
+            message: "Endpoint доступен, но список моделей пуст".to_string(),
+        };
     }
     EmbeddingModelListResultDto {
         status: "success".to_string(),
         message: format!("Найдено моделей: {}", models.len()),
         models,
+        options,
     }
 }
 
@@ -862,7 +861,18 @@ pub fn hybrid_search<S: SecretStorage, H: HttpClient>(
 
     let semantic = semantic_candidates(conn, profile, query_vector, request)?;
     let lexical = lexical_candidates(conn, &query, request)?;
-    fuse_candidates(conn, &query, request, semantic, lexical)
+    let semantic_count = semantic.len();
+    let lexical_count = lexical.len();
+    let results = fuse_candidates(conn, &query, request, semantic, lexical)?;
+    llm::log_llm_diagnostic(
+        "hybrid_retrieval_completed",
+        &[
+            ("semanticCandidates", semantic_count.to_string()),
+            ("lexicalCandidates", lexical_count.to_string()),
+            ("fusedResults", results.len().to_string()),
+        ],
+    );
+    Ok(results)
 }
 
 pub fn semantic_search<S: SecretStorage, H: HttpClient>(
@@ -1162,6 +1172,12 @@ fn embed_texts<S: SecretStorage, H: HttpClient>(
         ));
     }
     let mut headers = Vec::new();
+    if profile.provider_type != "ollama" {
+        headers.push((
+            "User-Agent".to_string(),
+            llm::OPENAI_COMPATIBLE_USER_AGENT.to_string(),
+        ));
+    }
     if let Some(secret_ref) = &profile.api_key_ref {
         if let Some(key) = storage.get_secret(secret_ref).map_err(storage_failure)? {
             headers.push(("Authorization".to_string(), format!("Bearer {key}")));
@@ -1253,26 +1269,6 @@ fn parse_openai_vectors(value: &Value) -> Result<Vec<Vec<f32>>, ProviderFailure>
         .collect::<Result<Vec<_>, _>>()?;
     indexed.sort_by_key(|(index, _)| *index);
     Ok(indexed.into_iter().map(|(_, vector)| vector).collect())
-}
-
-fn parse_model_list(body: &str) -> Option<Vec<String>> {
-    let value: Value = serde_json::from_str(body).ok()?;
-    let items = value
-        .get("data")
-        .and_then(Value::as_array)
-        .or_else(|| value.get("models").and_then(Value::as_array))
-        .or_else(|| value.as_array())?;
-    let models = items
-        .iter()
-        .filter_map(|item| {
-            item.as_str()
-                .or_else(|| item.get("id").and_then(Value::as_str))
-                .or_else(|| item.get("name").and_then(Value::as_str))
-                .or_else(|| item.get("model").and_then(Value::as_str))
-        })
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    Some(models)
 }
 
 fn parse_vector_value(value: &Value) -> Result<Vec<f32>, ProviderFailure> {
@@ -2214,6 +2210,53 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore = "requires the external Bridge and the current profile's secure credential"]
+    fn real_bridge_embedding_smoke() {
+        struct StatusHttp(Mutex<Vec<u16>>);
+        impl HttpClient for StatusHttp {
+            fn send(&self, request: HttpRequest) -> DataResult<HttpResponse> {
+                let response = llm::CurlHttpClient.send(request)?;
+                self.0.lock().expect("status lock").push(response.status);
+                Ok(response)
+            }
+        }
+
+        let database_path = std::env::var("NOTEFLOW_BRIDGE_SMOKE_DB")
+            .expect("set NOTEFLOW_BRIDGE_SMOKE_DB to a read-only copy or local NoteFlow DB");
+        let source =
+            Connection::open_with_flags(database_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("open NoteFlow database read-only");
+        let api_key_ref: String = source
+            .query_row(
+                "SELECT api_key_ref FROM llm_providers WHERE base_url LIKE '%bridge-back.admlr.lipetsk.ru%' AND api_key_ref IS NOT NULL LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Bridge credential reference exists");
+        let mut conn = setup();
+        let mut request = profile_request();
+        request.provider_type = "custom".to_string();
+        request.base_url = "https://bridge-back.admlr.lipetsk.ru/api/v1".to_string();
+        request.model = "cifra48/embedding".to_string();
+        request.locality = "cloud".to_string();
+        let created = save_profile(&mut conn, &MemorySecrets::default(), request)
+            .expect("create temporary profile");
+        let mut profile = get_profile(&conn, &created.id).expect("load temporary profile");
+        profile.api_key_ref = Some(api_key_ref);
+        let http = StatusHttp(Mutex::new(Vec::new()));
+        let result = test_profile(&profile, &llm::SystemSecretStorage, &http);
+        eprintln!(
+            "Bridge embedding: endpoint={} http_status={:?} result={} dimensions={:?} error_code={:?}",
+            profile.embeddings_endpoint,
+            http.0.lock().expect("status lock"),
+            result.status,
+            result.dimensions,
+            result.error_code,
+        );
+        assert_eq!(result.status, "success");
+    }
+
     fn search_request(profile_id: &str, query: &str) -> SemanticSearchRequest {
         SemanticSearchRequest {
             query: query.to_string(),
@@ -2293,7 +2336,19 @@ mod tests {
             compatible_requests[0].url,
             "https://api.example.test/v1/models"
         );
-        assert_eq!(compatible_requests[0].headers.len(), 1);
+        assert!(compatible_requests[0]
+            .headers
+            .iter()
+            .any(|(name, value)| name == "Authorization" && value == "Bearer saved-secret"));
+        assert!(compatible_requests[0]
+            .headers
+            .iter()
+            .any(|(name, value)| name == "User-Agent" && value.contains("Mozilla/5.0")));
+        assert_eq!(compatible_result.options.len(), 2);
+        assert!(compatible_result
+            .options
+            .iter()
+            .all(|option| option.supports_chat.is_none() && option.supports_embeddings.is_none()));
     }
 
     #[test]
@@ -2416,6 +2471,14 @@ mod tests {
             )
             .expect("embedding count");
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn configured_dimension_mismatch_rejects_vectors() {
+        let vectors = vec![vec![0.2, 0.4, 0.6]];
+        let failure =
+            validate_vector_batch(&vectors, 1, Some(1024)).expect_err("dimension mismatch");
+        assert_eq!(failure.code, "dimensions_mismatch");
     }
 
     #[test]

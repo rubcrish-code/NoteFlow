@@ -15,8 +15,46 @@ export interface RagChatMessage {
   chatId: string;
   role: RagChatRole;
   content: string;
-  sources: SemanticSearchResult[];
+  sources: RagMessageSource[];
   createdAt: string;
+}
+
+export interface RagMessageSource extends SemanticSearchResult {
+  sourceId: string;
+  citationNumber: number;
+}
+
+export type RagAnswerStatus = "empty_retrieval" | "grounded" | "insufficient_evidence";
+
+export interface RagGenerationTimings {
+  contextMs: number;
+  providerMs: number;
+  persistenceMs: number;
+  totalMs: number;
+}
+
+export interface RagGenerationResult {
+  assistantMessage: RagChatMessage;
+  answerStatus: RagAnswerStatus;
+  retrievalCount: number;
+  contextSourceCount: number;
+  providerName: string;
+  model: string;
+  isLocal: boolean;
+  repairedCitations: boolean;
+  timings: RagGenerationTimings;
+}
+
+export class RagGenerationError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(code: string, message: string, retryable: boolean) {
+    super(message);
+    this.name = "RagGenerationError";
+    this.code = code;
+    this.retryable = retryable;
+  }
 }
 
 interface RagChatDto {
@@ -33,6 +71,18 @@ interface RagChatMessageDto {
   content: string;
   sources: unknown;
   createdAt: string;
+}
+
+interface RagGenerationResultDto {
+  assistantMessage: RagChatMessageDto;
+  answerStatus: string;
+  retrievalCount: number;
+  contextSourceCount: number;
+  providerName: string;
+  model: string;
+  isLocal: boolean;
+  repairedCitations: boolean;
+  timings: RagGenerationTimings;
 }
 
 function mapChat(dto: RagChatDto): RagChat {
@@ -52,13 +102,25 @@ function isSemanticSource(value: unknown): value is SemanticSearchResult {
     && Array.isArray(source.tags);
 }
 
-function mapMessage(dto: RagChatMessageDto): RagChatMessage {
+function mapSource(value: SemanticSearchResult, index: number): RagMessageSource {
+  const record = value as SemanticSearchResult & { sourceId?: unknown; citationNumber?: unknown };
+  return {
+    ...value,
+    noteTitle: value.noteTitle.trim() || "Без названия",
+    sourceId: typeof record.sourceId === "string" && record.sourceId ? record.sourceId : `S${index + 1}`,
+    citationNumber: typeof record.citationNumber === "number" && Number.isInteger(record.citationNumber)
+      ? record.citationNumber
+      : index + 1,
+  };
+}
+
+export function mapRagChatMessage(dto: RagChatMessageDto): RagChatMessage {
   return {
     id: dto.id,
     chatId: dto.chatId,
     role: dto.role === "assistant" ? "assistant" : "user",
     content: dto.content,
-    sources: Array.isArray(dto.sources) ? dto.sources.filter(isSemanticSource) : [],
+    sources: Array.isArray(dto.sources) ? dto.sources.filter(isSemanticSource).map(mapSource) : [],
     createdAt: dto.createdAt,
   };
 }
@@ -80,7 +142,7 @@ export async function deleteRagChat(chatId: string) {
 }
 
 export async function listRagChatMessages(chatId: string) {
-  return (await invoke<RagChatMessageDto[]>("list_rag_chat_messages", { chatId })).map(mapMessage);
+  return (await invoke<RagChatMessageDto[]>("list_rag_chat_messages", { chatId })).map(mapRagChatMessage);
 }
 
 export async function saveRagChatMessage(
@@ -89,7 +151,60 @@ export async function saveRagChatMessage(
   content: string,
   sources: SemanticSearchResult[] = [],
 ) {
-  return mapMessage(await invoke<RagChatMessageDto>("save_rag_chat_message", {
+  return mapRagChatMessage(await invoke<RagChatMessageDto>("save_rag_chat_message", {
     request: { chatId, role, content, sources },
   }));
+}
+
+export async function runRagGeneration(
+  chatId: string,
+  userMessageId: string,
+  retrievedSources: SemanticSearchResult[],
+): Promise<RagGenerationResult> {
+  try {
+    const dto = await invoke<RagGenerationResultDto>("run_rag_generation", {
+      request: { chatId, userMessageId, retrievedSources },
+    });
+    return {
+      assistantMessage: mapRagChatMessage(dto.assistantMessage),
+      answerStatus: normalizeAnswerStatus(dto.answerStatus),
+      retrievalCount: dto.retrievalCount,
+      contextSourceCount: dto.contextSourceCount,
+      providerName: dto.providerName,
+      model: dto.model,
+      isLocal: dto.isLocal,
+      repairedCitations: dto.repairedCitations,
+      timings: dto.timings,
+    };
+  } catch (error) {
+    throw normalizeGenerationError(error);
+  }
+}
+
+function normalizeAnswerStatus(value: string): RagAnswerStatus {
+  if (value === "empty_retrieval" || value === "insufficient_evidence") {
+    return value;
+  }
+  return "grounded";
+}
+
+function normalizeGenerationError(error: unknown): RagGenerationError {
+  if (error instanceof RagGenerationError) {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const value = error as { code?: unknown; message?: unknown; retryable?: unknown };
+    if (typeof value.message === "string") {
+      return new RagGenerationError(
+        typeof value.code === "string" ? value.code : "generation_error",
+        value.message,
+        value.retryable !== false,
+      );
+    }
+  }
+  return new RagGenerationError(
+    "generation_error",
+    error instanceof Error ? error.message : typeof error === "string" ? error : "Не удалось сформировать ответ по базе заметок.",
+    true,
+  );
 }

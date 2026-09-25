@@ -471,6 +471,10 @@ export async function renameNote(noteId: string, title: string) {
   return mapNote(await invoke<NoteDto>("rename_note", { request: { noteId, title } }));
 }
 
+export async function setNoteTag(noteId: string, tagId: string, assigned: boolean) {
+  return mapNote(await invoke<NoteDto>("set_note_tag", { request: { assigned, noteId, tagId } }));
+}
+
 export async function duplicateNote(noteId: string) {
   return mapNote(await invokeNotePersistence<NoteDto>("duplicate_note", { noteId }));
 }

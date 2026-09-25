@@ -18,7 +18,14 @@ import {
   shouldClearLlmNetworkOperationForTarget,
 } from "./llmNetworkOperation";
 import type { LlmNetworkAction, LlmNetworkOperation } from "./llmNetworkOperation";
-import { ModelStatusBadge, ProviderTypeSelector, SettingsModalShell, SettingsSectionHeader } from "./ModelSettingsUi";
+import {
+  ModelDiscoveryField,
+  ModelStatusBadge,
+  ProviderTypeSelector,
+  SettingsModalShell,
+  SettingsSectionHeader,
+} from "./ModelSettingsUi";
+import type { ModelDiscoveryOption, ModelDiscoveryState } from "./ModelSettingsUi";
 import { SemanticSearchSettings } from "./SemanticSearchSettings";
 import { getSettingsLayoutMode } from "./settingsResponsive";
 import {
@@ -357,6 +364,7 @@ function safeUrlForDiagnostics(url: string) {
 
 function draftInputFromForm(form: ProviderFormState): llmProviderService.DraftLlmProviderInput {
   return {
+    providerId: form.id,
     providerType: form.providerType,
     baseUrl: form.baseUrl,
     apiKey: form.apiKey,
@@ -408,7 +416,9 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const [draftId, setDraftId] = useState(() => createDraftId());
   const [isDraftDirty, setIsDraftDirty] = useState(false);
   const [form, setForm] = useState<ProviderFormState>(() => createProviderForm());
-  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [modelOptions, setModelOptions] = useState<ModelDiscoveryOption[]>([]);
+  const [modelDiscoveryState, setModelDiscoveryState] = useState<ModelDiscoveryState>("idle");
+  const [modelDiscoveryMessage, setModelDiscoveryMessage] = useState("");
   const [isLoadingProviders, setIsLoadingProviders] = useState(true);
   const [storageAction, setStorageAction] = useState<StorageAction>(null);
   const [networkOperation, setNetworkOperation] = useState<LlmNetworkOperation | null>(null);
@@ -680,6 +690,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     draftIdRef.current = nextDraftId;
     setDraftMode("new");
     setModelOptions([]);
+    setModelDiscoveryState("idle");
+    setModelDiscoveryMessage("");
     setShowSecret(false);
     replaceForm(
       {
@@ -701,6 +713,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     draftIdRef.current = nextDraftId;
     setDraftMode("edit");
     setModelOptions([]);
+    setModelDiscoveryState("idle");
+    setModelDiscoveryMessage("");
     setShowSecret(false);
     replaceForm(formFromProvider(provider), { markDirty: false });
     setIsProviderModalOpen(true);
@@ -714,6 +728,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     setIsProviderModalOpen(false);
     setDraftMode("new");
     setModelOptions([]);
+    setModelDiscoveryState("idle");
+    setModelDiscoveryMessage("");
     setShowSecret(false);
     const nextDraftId = createDraftId();
     setDraftId(nextDraftId);
@@ -821,6 +837,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       return;
     }
     const operation = beginNetworkOperation("listModels", snapshot);
+    setModelDiscoveryState("loading");
+    setModelDiscoveryMessage("Загружаем актуальный список моделей…");
     updateMessage("Загружаем модели…");
     try {
       const result = await llmProviderService.listLlmModelsForDraft(draftInputFromForm(snapshot), traceContext(operation));
@@ -834,12 +852,17 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       }
       const nextForm = result.status === "success" && result.models.length > 0 && !snapshot.chatModel ? { ...currentFormRef.current, chatModel: result.models[0] ?? "" } : currentFormRef.current;
       replaceForm(nextForm, { preserveNetworkOperation: true, markDirty: true });
-      setModelOptions(result.models);
+      setModelOptions(result.options);
+      setModelDiscoveryState(result.status === "error" ? "error" : result.options.length > 0 ? "success" : "empty");
+      setModelDiscoveryMessage(result.message);
       updateMessage(result.message, result.status === "error" ? "error" : "neutral");
       onToast(result.message);
     } catch (error) {
       if (isNetworkOperationActive(operation)) {
         const text = error instanceof Error ? error.message : "Не удалось получить список моделей";
+        setModelOptions([]);
+        setModelDiscoveryState("error");
+        setModelDiscoveryMessage(`${text}. Можно указать Model ID вручную.`);
         updateMessage(text, "error");
         onToast(text);
       } else {
@@ -882,7 +905,9 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
         });
         return;
       }
-      setModelOptions(result.models);
+      setModelOptions(result.models.map((id) => ({ id, supportsChat: null, supportsEmbeddings: null })));
+      setModelDiscoveryState(result.models.length > 0 ? "success" : "empty");
+      setModelDiscoveryMessage(result.models.length > 0 ? `Получено моделей: ${result.models.length}` : "Endpoint доступен, но список моделей пуст");
       updateMessage(result.message, result.status === "error" ? "error" : "neutral");
       onToast(result.message);
     } catch (error) {
@@ -1012,6 +1037,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     setDraftId(nextDraftId);
     draftIdRef.current = nextDraftId;
     setModelOptions([]);
+    setModelDiscoveryState("idle");
+    setModelDiscoveryMessage("");
     setShowSecret(false);
     const current = currentFormRef.current;
     const presetForm = createProviderForm(preset);
@@ -1037,6 +1064,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     replaceForm({ ...currentFormRef.current, ...values }, { markDirty: true });
     if ("providerType" in values || "baseUrl" in values || "apiKey" in values || "modelsEndpoint" in values) {
       setModelOptions([]);
+      setModelDiscoveryState("idle");
+      setModelDiscoveryMessage("");
     }
   }
 
@@ -1207,29 +1236,18 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                   <span className={`field-help key-state ${hasSavedApiKey ? "ok" : "warn"}`}>{keyLabel}. Реальный ключ не возвращается в форму после сохранения.</span>
                 </label>
               ) : null}
-              <label className="field full">
-                Модель чата
-                <div className="input-action">
-                  <input list="llm-chat-model-options" onChange={(event) => updateDraft({ chatModel: event.currentTarget.value })} placeholder="Введите ID модели" value={form.chatModel} />
-                  <button disabled={isLoadingModels} onClick={() => void handleLoadModels()} type="button">
-                    {isLoadingModels ? <LoadingInline label="Загружаем модели…" /> : "Получить модели"}
-                  </button>
-                </div>
-                <datalist id="llm-chat-model-options">
-                  {modelOptions.map((model) => (
-                    <option key={model} value={model} />
-                  ))}
-                </datalist>
-              </label>
-              {modelOptions.length > 0 ? (
-                <div className="llm-model-options">
-                  {modelOptions.map((model) => (
-                    <button className={form.chatModel === model ? "active" : ""} key={model} onClick={() => updateDraft({ chatModel: model })} type="button">
-                      {model}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
+              <ModelDiscoveryField
+                label="Модель чата"
+                manualPlaceholder="Введите ID модели"
+                manualValue={form.chatModel}
+                onDiscover={() => void handleLoadModels()}
+                onManualChange={(chatModel) => updateDraft({ chatModel })}
+                onSelect={(chatModel) => updateDraft({ chatModel })}
+                options={modelOptions}
+                purpose="chat"
+                state={modelDiscoveryState}
+                statusMessage={modelDiscoveryMessage}
+              />
               <label className="field switch-field full">
                 <span>
                   <b>Основное подключение</b>

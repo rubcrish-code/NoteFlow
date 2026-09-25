@@ -9,7 +9,14 @@ import type {
   SaveEmbeddingProfileInput,
 } from "../../services/embeddingService";
 import { Icon } from "../../shared/Icon";
-import { ModelStatusBadge, ProviderTypeSelector, SettingsModalShell, SettingsSectionHeader } from "./ModelSettingsUi";
+import {
+  ModelDiscoveryField,
+  ModelStatusBadge,
+  ProviderTypeSelector,
+  SettingsModalShell,
+  SettingsSectionHeader,
+} from "./ModelSettingsUi";
+import type { ModelDiscoveryOption, ModelDiscoveryState } from "./ModelSettingsUi";
 
 interface SemanticSearchSettingsProps {
   onToast: (message: string) => void;
@@ -101,8 +108,9 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
-  const [modelOptions, setModelOptions] = useState<string[]>([]);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelOptions, setModelOptions] = useState<ModelDiscoveryOption[]>([]);
+  const [modelDiscoveryState, setModelDiscoveryState] = useState<ModelDiscoveryState>("idle");
+  const [modelDiscoveryMessage, setModelDiscoveryMessage] = useState("");
   const [indexOperation, setIndexOperation] = useState<{ profileId: string; type: IndexOperation } | null>(null);
   const [message, setMessage] = useState("");
   const [messageError, setMessageError] = useState(false);
@@ -175,6 +183,8 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   function openNewProfile() {
     setForm(emptyForm());
     setModelOptions([]);
+    setModelDiscoveryState("idle");
+    setModelDiscoveryMessage("");
     setIsFormOpen(true);
     showMessage("");
   }
@@ -182,6 +192,8 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   function openProfile(profile: EmbeddingProfile) {
     setForm(profileForm(profile));
     setModelOptions([]);
+    setModelDiscoveryState("idle");
+    setModelDiscoveryMessage("");
     setIsFormOpen(true);
     showMessage("");
   }
@@ -189,16 +201,18 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   function updateForm(values: Partial<ProfileForm>) {
     if ("providerType" in values || "baseUrl" in values || "apiKey" in values) {
       modelListOperationIdRef.current += 1;
-      setIsLoadingModels(false);
       setModelOptions([]);
+      setModelDiscoveryState("idle");
+      setModelDiscoveryMessage("");
     }
     setForm((current) => ({ ...current, ...values }));
   }
 
   function changeProviderType(providerType: EmbeddingProviderType) {
     modelListOperationIdRef.current += 1;
-    setIsLoadingModels(false);
     setModelOptions([]);
+    setModelDiscoveryState("idle");
+    setModelDiscoveryMessage("");
     const next = emptyForm(providerType);
     setForm((current) => ({
       ...next,
@@ -217,7 +231,8 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
     }
     const operationId = ++modelListOperationIdRef.current;
     const snapshot = form;
-    setIsLoadingModels(true);
+    setModelDiscoveryState("loading");
+    setModelDiscoveryMessage("Загружаем актуальный список моделей…");
     showMessage("Загружаем модели…");
     try {
       const result = await embeddingService.listEmbeddingModels({
@@ -228,18 +243,17 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
         apiKey: snapshot.apiKey.trim() || undefined,
       });
       if (modelListOperationIdRef.current !== operationId) return;
-      setModelOptions(result.models);
-      if (result.models.length > 0 && !snapshot.model.trim()) {
-        setForm((current) => ({ ...current, model: result.models[0] ?? "" }));
-      }
-      showMessage(result.message);
+      setModelOptions(result.options);
+      setModelDiscoveryState(result.status === "manual" ? "error" : result.options.length > 0 ? "success" : "empty");
+      setModelDiscoveryMessage(result.message);
+      showMessage(result.message, result.status === "manual");
     } catch {
       if (modelListOperationIdRef.current === operationId) {
         setModelOptions([]);
-        showMessage("Не удалось получить список моделей. Укажите название вручную.");
+        setModelDiscoveryState("error");
+        setModelDiscoveryMessage("Не удалось получить список моделей. Можно указать Model ID вручную.");
+        showMessage("Не удалось получить список моделей. Укажите название вручную.", true);
       }
-    } finally {
-      if (modelListOperationIdRef.current === operationId) setIsLoadingModels(false);
     }
   }
 
@@ -469,25 +483,18 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
             <div className="form-grid semantic-profile-form">
               <label className="field full">Название<input onChange={(event) => updateForm({ name: event.currentTarget.value })} value={form.name} /></label>
               <label className="field full">Адрес подключения<input onChange={(event) => updateForm({ baseUrl: event.currentTarget.value })} spellCheck={false} value={form.baseUrl} /></label>
-              <label className="field full semantic-model-field">
-                Модель
-                <div className="input-action model-load-control">
-                  <input list="semantic-model-options" onChange={(event) => updateForm({ model: event.currentTarget.value })} placeholder="Укажите название модели" spellCheck={false} value={form.model} />
-                  <button className="secondary-btn" disabled={isLoadingModels} onClick={() => void loadModels()} type="button">
-                    {isLoadingModels ? "Загружаем модели…" : "Получить модели"}
-                  </button>
-                </div>
-                <datalist id="semantic-model-options">
-                  {modelOptions.map((model) => <option key={model} value={model} />)}
-                </datalist>
-                {modelOptions.length > 0 ? (
-                  <div className="model-option-list">
-                    {modelOptions.map((model) => (
-                      <button className={form.model === model ? "active" : ""} key={model} onClick={() => updateForm({ model })} type="button">{model}</button>
-                    ))}
-                  </div>
-                ) : null}
-              </label>
+              <ModelDiscoveryField
+                label="Модель смыслового поиска (RAG)"
+                manualPlaceholder="Укажите Model ID"
+                manualValue={form.model}
+                onDiscover={() => void loadModels()}
+                onManualChange={(model) => updateForm({ model })}
+                onSelect={(model) => updateForm({ model })}
+                options={modelOptions}
+                purpose="embedding"
+                state={modelDiscoveryState}
+                statusMessage={modelDiscoveryMessage}
+              />
               <label className="field full">Режим<select onChange={(event) => updateForm({ locality: event.currentTarget.value === "cloud" ? "cloud" : "local" })} value={form.locality}><option value="local">Локально</option><option value="cloud">Облачно</option></select></label>
               <label className="field full">Путь смыслового поиска (RAG)<input onChange={(event) => updateForm({ embeddingsEndpoint: event.currentTarget.value })} spellCheck={false} value={form.embeddingsEndpoint} /></label>
               <label className="field">Размер группы<input min="1" max="128" onChange={(event) => updateForm({ batchSize: event.currentTarget.value })} type="number" value={form.batchSize} /></label>

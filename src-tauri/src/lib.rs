@@ -3,6 +3,7 @@ mod data;
 mod embedding;
 mod knowledge;
 mod llm;
+mod rag;
 mod revisions;
 mod search;
 
@@ -166,6 +167,7 @@ pub fn run() {
             data::save_llm_provider,
             data::save_embedding_profile,
             data::set_default_llm_provider,
+            data::set_note_tag,
             data::store_attachment,
             data::store_attachment_from_path,
             data::test_llm_provider,
@@ -174,6 +176,7 @@ pub fn run() {
             data::semantic_search,
             data::hybrid_search,
             data::run_note_ai,
+            data::run_rag_generation,
             data::save_note_chat_message,
             data::save_rag_chat_message,
             data::toggle_note_pin,

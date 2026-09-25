@@ -67,14 +67,27 @@ describe("P1.3 final UX polish", () => {
     });
     assert.deepEqual(resolveRagPanelVisibility({ ...preferredOpen, layoutMode: "compact" }), {
       historyIsOverlay: false,
-      historyVisible: true,
+      historyVisible: false,
       sourcesIsOverlay: false,
       sourcesVisible: false,
     });
     assert.equal(resolveRagPanelVisibility({ ...preferredOpen, layoutMode: "wide" }).sourcesVisible, true);
   });
 
-  it("uses temporary overlays for requested secondary RAG panels at narrow widths", () => {
+  it("uses temporary overlays for requested secondary RAG panels at compact and narrow widths", () => {
+    const compactHistory = resolveRagPanelVisibility({
+      historyOverlayOpen: true,
+      layoutMode: "compact",
+      preferredHistoryCollapsed: false,
+      preferredSourcesCollapsed: false,
+      sourcesOverlayOpen: false,
+    });
+    assert.deepEqual(compactHistory, {
+      historyIsOverlay: true,
+      historyVisible: true,
+      sourcesIsOverlay: false,
+      sourcesVisible: false,
+    });
     const narrow = resolveRagPanelVisibility({
       historyOverlayOpen: false,
       layoutMode: "narrow",
@@ -92,6 +105,7 @@ describe("P1.3 final UX polish", () => {
     assert.match(ragWorkspaceSource, /preferredSourcesCollapsed/);
     assert.match(ragWorkspaceSource, /historyOverlayOpen/);
     assert.match(ragCss, /\.rag-page\.rag-layout-narrow[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+    assert.match(ragCss, /\.rag-page\.rag-layout-compact,[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
     assert.match(ragCss, /\.rag-sources-panel\.rag-panel-overlay/);
     assert.match(ragWorkspaceSource, /rag-input-wrap/);
     assert.match(ragWorkspaceSource, /aria-label="Состояние моделей и базы"/);

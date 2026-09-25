@@ -18,11 +18,12 @@ const STATUS_ERROR: &str = "error";
 const LIST_MODELS_TIMEOUT_MS: i64 = 15_000;
 const TEST_CONNECTION_TIMEOUT_MS: i64 = 10_000;
 const NOTE_AI_TIMEOUT_MS: i64 = 45_000;
+const RAG_AI_TIMEOUT_MS: i64 = 120_000;
 const NOTE_AI_CONTEXT_LIMIT: usize = 24_000;
 const NOTE_AI_HARD_CONTEXT_LIMIT: usize = 120_000;
 const NOTE_AI_SELECTED_LIMIT: usize = 12_000;
 const NOTE_AI_QUESTION_LIMIT: usize = 3_000;
-const OPENAI_COMPATIBLE_USER_AGENT: &str =
+pub(crate) const OPENAI_COMPATIBLE_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 const OPENAI_COMPATIBLE_TEST_MAX_TOKENS: i64 = 512;
 const OPENAI_COMPATIBLE_NOTE_AI_MAX_TOKENS: i64 = 2048;
@@ -165,6 +166,8 @@ pub struct SaveLlmProviderRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DraftLlmProviderRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub provider_type: String,
     pub base_url: String,
     pub api_key: Option<String>,
@@ -192,6 +195,15 @@ pub struct LlmModelsResultDto {
     pub status: String,
     pub message: String,
     pub models: Vec<String>,
+    pub options: Vec<ModelDiscoveryOptionDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDiscoveryOptionDto {
+    pub id: String,
+    pub supports_chat: Option<bool>,
+    pub supports_embeddings: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,6 +271,28 @@ pub struct NoteAiResponseDto {
 struct NoteAiPrompt {
     system: String,
     user: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatCompletionMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatCompletionRequest {
+    pub system: String,
+    pub messages: Vec<ChatCompletionMessage>,
+    pub max_output_tokens: i64,
+    pub operation_label: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatCompletionResponse {
+    pub content: String,
+    pub provider_name: String,
+    pub model: String,
+    pub is_local: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -470,11 +504,20 @@ pub fn get_default_provider_record(conn: &Connection) -> DataResult<Option<LlmPr
     query_default_provider_record(conn)
 }
 
+#[cfg(test)]
 pub fn list_models_for_draft<H: HttpClient>(
     request: DraftLlmProviderRequest,
     client: &H,
 ) -> DataResult<LlmModelsResultDto> {
-    let (provider, storage) = draft_provider_record(request)?;
+    list_models_for_draft_with_saved_key(request, None, client)
+}
+
+pub fn list_models_for_draft_with_saved_key<H: HttpClient>(
+    request: DraftLlmProviderRequest,
+    saved_api_key: Option<String>,
+    client: &H,
+) -> DataResult<LlmModelsResultDto> {
+    let (provider, storage) = draft_provider_record(request, saved_api_key)?;
     list_models_for_provider(&provider, &storage, client)
 }
 
@@ -482,7 +525,7 @@ pub fn test_draft_provider_connection<H: HttpClient>(
     request: DraftLlmProviderRequest,
     client: &H,
 ) -> DataResult<LlmConnectionTestResultDto> {
-    let (provider, storage) = draft_provider_record(request)?;
+    let (provider, storage) = draft_provider_record(request, None)?;
     test_provider_connection(&provider, &storage, client)
 }
 
@@ -599,6 +642,86 @@ pub fn run_note_ai_request<S: SecretStorage, H: HttpClient>(
         status: STATUS_SUCCESS.to_string(),
         message: "Ответ модели получен".to_string(),
         response: generated,
+        provider_name: provider.name.clone(),
+        model: provider.chat_model.clone(),
+        is_local: is_local_base_url(&provider.base_url),
+    })
+}
+
+pub fn run_chat_completion<S: SecretStorage, H: HttpClient>(
+    provider: &LlmProviderRecord,
+    storage: &S,
+    client: &H,
+    request: &ChatCompletionRequest,
+) -> DataResult<ChatCompletionResponse> {
+    ensure_note_ai_provider_ready(provider, storage)?;
+    if request.system.trim().is_empty() || request.messages.is_empty() {
+        return Err(DataError::InvalidInput(
+            "Контекст AI-запроса не подготовлен".to_string(),
+        ));
+    }
+    if request.messages.iter().any(|message| {
+        !matches!(message.role.as_str(), "assistant" | "user") || message.content.trim().is_empty()
+    }) {
+        return Err(DataError::InvalidInput(
+            "История AI-запроса содержит некорректное сообщение".to_string(),
+        ));
+    }
+
+    let budget = LlmOperationBudget::new(RAG_AI_TIMEOUT_MS, request.operation_label);
+    let headers = provider_headers(provider, storage)?;
+    let url = join_url(&provider.base_url, &provider.chat_endpoint)?;
+    let timeout_ms = budget.request_timeout(provider.timeout_ms)?;
+    let max_output_tokens = request.max_output_tokens.clamp(256, 8_192);
+    log_llm_diagnostic(
+        "chat_completion_request",
+        &[
+            ("operation", request.operation_label.to_string()),
+            ("providerType", provider.provider_type.clone()),
+            ("baseUrl", diagnostic_url(&provider.base_url)),
+            ("endpointPath", provider.chat_endpoint.clone()),
+            ("url", diagnostic_url(&url)),
+            (
+                "hasAuthorization",
+                has_header(&headers, "Authorization").to_string(),
+            ),
+            (
+                "hasUserAgent",
+                has_header(&headers, "User-Agent").to_string(),
+            ),
+            ("messageCount", request.messages.len().to_string()),
+            ("timeoutMs", timeout_ms.to_string()),
+            ("maxTokens", max_output_tokens.to_string()),
+        ],
+    );
+    let response = client.send(HttpRequest {
+        method: "POST".to_string(),
+        url,
+        headers,
+        body: Some(chat_completion_request_body(
+            provider,
+            request,
+            max_output_tokens,
+        )),
+        timeout_ms,
+    })?;
+    let metadata = openai_response_metadata(&response.body);
+    log_llm_diagnostic(
+        "chat_completion_response",
+        &[
+            ("operation", request.operation_label.to_string()),
+            ("providerType", provider.provider_type.clone()),
+            ("endpointPath", provider.chat_endpoint.clone()),
+            ("status", response.status.to_string()),
+            ("finishReason", metadata.finish_reason.unwrap_or_default()),
+            ("hasContent", metadata.has_content.to_string()),
+            ("hasReasoning", metadata.has_reasoning.to_string()),
+        ],
+    );
+    ensure_success_status(response.status, &response.body)?;
+    let content = parse_note_ai_response(&provider.provider_type, &response.body)?;
+    Ok(ChatCompletionResponse {
+        content,
         provider_name: provider.name.clone(),
         model: provider.chat_model.clone(),
         is_local: is_local_base_url(&provider.base_url),
@@ -890,7 +1013,7 @@ pub fn list_models_for_provider<S: SecretStorage, H: HttpClient>(
     client: &H,
 ) -> DataResult<LlmModelsResultDto> {
     let budget = LlmOperationBudget::new(LIST_MODELS_TIMEOUT_MS, "получение списка моделей");
-    let models = match fetch_models(
+    let options = match fetch_model_catalog(
         provider,
         storage,
         client,
@@ -912,10 +1035,15 @@ pub fn list_models_for_provider<S: SecretStorage, H: HttpClient>(
                 message: "Не удалось получить список моделей. Введите название модели вручную."
                     .to_string(),
                 models: Vec::new(),
+                options: Vec::new(),
             });
         }
         Err(error) => return Err(error),
     };
+    let models = options
+        .iter()
+        .map(|option| option.id.clone())
+        .collect::<Vec<_>>();
     let message = if models.is_empty() {
         "Endpoint доступен, но список моделей пуст".to_string()
     } else {
@@ -925,6 +1053,7 @@ pub fn list_models_for_provider<S: SecretStorage, H: HttpClient>(
         status: STATUS_SUCCESS.to_string(),
         message,
         models,
+        options,
     })
 }
 
@@ -1111,6 +1240,7 @@ pub fn models_error_result(error: DataError) -> LlmModelsResultDto {
         status: STATUS_ERROR.to_string(),
         message: error.to_string(),
         models: Vec::new(),
+        options: Vec::new(),
     }
 }
 
@@ -1286,6 +1416,7 @@ fn normalize_draft_provider_request(
     let custom_headers_json = normalize_custom_headers_json(&request.custom_headers_json)?;
 
     Ok(DraftLlmProviderRequest {
+        provider_id: request.provider_id.filter(|id| !id.trim().is_empty()),
         provider_type,
         base_url,
         api_key: request.api_key,
@@ -1304,9 +1435,17 @@ fn normalize_draft_provider_request(
 
 fn draft_provider_record(
     request: DraftLlmProviderRequest,
+    saved_api_key: Option<String>,
 ) -> DataResult<(LlmProviderRecord, OperationSecretStorage)> {
     let normalized = normalize_draft_provider_request(request)?;
-    let storage = OperationSecretStorage::from_api_key(normalized.api_key);
+    let operation_api_key = normalized
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .or(saved_api_key);
+    let storage = OperationSecretStorage::from_api_key(operation_api_key);
     let now = now_iso();
     let provider = LlmProviderRecord {
         id: "draft-provider".to_string(),
@@ -1548,6 +1687,16 @@ fn fetch_models<S: SecretStorage, H: HttpClient>(
     client: &H,
     timeout_ms: i64,
 ) -> DataResult<Vec<String>> {
+    fetch_model_catalog(provider, storage, client, timeout_ms)
+        .map(|options| options.into_iter().map(|option| option.id).collect())
+}
+
+fn fetch_model_catalog<S: SecretStorage, H: HttpClient>(
+    provider: &LlmProviderRecord,
+    storage: &S,
+    client: &H,
+    timeout_ms: i64,
+) -> DataResult<Vec<ModelDiscoveryOptionDto>> {
     let url = join_url(&provider.base_url, &provider.models_endpoint)?;
     log_llm_diagnostic(
         "adapter_selected",
@@ -1575,7 +1724,7 @@ fn fetch_models<S: SecretStorage, H: HttpClient>(
         ],
     );
     ensure_success_status(response.status, &response.body)?;
-    let models = parse_models_response(&provider.provider_type, &response.body)?;
+    let models = parse_model_catalog_response(&provider.provider_type, &response.body)?;
     log_llm_diagnostic(
         "parsed_models",
         &[
@@ -1585,6 +1734,45 @@ fn fetch_models<S: SecretStorage, H: HttpClient>(
         ],
     );
     Ok(models)
+}
+
+pub fn discover_model_catalog<H: HttpClient>(
+    provider_type: &str,
+    base_url: &str,
+    models_endpoint: &str,
+    api_key: Option<String>,
+    timeout_ms: i64,
+    client: &H,
+) -> DataResult<Vec<ModelDiscoveryOptionDto>> {
+    let provider_type = normalize_provider_type(provider_type)?;
+    let base_url = normalize_provider_base_url(&provider_type, base_url)?;
+    validate_endpoint(models_endpoint, "Путь списка моделей")?;
+    let storage = OperationSecretStorage::from_api_key(api_key);
+    let now = now_iso();
+    let provider = LlmProviderRecord {
+        id: "model-discovery".to_string(),
+        name: "Model discovery".to_string(),
+        provider_type,
+        base_url,
+        api_key_ref: storage.secret_ref(),
+        chat_model: String::new(),
+        embedding_model: String::new(),
+        models_endpoint: models_endpoint.trim().to_string(),
+        chat_endpoint: "/chat/completions".to_string(),
+        embeddings_endpoint: "/embeddings".to_string(),
+        timeout_ms,
+        context_size: 4096,
+        temperature: 0.0,
+        streaming_enabled: false,
+        custom_headers_json: "{}".to_string(),
+        is_default: false,
+        last_status: STATUS_NOT_CONFIGURED.to_string(),
+        status_message: None,
+        last_checked_at: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    fetch_model_catalog(&provider, &storage, client, timeout_ms.clamp(1, 600_000))
 }
 
 fn ensure_note_ai_provider_ready<S: SecretStorage>(
@@ -1734,6 +1922,55 @@ fn note_ai_request_body(provider: &LlmProviderRecord, prompt: &NoteAiPrompt) -> 
             "temperature": provider.temperature,
             "stream": false,
             "max_tokens": note_ai_max_tokens(provider).unwrap_or(OPENAI_COMPATIBLE_NOTE_AI_MAX_TOKENS)
+        })
+    }
+}
+
+fn chat_completion_request_body(
+    provider: &LlmProviderRecord,
+    request: &ChatCompletionRequest,
+    max_output_tokens: i64,
+) -> Value {
+    if provider.provider_type == "ollama" {
+        let conversation = request
+            .messages
+            .iter()
+            .map(|message| {
+                let role = if message.role == "assistant" {
+                    "ASSISTANT"
+                } else {
+                    "USER"
+                };
+                format!("{role}:\n{}", message.content)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        json!({
+            "model": provider.chat_model,
+            "prompt": format!("SYSTEM:\n{}\n\n{}", request.system, conversation),
+            "stream": false,
+            "options": {
+                "temperature": provider.temperature,
+                "num_predict": max_output_tokens
+            }
+        })
+    } else {
+        let mut messages = vec![json!({
+            "role": "system",
+            "content": request.system
+        })];
+        messages.extend(request.messages.iter().map(|message| {
+            json!({
+                "role": message.role,
+                "content": message.content
+            })
+        }));
+        json!({
+            "model": provider.chat_model,
+            "messages": messages,
+            "temperature": provider.temperature,
+            "stream": false,
+            "max_tokens": max_output_tokens
         })
     }
 }
@@ -1978,44 +2215,112 @@ fn parse_custom_headers(value: &str) -> DataResult<Vec<(String, String)>> {
         .collect())
 }
 
+#[cfg(test)]
 fn parse_models_response(provider_type: &str, body: &str) -> DataResult<Vec<String>> {
+    parse_model_catalog_response(provider_type, body)
+        .map(|options| options.into_iter().map(|option| option.id).collect())
+}
+
+fn parse_model_catalog_response(
+    provider_type: &str,
+    body: &str,
+) -> DataResult<Vec<ModelDiscoveryOptionDto>> {
     let value: Value = serde_json::from_str(body).map_err(|_| {
         DataError::InvalidInput("Провайдер вернул некорректный JSON со списком моделей".to_string())
     })?;
-    let mut models = Vec::new();
+    let mut models = BTreeMap::<String, ModelDiscoveryOptionDto>::new();
+    let mut has_catalog = false;
 
     if let Some(items) = value.get("data").and_then(Value::as_array) {
-        collect_model_ids(items, &mut models);
+        has_catalog = true;
+        collect_model_options(items, &mut models);
     }
     if let Some(items) = value.get("models").and_then(Value::as_array) {
-        collect_model_ids(items, &mut models);
+        has_catalog = true;
+        collect_model_options(items, &mut models);
     }
     if let Some(items) = value.as_array() {
-        collect_model_ids(items, &mut models);
+        has_catalog = true;
+        collect_model_options(items, &mut models);
     }
 
-    models.sort();
-    models.dedup();
-    if models.is_empty() && provider_type != "ollama" {
+    if !has_catalog && provider_type != "ollama" {
         return Err(DataError::InvalidInput(
             "Ответ провайдера не содержит список моделей".to_string(),
         ));
     }
-    Ok(models)
+    Ok(models.into_values().collect())
 }
 
-fn collect_model_ids(items: &[Value], models: &mut Vec<String>) {
+fn collect_model_options(items: &[Value], models: &mut BTreeMap<String, ModelDiscoveryOptionDto>) {
     for item in items {
-        if let Some(id) = item.as_str() {
-            models.push(id.to_string());
-        } else if let Some(id) = item.get("id").and_then(Value::as_str) {
-            models.push(id.to_string());
-        } else if let Some(name) = item.get("name").and_then(Value::as_str) {
-            models.push(name.to_string());
-        } else if let Some(model) = item.get("model").and_then(Value::as_str) {
-            models.push(model.to_string());
-        }
+        let id = item
+            .as_str()
+            .or_else(|| item.get("id").and_then(Value::as_str))
+            .or_else(|| item.get("name").and_then(Value::as_str))
+            .or_else(|| item.get("model").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        let Some(id) = id else { continue };
+        let (supports_chat, supports_embeddings) = model_capabilities(item);
+        models
+            .entry(id.to_string())
+            .and_modify(|existing| {
+                existing.supports_chat = merge_capability(existing.supports_chat, supports_chat);
+                existing.supports_embeddings =
+                    merge_capability(existing.supports_embeddings, supports_embeddings);
+            })
+            .or_insert_with(|| ModelDiscoveryOptionDto {
+                id: id.to_string(),
+                supports_chat,
+                supports_embeddings,
+            });
     }
+}
+
+fn merge_capability(current: Option<bool>, incoming: Option<bool>) -> Option<bool> {
+    match (current, incoming) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        _ => None,
+    }
+}
+
+fn model_capabilities(item: &Value) -> (Option<bool>, Option<bool>) {
+    let Some(capabilities) = item.get("capabilities") else {
+        return (None, None);
+    };
+    if let Some(values) = capabilities.as_array() {
+        let values = values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|value| value.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        return (
+            Some(values.iter().any(|value| {
+                matches!(
+                    value.as_str(),
+                    "chat" | "chat_completions" | "completion" | "generate"
+                )
+            })),
+            Some(
+                values
+                    .iter()
+                    .any(|value| matches!(value.as_str(), "embedding" | "embeddings" | "embed")),
+            ),
+        );
+    }
+    let Some(values) = capabilities.as_object() else {
+        return (None, None);
+    };
+    let capability = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| values.get(*key).and_then(Value::as_bool))
+    };
+    (
+        capability(&["chat", "chat_completions", "completion", "generate"]),
+        capability(&["embedding", "embeddings", "embed"]),
+    )
 }
 
 fn model_is_listed(models: &[String], model: &str) -> bool {
@@ -2580,6 +2885,7 @@ mod tests {
                 ("/models", "/chat/completions", "/embeddings", "gpt-test")
             };
         DraftLlmProviderRequest {
+            provider_id: None,
             provider_type: provider_type.to_string(),
             base_url: base_url.to_string(),
             api_key: None,
@@ -2602,6 +2908,133 @@ mod tests {
             .expect("models parse");
 
         assert_eq!(models, vec!["gpt-a".to_string(), "gpt-b".to_string()]);
+    }
+
+    #[test]
+    fn model_catalog_preserves_optional_capabilities_without_guessing() {
+        let options = parse_model_catalog_response(
+            "openai",
+            r#"{"data":[
+                {"id":"chat-model","capabilities":{"chat":true,"embeddings":false}},
+                {"id":"embed-model","capabilities":["embeddings"]},
+                {"id":"unknown-model","object":"model"}
+            ]}"#,
+        )
+        .expect("catalog parses");
+
+        assert_eq!(
+            options,
+            vec![
+                ModelDiscoveryOptionDto {
+                    id: "chat-model".to_string(),
+                    supports_chat: Some(true),
+                    supports_embeddings: Some(false),
+                },
+                ModelDiscoveryOptionDto {
+                    id: "embed-model".to_string(),
+                    supports_chat: Some(false),
+                    supports_embeddings: Some(true),
+                },
+                ModelDiscoveryOptionDto {
+                    id: "unknown-model".to_string(),
+                    supports_chat: None,
+                    supports_embeddings: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn valid_empty_openai_catalog_is_a_successful_empty_state() {
+        let http = MockHttpClient::with_responses(vec![HttpResponse {
+            status: 200,
+            body: r#"{"object":"list","data":[]}"#.to_string(),
+        }]);
+
+        let result = list_models_for_draft(
+            draft_request("custom", "https://bridge.example.test/api/v1"),
+            &http,
+        )
+        .expect("empty catalog remains valid");
+
+        assert_eq!(result.status, STATUS_SUCCESS);
+        assert!(result.models.is_empty());
+        assert!(result.options.is_empty());
+        assert!(result.message.contains("пуст"));
+    }
+
+    #[test]
+    fn draft_discovery_reuses_saved_key_and_refreshes_the_catalog() {
+        let http = MockHttpClient::with_responses(vec![
+            HttpResponse {
+                status: 200,
+                body: r#"{"data":[{"id":"first-model"}]}"#.to_string(),
+            },
+            HttpResponse {
+                status: 200,
+                body: r#"{"data":[{"id":"first-model"},{"id":"second-model"}]}"#.to_string(),
+            },
+        ]);
+        let first = list_models_for_draft_with_saved_key(
+            draft_request("custom", "https://bridge.example.test/api/v1"),
+            Some("saved-secret".to_string()),
+            &http,
+        )
+        .expect("initial catalog");
+        let refreshed = list_models_for_draft_with_saved_key(
+            draft_request("custom", "https://bridge.example.test/api/v1"),
+            Some("saved-secret".to_string()),
+            &http,
+        )
+        .expect("refreshed catalog");
+
+        assert_eq!(first.models, vec!["first-model"]);
+        assert_eq!(refreshed.models, vec!["first-model", "second-model"]);
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            assert_eq!(request.method, "GET");
+            assert_eq!(request.url, "https://bridge.example.test/api/v1/models");
+            assert!(request.headers.iter().any(|(name, value)| {
+                name == "Authorization" && value == "Bearer saved-secret"
+            }));
+            assert!(request.headers.iter().any(|(name, value)| {
+                name == "User-Agent" && value == OPENAI_COMPATIBLE_USER_AGENT
+            }));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the external Bridge and the current profile's secure credential"]
+    fn real_bridge_model_discovery_smoke() {
+        let database_path = std::env::var("NOTEFLOW_BRIDGE_SMOKE_DB")
+            .expect("set NOTEFLOW_BRIDGE_SMOKE_DB to a read-only copy or the local NoteFlow DB");
+        let connection =
+            Connection::open_with_flags(database_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("open NoteFlow database read-only");
+        let provider_id = connection
+            .query_row(
+                "SELECT id FROM llm_providers WHERE base_url LIKE '%bridge-back.admlr.lipetsk.ru%' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("Bridge provider exists");
+        let provider =
+            get_provider_record(&connection, &provider_id).expect("load Bridge provider");
+        let result = list_models_for_provider(&provider, &SystemSecretStorage, &CurlHttpClient)
+            .expect("Bridge model discovery succeeds");
+
+        eprintln!(
+            "Bridge model discovery: endpoint={} count={} models={:?} capabilities={}",
+            provider.models_endpoint,
+            result.models.len(),
+            result.models,
+            result.options.iter().any(|option| {
+                option.supports_chat.is_some() || option.supports_embeddings.is_some()
+            })
+        );
+        assert_eq!(result.status, STATUS_SUCCESS);
+        assert!(!result.models.is_empty());
     }
 
     #[test]
@@ -2692,7 +3125,8 @@ mod tests {
             "openai",
             "https://bridge-back.admlr.lipetsk.ru/api/v1/chat/completions",
         );
-        let (provider, _) = draft_provider_record(request).expect("draft provider normalizes");
+        let (provider, _) =
+            draft_provider_record(request, None).expect("draft provider normalizes");
 
         assert_eq!(
             provider.base_url,

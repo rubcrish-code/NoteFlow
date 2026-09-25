@@ -10,12 +10,11 @@ interface NoteMenuPopoverProps {
   onDuplicate: (noteId: string) => void;
   onExportMarkdown: (noteId: string) => void;
   onMove: (noteId: string, project: string) => void;
-  onRename: (noteId: string, title: string) => void;
   onTogglePin: (noteId: string) => void;
   projectOptions: string[];
 }
 
-type NoteMenuMode = "actions" | "move" | "rename";
+type NoteMenuMode = "actions" | "move";
 
 export function NoteMenuPopover({
   note,
@@ -25,12 +24,10 @@ export function NoteMenuPopover({
   onDuplicate,
   onExportMarkdown,
   onMove,
-  onRename,
   onTogglePin,
   projectOptions,
 }: NoteMenuPopoverProps) {
   const [mode, setMode] = useState<NoteMenuMode>("actions");
-  const [titleDraft, setTitleDraft] = useState(note.title);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -56,15 +53,6 @@ export function NoteMenuPopover({
     };
   }, [onClose]);
 
-  function renameNote() {
-    const trimmedTitle = titleDraft.trim();
-    if (!trimmedTitle) {
-      return;
-    }
-    onRename(note.id, trimmedTitle);
-    onClose();
-  }
-
   return (
     <div className="note-menu-popover" ref={popoverRef} role="menu">
       <div className="note-menu-head">
@@ -76,23 +64,6 @@ export function NoteMenuPopover({
           <Icon name="x" />
         </button>
       </div>
-
-      {mode === "rename" ? (
-        <div className="note-menu-form">
-          <label>
-            Название
-            <input autoFocus onChange={(event) => setTitleDraft(event.currentTarget.value)} value={titleDraft} />
-          </label>
-          <div className="note-menu-actions">
-            <button className="secondary-btn" onClick={() => setMode("actions")} type="button">
-              Назад
-            </button>
-            <button className="primary-btn" disabled={!titleDraft.trim()} onClick={renameNote} type="button">
-              Сохранить
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       {mode === "move" ? (
         <div className="note-menu-projects">
@@ -118,9 +89,6 @@ export function NoteMenuPopover({
 
       {mode === "actions" ? (
         <div className="note-menu-actions-list">
-          <button onClick={() => setMode("rename")} type="button">
-            Переименовать
-          </button>
           <button
             onClick={() => {
               onDuplicate(note.id);

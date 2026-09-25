@@ -746,7 +746,7 @@ export function AppShell() {
     }
   }
 
-  async function openNote(noteId: string, archivedHint?: boolean) {
+  async function openNote(noteId: string, archivedHint?: boolean, failureMessage?: string) {
     await flushPendingSave();
     const archivedResult = archivedHint ?? searchResults.find((result) => result.noteId === noteId)?.archived;
     openedArchivedNoteIdRef.current = archivedResult ? noteId : null;
@@ -755,29 +755,39 @@ export function AppShell() {
         const loadedNote = await dataService.getNote(noteId);
         setNotes((currentNotes) => sortNotesForDisplay([loadedNote, ...currentNotes.filter((note) => note.id !== noteId)]));
       } catch (error) {
-        showToast(`Не удалось открыть заметку: ${String(error)}`);
-        return;
+        showToast(failureMessage ?? `Не удалось открыть заметку: ${String(error)}`);
+        return false;
       }
     }
     activateSection("notes");
     setActiveNoteId(noteId);
     setIsFocusMode(false);
+    return true;
   }
 
   async function openSemanticResult(result: SemanticSearchResult) {
     setQuery("");
-    await openNote(result.noteId, result.archived);
-    setSemanticOpenTarget(result);
+    const opened = await openNote(
+      result.noteId,
+      result.archived,
+      "Заметка больше недоступна. Сохранённый фрагмент остаётся в источниках.",
+    );
+    if (opened) {
+      setSemanticOpenTarget(result);
+    }
   }
 
-  function renameNote(noteId: string, title: string) {
-    void dataService
-      .renameNote(noteId, title)
-      .then((updatedNote) => {
-        replaceNote(updatedNote);
-        showToast("Название заметки изменено");
-      })
-      .catch((error) => showToast(`Не удалось переименовать заметку: ${String(error)}`));
+  async function renameNote(noteId: string, title: string) {
+    try {
+      const updatedNote = await dataService.renameNote(noteId, title);
+      setNotes((currentNotes) => sortNotesForDisplay(currentNotes.map((note) => note.id === noteId
+        ? { ...note, title: updatedNote.title, updatedAt: updatedNote.updatedAt, dateLabel: updatedNote.dateLabel }
+        : note)));
+      setSearchRevision((revision) => revision + 1);
+    } catch (error) {
+      showToast(`Не удалось переименовать заметку: ${String(error)}`);
+      throw error;
+    }
   }
 
   function duplicateNote(noteId: string) {
@@ -885,16 +895,40 @@ export function AppShell() {
       .catch((error) => showToast(`Не удалось создать проект: ${String(error)}`));
   }
 
-  async function createTag(value: TagEditorValue) {
+  async function persistTag(value: TagEditorValue) {
     try {
       const tag = await dataService.createTag(value.name, value.color, value.customColor);
       setTags((currentTags) => [...currentTags, tag].sort((first, second) => first.name.localeCompare(second.name, "ru-RU")));
       setSearchRevision((revision) => revision + 1);
       showToast("Тег создан");
+      return tag;
     } catch (error) {
       showToast(`Не удалось создать тег: ${String(error)}`);
       throw error;
     }
+  }
+
+  async function createTag(value: TagEditorValue) {
+    await persistTag(value);
+  }
+
+  async function setNoteTag(noteId: string, tagId: string, assigned: boolean) {
+    try {
+      const updatedNote = await dataService.setNoteTag(noteId, tagId, assigned);
+      setNotes((currentNotes) => currentNotes.map((note) => note.id === noteId
+        ? { ...note, tags: updatedNote.tags, updatedAt: updatedNote.updatedAt, dateLabel: updatedNote.dateLabel }
+        : note));
+      setTags(await dataService.listTags());
+      setSearchRevision((revision) => revision + 1);
+    } catch (error) {
+      showToast(`Не удалось изменить теги заметки: ${String(error)}`);
+      throw error;
+    }
+  }
+
+  async function createNoteTag(noteId: string, value: TagEditorValue) {
+    const tag = await persistTag(value);
+    await setNoteTag(noteId, tag.id, true);
   }
 
   async function updateTag(tagId: string, value: TagEditorValue) {
@@ -1300,6 +1334,8 @@ export function AppShell() {
             }}
             onPickAndStoreAttachment={pickAndStoreAttachment}
             onRenameNote={renameNote}
+            onSetNoteTag={setNoteTag}
+            onCreateNoteTag={createNoteTag}
             onRevealAttachment={dataService.revealAttachment}
             onSelectionTextChange={setEditorSelectionText}
             onStoreAttachment={storeAttachment}
@@ -1307,6 +1343,7 @@ export function AppShell() {
             onToast={showToast}
             onToggleFocus={toggleFocusMode}
             projectOptions={projectOptions}
+            tagOptions={tags}
             saveStatus={saveStatus}
           />
         ) : (

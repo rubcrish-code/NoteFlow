@@ -203,6 +203,19 @@
   width: 14px;
 }
 
+.chat-copy-icon {
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+
+.bub-u .chat-copy-icon {
+  color: var(--text-secondary);
+  display: flex;
+  margin: var(--space-1) 0 calc(-1 * var(--space-1)) auto;
+}
+
 .note-chat-copy:hover,
 .note-chat-copy:focus-visible {
   background: var(--surface-hover);

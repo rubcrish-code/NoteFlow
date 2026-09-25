@@ -12,7 +12,7 @@
   flex-shrink: 0;
 }
 
-.sb :is(.sb-brand .nm, .new-btn span, .nav-i span, .sb-user .info) {
+.sb :is(.sb-brand .nm, .nav-i span, .sb-user .info) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -33,6 +33,14 @@
   min-height: 40px;
 }
 
+.sb .new-btn span {
+  line-height: 1.15;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .new-btn:hover {
   box-shadow: var(--shadow-sm);
 }
@@ -44,11 +52,23 @@
   margin-bottom: 1px;
   min-height: var(--control-height-default);
   padding: 0 10px;
+  position: relative;
 }
 
 .nav-i.on {
   background: var(--surface-selected);
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 76%, transparent);
+  box-shadow: none;
+}
+
+.sb .nav-i.on::before {
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  bottom: 9px;
+  content: "";
+  left: 4px;
+  position: absolute;
+  top: 9px;
+  width: 3px;
 }
 
 .nav-sec {

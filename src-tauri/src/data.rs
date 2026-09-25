@@ -1,5 +1,5 @@
 use crate::revisions::{self, RevisionKind, RevisionSnapshot};
-use crate::{assets, embedding, knowledge, llm, search};
+use crate::{assets, embedding, knowledge, llm, rag, search};
 use chrono::{SecondsFormat, Utc};
 use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -491,6 +491,14 @@ pub struct CreateTagRequest {
     pub name: String,
     pub color: String,
     pub custom_color: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetNoteTagRequest {
+    pub note_id: String,
+    pub tag_id: String,
+    pub assigned: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1997,6 +2005,47 @@ impl DataStore {
             "UPDATE notes SET title = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
             params![title, now_iso(), request.note_id],
         )?;
+        self.get_note(&request.note_id)
+    }
+
+    fn set_note_tag(&mut self, request: SetNoteTagRequest) -> DataResult<NoteDto> {
+        let transaction = self.conn.transaction()?;
+        let note_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?1 AND deleted_at IS NULL)",
+            params![request.note_id],
+            |row| row.get(0),
+        )?;
+        let tag_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tags WHERE id = ?1)",
+            params![request.tag_id],
+            |row| row.get(0),
+        )?;
+        if !note_exists || !tag_exists {
+            return Err(DataError::NotFound(
+                "Заметка или тег не найдены".to_string(),
+            ));
+        }
+        let changed = if request.assigned {
+            transaction.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+                params![request.note_id, request.tag_id],
+            )?
+        } else {
+            transaction.execute(
+                "DELETE FROM note_tags WHERE note_id = ?1 AND tag_id = ?2",
+                params![request.note_id, request.tag_id],
+            )?
+        };
+        if changed > 0 {
+            transaction.execute(
+                "UPDATE notes SET updated_at = ?1 WHERE id = ?2",
+                params![now_iso(), request.note_id],
+            )?;
+        }
+        transaction.commit()?;
+        if changed > 0 {
+            knowledge::sync_note_best_effort(&mut self.conn, &request.note_id);
+        }
         self.get_note(&request.note_id)
     }
 
@@ -5760,6 +5809,7 @@ pub fn check_llm_provider_key(
 #[tauri::command]
 pub async fn list_llm_models_for_draft(
     request: llm::DraftLlmProviderRequest,
+    state: State<'_, AppState>,
 ) -> Result<llm::LlmModelsResultDto, String> {
     llm::log_llm_diagnostic(
         "rust_command_entered",
@@ -5770,9 +5820,32 @@ pub async fn list_llm_models_for_draft(
             ("modelsEndpoint", request.models_endpoint.clone()),
         ],
     );
+    let has_draft_key = request
+        .api_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let saved_api_key = if has_draft_key {
+        None
+    } else if let Some(provider_id) = request.provider_id.as_deref() {
+        state
+            .with_store(|store| {
+                let provider = llm::get_provider_record(&store.conn, provider_id)?;
+                let storage = llm::SystemSecretStorage;
+                provider
+                    .api_key_ref
+                    .as_deref()
+                    .map(|secret_ref| llm::SecretStorage::get_secret(&storage, secret_ref))
+                    .transpose()
+                    .map(Option::flatten)
+            })
+            .map_err(command_error)?
+    } else {
+        None
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let http = llm::CurlHttpClient;
-        let result = match llm::list_models_for_draft(request, &http) {
+        let result = match llm::list_models_for_draft_with_saved_key(request, saved_api_key, &http)
+        {
             Ok(result) => result,
             Err(error) => llm::models_error_result(error),
         };
@@ -5950,6 +6023,42 @@ pub async fn run_note_ai(
     .await
     .map_err(|error| format!("AI-запрос был прерван: {error}"))?
     .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn run_rag_generation(
+    request: rag::RagGenerationRequest,
+    state: State<'_, AppState>,
+) -> Result<rag::RagGenerationResultDto, rag::RagGenerationCommandError> {
+    let (database_path, provider) = state
+        .with_store(|store| {
+            let provider = store.get_default_llm_provider_record()?.ok_or_else(|| {
+                DataError::InvalidInput("Default LLM provider не выбран".to_string())
+            })?;
+            let privacy_scope = llm::privacy_scope_for_provider(&provider);
+            let privacy_accepted = store.get_note_ai_privacy_accepted(privacy_scope)?;
+            let storage = llm::SystemSecretStorage;
+            let status = llm::note_ai_status(Some(&provider), privacy_accepted, &storage)?;
+            if !status.can_use {
+                return Err(DataError::InvalidInput(status.message));
+            }
+            Ok((store.database_path(), provider))
+        })
+        .map_err(rag::RagGenerationCommandError::from_data_error)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = open_background_connection(&database_path)?;
+        let storage = llm::SystemSecretStorage;
+        let http = llm::CurlHttpClient;
+        rag::generate_grounded_answer(&mut conn, &provider, &storage, &http, request)
+    })
+    .await
+    .map_err(|_| {
+        rag::RagGenerationCommandError::from_data_error(DataError::State(
+            "Фоновая RAG generation не завершена".to_string(),
+        ))
+    })?
+    .map_err(rag::RagGenerationCommandError::from_data_error)
 }
 
 #[tauri::command]
@@ -6441,6 +6550,16 @@ pub fn rename_note(
 ) -> Result<NoteDto, String> {
     state
         .with_store(|store| store.rename_note(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn set_note_tag(
+    request: SetNoteTagRequest,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, String> {
+    state
+        .with_store(|store| store.set_note_tag(request))
         .map_err(command_error)
 }
 
@@ -7962,6 +8081,54 @@ mod tests {
             .expect("tag persists after restart");
         assert_eq!(persisted.name, "Проекты");
         assert_eq!(persisted.custom_color.as_deref(), Some("#7C5CF0"));
+    }
+
+    #[test]
+    fn note_tag_assignment_changes_only_the_link_and_persists() {
+        let mut store = temp_store();
+        let dir = store.base_dir.clone();
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Заметка".to_string(),
+                note_date: "2026-09-22".to_string(),
+            })
+            .expect("note");
+        let tag = store
+            .create_tag(CreateTagRequest {
+                name: "Проверка".to_string(),
+                color: "green".to_string(),
+                custom_color: None,
+            })
+            .expect("tag");
+        let assigned = store
+            .set_note_tag(SetNoteTagRequest {
+                note_id: note.id.clone(),
+                tag_id: tag.id.clone(),
+                assigned: true,
+            })
+            .expect("assign");
+        assert!(assigned.tags.iter().any(|item| item.id == tag.id));
+        drop(store);
+        let mut reopened = DataStore::open(dir).expect("reopen");
+        assert!(reopened
+            .get_note(&note.id)
+            .expect("persisted note")
+            .tags
+            .iter()
+            .any(|item| item.id == tag.id));
+        let unassigned = reopened
+            .set_note_tag(SetNoteTagRequest {
+                note_id: note.id.clone(),
+                tag_id: tag.id.clone(),
+                assigned: false,
+            })
+            .expect("remove link");
+        assert!(!unassigned.tags.iter().any(|item| item.id == tag.id));
+        assert!(reopened
+            .list_tags(None)
+            .expect("global tags")
+            .iter()
+            .any(|item| item.id == tag.id));
     }
 
     #[test]

@@ -1,13 +1,23 @@
 import type { ReactNode } from "react";
+import type { RagMessageSource } from "../../services/ragChatService";
 import { markdownToTiptapDoc, type EditorMark, type EditorNode } from "../editor/markdownService";
+import { ragCitationLabel, splitRagCitationText } from "../rag/ragCitations";
 
 interface ChatMarkdownProps {
+  citations?: readonly RagMessageSource[];
   content: string;
+  onCitationClick?: (source: RagMessageSource) => void;
 }
 
-export function ChatMarkdown({ content }: ChatMarkdownProps) {
+interface CitationRenderContext {
+  citations: readonly RagMessageSource[];
+  onCitationClick?: (source: RagMessageSource) => void;
+}
+
+export function ChatMarkdown({ citations = [], content, onCitationClick }: ChatMarkdownProps) {
   const document = markdownToTiptapDoc(content);
-  return <div className="note-chat-markdown">{(document.content ?? []).map((node, index) => renderBlockNode(node, `b-${index}`))}</div>;
+  const citationContext = { citations, onCitationClick };
+  return <div className="note-chat-markdown">{(document.content ?? []).map((node, index) => renderBlockNode(node, `b-${index}`, citationContext))}</div>;
 }
 
 export function getNoteChatSourceTitle(title?: string) {
@@ -38,13 +48,13 @@ export function sanitizeMarkdownLinkHref(href: string) {
   }
 }
 
-function renderBlockNode(node: EditorNode, key: string): ReactNode {
+function renderBlockNode(node: EditorNode, key: string, citationContext: CitationRenderContext): ReactNode {
   if (node.type === "paragraph") {
-    return <p key={key}>{renderInlineNodes(node.content)}</p>;
+    return <p key={key}>{renderInlineNodes(node.content, citationContext)}</p>;
   }
   if (node.type === "heading") {
     const level = clampHeadingLevel(node.attrs?.level);
-    const content = renderInlineNodes(node.content);
+    const content = renderInlineNodes(node.content, citationContext);
     if (level === 1) {
       return <h1 key={key}>{content}</h1>;
     }
@@ -54,7 +64,7 @@ function renderBlockNode(node: EditorNode, key: string): ReactNode {
     return <h3 key={key}>{content}</h3>;
   }
   if (node.type === "blockquote") {
-    return <blockquote key={key}>{renderBlockChildren(node.content, key)}</blockquote>;
+    return <blockquote key={key}>{renderBlockChildren(node.content, key, citationContext)}</blockquote>;
   }
   if (node.type === "codeBlock") {
     return (
@@ -67,22 +77,22 @@ function renderBlockNode(node: EditorNode, key: string): ReactNode {
     return <hr key={key} />;
   }
   if (node.type === "bulletList") {
-    return <ul key={key}>{renderBlockChildren(node.content, key)}</ul>;
+    return <ul key={key}>{renderBlockChildren(node.content, key, citationContext)}</ul>;
   }
   if (node.type === "orderedList") {
-    return <ol key={key}>{renderBlockChildren(node.content, key)}</ol>;
+    return <ol key={key}>{renderBlockChildren(node.content, key, citationContext)}</ol>;
   }
   if (node.type === "taskList") {
-    return <ul className="note-chat-task-list" key={key}>{renderBlockChildren(node.content, key)}</ul>;
+    return <ul className="note-chat-task-list" key={key}>{renderBlockChildren(node.content, key, citationContext)}</ul>;
   }
   if (node.type === "listItem") {
-    return <li key={key}>{renderBlockChildren(node.content, key)}</li>;
+    return <li key={key}>{renderBlockChildren(node.content, key, citationContext)}</li>;
   }
   if (node.type === "taskItem") {
     return (
       <li className="note-chat-task-item" key={key}>
         <input checked={Boolean(node.attrs?.checked)} readOnly type="checkbox" />
-        <span>{renderBlockChildren(node.content, key)}</span>
+        <span>{renderBlockChildren(node.content, key, citationContext)}</span>
       </li>
     );
   }
@@ -90,39 +100,39 @@ function renderBlockNode(node: EditorNode, key: string): ReactNode {
     return (
       <div className="note-chat-table-wrap" key={key}>
         <table>
-          <tbody>{renderBlockChildren(node.content, key)}</tbody>
+          <tbody>{renderBlockChildren(node.content, key, citationContext)}</tbody>
         </table>
       </div>
     );
   }
   if (node.type === "tableRow") {
-    return <tr key={key}>{renderBlockChildren(node.content, key)}</tr>;
+    return <tr key={key}>{renderBlockChildren(node.content, key, citationContext)}</tr>;
   }
   if (node.type === "tableHeader") {
-    return <th key={key}>{renderBlockChildren(node.content, key)}</th>;
+    return <th key={key}>{renderBlockChildren(node.content, key, citationContext)}</th>;
   }
   if (node.type === "tableCell") {
-    return <td key={key}>{renderBlockChildren(node.content, key)}</td>;
+    return <td key={key}>{renderBlockChildren(node.content, key, citationContext)}</td>;
   }
   if (node.type === "callout") {
     return (
       <div className="note-chat-callout" key={key}>
-        {renderBlockChildren(node.content, key)}
+        {renderBlockChildren(node.content, key, citationContext)}
       </div>
     );
   }
   if (node.type === "detailsBlock") {
     return (
       <details key={key} open={Boolean(node.attrs?.open)}>
-        {renderBlockChildren(node.content, key)}
+        {renderBlockChildren(node.content, key, citationContext)}
       </details>
     );
   }
   if (node.type === "detailsSummary") {
-    return <summary key={key}>{renderInlineNodes(node.content)}</summary>;
+    return <summary key={key}>{renderInlineNodes(node.content, citationContext)}</summary>;
   }
   if (node.type === "detailsContent") {
-    return <div key={key}>{renderBlockChildren(node.content, key)}</div>;
+    return <div key={key}>{renderBlockChildren(node.content, key, citationContext)}</div>;
   }
   if (node.type === "formulaBlock") {
     return (
@@ -132,17 +142,40 @@ function renderBlockNode(node: EditorNode, key: string): ReactNode {
     );
   }
 
-  return <p key={key}>{renderInlineNodes(node.content) || nodeText(node)}</p>;
+  return <p key={key}>{renderInlineNodes(node.content, citationContext) || nodeText(node)}</p>;
 }
 
-function renderBlockChildren(nodes: EditorNode[] | undefined, prefix: string) {
-  return (nodes ?? []).map((child, index) => renderBlockNode(child, `${prefix}-${index}`));
+function renderBlockChildren(nodes: EditorNode[] | undefined, prefix: string, citationContext: CitationRenderContext) {
+  return (nodes ?? []).map((child, index) => renderBlockNode(child, `${prefix}-${index}`, citationContext));
 }
 
-function renderInlineNodes(nodes: EditorNode[] | undefined): ReactNode {
+function renderInlineNodes(nodes: EditorNode[] | undefined, citationContext: CitationRenderContext): ReactNode {
   return (nodes ?? []).map((node, index) => {
     if (node.type === "text") {
-      return applyInlineMarks(node.text ?? "", node.marks ?? [], `i-${index}`);
+      const marks = node.marks ?? [];
+      const segments = splitRagCitationText(
+        node.text ?? "",
+        citationContext.citations,
+        marks.some((mark) => mark.type === "code"),
+      );
+      return segments.map((segment, segmentIndex) => {
+        const key = `i-${index}-${segmentIndex}`;
+        if (segment.kind === "text") {
+          return applyInlineMarks(segment.text, marks, key);
+        }
+        return (
+          <button
+            aria-label={ragCitationLabel(segment.source)}
+            className="rag-citation"
+            key={key}
+            onClick={() => citationContext.onCitationClick?.(segment.source)}
+            title={`${ragCitationLabel(segment.source)}\n${segment.source.snippet}`}
+            type="button"
+          >
+            {segment.source.citationNumber}
+          </button>
+        );
+      });
     }
     if (node.type === "noteMention") {
       return (

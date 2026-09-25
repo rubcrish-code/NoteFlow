@@ -287,6 +287,51 @@
   min-width: 156px;
 }
 
+.model-discovery-field {
+  align-items: stretch;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.model-discovery-field .field-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.model-discovery-select,
+.model-discovery-manual {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-discovery-select > span,
+.model-discovery-manual > span {
+  color: var(--tsoft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-discovery-field select,
+.model-discovery-field input {
+  min-width: 0;
+  width: 100%;
+}
+
+.model-discovery-refresh {
+  justify-self: start;
+  min-height: var(--control-height);
+}
+
+.model-discovery-status {
+  margin-top: 0;
+}
+
+.model-discovery-status.error {
+  color: var(--danger);
+}
+
 .model-option-list {
   display: flex;
   flex-wrap: wrap;
@@ -2405,7 +2450,6 @@
   width: 2px;
 }
 
-.ed-page-frame:hover .editor-page-resize::before,
 .editor-page-resize:hover::before,
 .editor-page-resize:focus-visible::before,
 .editor-page-resize.dragging::before {

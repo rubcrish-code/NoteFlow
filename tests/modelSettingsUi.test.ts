@@ -143,15 +143,17 @@ describe("unified model settings UI", () => {
   });
 
   it("loads semantic provider models with a typed command and preserves manual entry", () => {
-    assert.match(serviceSource, /invoke<EmbeddingModelListResult>\("list_embedding_models"/);
+    assert.match(serviceSource, /invoke<EmbeddingModelListResultDto>\("list_embedding_models"/);
     assert.match(semanticSource, /embeddingService\.listEmbeddingModels/);
-    assert.match(semanticSource, /Загружаем модели…/);
-    assert.match(semanticSource, /disabled=\{isLoadingModels\}/);
+    assert.match(semanticSource, /<ModelDiscoveryField/);
+    assert.match(sharedSource, /Получить список моделей/);
+    assert.match(sharedSource, /Загружаем модели…/);
+    assert.match(sharedSource, /state === "loading"/);
+    assert.match(sharedSource, /Model ID вручную/);
     assert.match(semanticSource, /modelListOperationIdRef\.current !== operationId/);
     assert.match(semanticSource, /Не удалось получить список моделей\. Укажите название вручную\./);
-    assert.match(semanticSource, /placeholder="Укажите название модели"/);
-    assert.match(rustSource, /"\/api\/tags"/);
-    assert.match(rustSource, /"\/models"/);
+    assert.match(semanticSource, /manualPlaceholder="Укажите Model ID"/);
+    assert.match(rustSource, /llm::discover_model_catalog/);
     assert.match(rustSource, /timeout_seconds\.clamp\(5, 15\)/);
     assert.match(rustSource, /Эта модель не поддерживает смысловой поиск/);
   });

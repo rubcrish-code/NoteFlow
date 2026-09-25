@@ -40,7 +40,7 @@ describe("LLM provider frontend contract", () => {
     const source = readFileSync("src/features/settings/SettingsPage.tsx", "utf8");
 
     assert.match(source, /Проверить/);
-    assert.match(source, /Получить модели/);
+    assert.match(source, /<ModelDiscoveryField/);
     assert.match(source, /Не удалось проверить подключение/);
     assert.match(source, /connection-note/);
   });
@@ -58,7 +58,7 @@ describe("LLM provider frontend contract", () => {
     assert.match(source, /loadingModelsProviderId/);
     assert.match(source, /type StorageAction = "default" \| "delete" \| "key" \| "save" \| null/);
     assert.match(source, /disabled=\{isTestingConnection\}/);
-    assert.match(source, /disabled=\{isLoadingModels\}/);
+    assert.match(source, /state=\{modelDiscoveryState\}/);
     assert.match(source, /networkOperation\.timeoutMs \+ 250/);
     assert.match(source, /ignoreTimeout: true/);
     assert.match(source, /isLlmNetworkOperationActiveById/);
@@ -145,7 +145,7 @@ describe("LLM provider frontend contract", () => {
     const frontendSource = readFileSync("src/services/llmProviderService.ts", "utf8");
     const llmSource = readFileSync("src-tauri/src/llm.rs", "utf8");
 
-    assert.match(frontendSource, /if \(!import\.meta\.env\.DEV\) \{\s*return;\s*\}/);
+    assert.match(frontendSource, /if \(!import\.meta\.env\?\.DEV\) \{\s*return;\s*\}/);
     assert.match(frontendSource, /console\.debug\("\[NoteFlow LLM\]", event, fields\)/);
     assert.match(frontendSource, /hasApiKey: Boolean\(input\.apiKey\?\.trim\(\)\)/);
     assert.doesNotMatch(frontendSource, /console\.(?:debug|log|info|warn|error)\([^)]*input\.apiKey/);

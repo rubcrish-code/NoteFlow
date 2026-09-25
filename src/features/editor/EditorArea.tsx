@@ -12,7 +12,7 @@ import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
-import type { EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, SaveStatus } from "../../app/types";
+import type { EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, SaveStatus, TagRow } from "../../app/types";
 import { acceptNoteAiPrivacy, createNoteAiContext, getNoteAiStatus, runNoteAi, type NoteAiActionId, type NoteAiScope, type NoteAiStatus } from "../../services/noteAiService";
 import { Icon } from "../../shared/Icon";
 import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNodeView";
@@ -22,6 +22,9 @@ import { runtimeAssetUrl } from "./assetUri";
 import { InteractiveFileAttachment } from "./FileAttachmentNodeView";
 import { FormattingToolbar } from "./FormattingToolbar";
 import { NoteMenuPopover } from "./NoteMenuPopover";
+import { InlineNoteTitle } from "./InlineNoteTitle";
+import { NoteTagsInline } from "./NoteTagsInline";
+import type { TagEditorValue } from "../tags/TagEditorModal";
 import { TableToolsPopover } from "./TableToolsPopover";
 import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
 import { serializeEditorDocumentForStorage } from "./editorContentSerializer";
@@ -65,8 +68,10 @@ interface EditorAreaProps {
   onOpenAttachment: (attachmentId: string) => Promise<void>;
   onOpenNote: (noteId: string) => void;
   onOpenSettingsModels: () => void;
+  onCreateNoteTag: (noteId: string, value: TagEditorValue) => Promise<void>;
   onPickAndStoreAttachment: (kind: "file" | "image") => Promise<{ attachment: NoteAttachment; sizeLabel: string } | null>;
-  onRenameNote: (noteId: string, title: string) => void;
+  onRenameNote: (noteId: string, title: string) => Promise<void>;
+  onSetNoteTag: (noteId: string, tagId: string, assigned: boolean) => Promise<void>;
   onRevealAttachment: (attachmentId: string) => Promise<void>;
   onSelectionTextChange: (text: string) => void;
   onStoreAttachment: (
@@ -80,6 +85,7 @@ interface EditorAreaProps {
   projectOptions: string[];
   saveStatus: SaveStatus;
   semanticOpenTarget: SemanticSearchResult | null;
+  tagOptions: TagRow[];
 }
 
 interface AiSelectionSnapshot {
@@ -202,8 +208,10 @@ export function EditorArea({
   onOpenAttachment,
   onOpenNote,
   onOpenSettingsModels,
+  onCreateNoteTag,
   onPickAndStoreAttachment,
   onRenameNote,
+  onSetNoteTag,
   onRevealAttachment,
   onSelectionTextChange,
   onStoreAttachment,
@@ -213,6 +221,7 @@ export function EditorArea({
   projectOptions,
   saveStatus,
   semanticOpenTarget,
+  tagOptions,
 }: EditorAreaProps) {
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
   const [blockInsertSelection, setBlockInsertSelection] = useState<EditorInsertSelection | null>(null);
@@ -663,7 +672,6 @@ export function EditorArea({
                 onDuplicate={onDuplicateNote}
                 onExportMarkdown={onExportMarkdown}
                 onMove={onMoveNote}
-                onRename={onRenameNote}
                 onTogglePin={onTogglePin}
                 projectOptions={projectOptions}
               />
@@ -693,15 +701,15 @@ export function EditorArea({
         <div className={`ed-page-frame ${editorPageLayout.isResizing ? "resizing" : ""}`} ref={editorPageLayout.pageRef} style={editorPageLayout.pageStyle}>
           <button {...editorPageLayout.leftHandleProps} />
           <div className="ed-inner">
-            <h1 className="ed-title">{note.title}</h1>
-            <div className="ed-tags">
-              {note.tags.map((tag) => (
-                <span className={`tag tag-${tag.color}`} key={tag.name}>
-                  {tag.name}
-                </span>
-              ))}
-              {note.isNew ? <span className="note-date-chip">{note.noteDate}</span> : null}
-            </div>
+            <InlineNoteTitle key={note.id} noteId={note.id} onRename={onRenameNote} title={note.title} />
+            <NoteTagsInline
+              noteDate={note.isNew ? note.noteDate : undefined}
+              noteId={note.id}
+              onCreateTag={onCreateNoteTag}
+              onSetTag={onSetNoteTag}
+              options={tagOptions}
+              tags={note.tags}
+            />
             <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
               <TableToolsPopover editor={editor} onToast={onToast} />
               <EditorContent editor={editor} />

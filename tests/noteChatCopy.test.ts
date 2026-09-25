@@ -39,7 +39,7 @@ describe("note chat assistant copy action", () => {
     await assert.rejects(() => copyAssistantMessageText("Ответ модели", null), /Clipboard API недоступен/);
   });
 
-  it("renders copy controls only for completed assistant messages", () => {
+  it("renders icon-only copy controls for user and completed assistant messages", () => {
     const userBranchStart = noteChatSource.indexOf('message.role === "user"');
     const assistantBranchStart = noteChatSource.indexOf('<div className={`bub-a');
     assert.ok(userBranchStart >= 0);
@@ -47,15 +47,17 @@ describe("note chat assistant copy action", () => {
 
     const userBranch = noteChatSource.slice(userBranchStart, assistantBranchStart);
     assert.match(userBranch, /className="bub-u"/);
-    assert.doesNotMatch(userBranch, /note-chat-copy|handleCopyAssistantMessage|copyAssistantMessageText/);
+    assert.match(userBranch, /aria-label="Скопировать сообщение"/);
+    assert.match(userBranch, /chat-copy-icon/);
+    assert.doesNotMatch(userBranch, />Скопировать</);
 
     assert.match(noteChatSource, /message\.status === undefined \? \([\s\S]*note-chat-message-meta[\s\S]*note-chat-copy/);
     assert.match(noteChatSource, /title=\{copyTitle\(copyFeedback, message\.id\)\}/);
-    assert.match(noteChatSource, /Скопировать/);
+    assert.match(noteChatSource, /aria-label="Скопировать сообщение"/);
   });
 
   it("click handler copies only message.text and never source labels", () => {
-    const copyHandler = noteChatSource.match(/async function handleCopyAssistantMessage\(message: ChatMessage\) \{[\s\S]*?\n  \}/);
+    const copyHandler = noteChatSource.match(/async function handleCopyMessage\(message: ChatMessage\) \{[\s\S]*?\n  \}/);
 
     assert.ok(copyHandler);
     assert.match(copyHandler[0], /copyAssistantMessageText\(message\.text\)/);

@@ -165,7 +165,7 @@
 
 .settings-preference-copy {
   display: grid;
-  gap: 2px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -249,14 +249,14 @@
 .settings-title {
   font-size: var(--heading-md-size);
   line-height: var(--heading-md-line);
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--space-2);
 }
 
 .settings-subtitle {
   color: var(--text-secondary);
   font-size: var(--text-md-size);
   line-height: var(--text-md-line);
-  margin-bottom: var(--space-7);
+  margin-bottom: var(--space-8);
   max-width: 72ch;
 }
 
@@ -320,6 +320,7 @@
   font-size: var(--text-sm-size);
   line-height: var(--text-sm-line);
   max-width: 72ch;
+  margin-top: var(--space-2);
 }
 
 .model-section-action .primary-btn {

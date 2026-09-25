@@ -65,6 +65,105 @@ export function ModelStatusBadge({ busy = false, label, tone = "neutral" }: Mode
   );
 }
 
+export type ModelDiscoveryPurpose = "chat" | "embedding";
+export type ModelDiscoveryState = "idle" | "loading" | "success" | "empty" | "error";
+
+export interface ModelDiscoveryOption {
+  id: string;
+  supportsChat: boolean | null;
+  supportsEmbeddings: boolean | null;
+}
+
+export function filterModelDiscoveryOptions(
+  options: readonly ModelDiscoveryOption[],
+  purpose: ModelDiscoveryPurpose,
+) {
+  return options.filter((option) => (
+    purpose === "chat" ? option.supportsChat !== false : option.supportsEmbeddings !== false
+  ));
+}
+
+interface ModelDiscoveryFieldProps {
+  label: string;
+  manualPlaceholder: string;
+  manualValue: string;
+  onDiscover: () => void;
+  onManualChange: (value: string) => void;
+  onSelect: (value: string) => void;
+  options: readonly ModelDiscoveryOption[];
+  purpose: ModelDiscoveryPurpose;
+  state: ModelDiscoveryState;
+  statusMessage?: string;
+}
+
+export function ModelDiscoveryField({
+  label,
+  manualPlaceholder,
+  manualValue,
+  onDiscover,
+  onManualChange,
+  onSelect,
+  options,
+  purpose,
+  state,
+  statusMessage,
+}: ModelDiscoveryFieldProps) {
+  const availableOptions = filterModelDiscoveryOptions(options, purpose);
+  const selectedValue = availableOptions.some((option) => option.id === manualValue) ? manualValue : "";
+  const buttonLabel = state === "loading"
+    ? "Загружаем модели…"
+    : state === "error"
+      ? "Повторить"
+      : state === "idle"
+        ? "Получить список моделей"
+        : "Обновить список";
+
+  return (
+    <div className="field full model-discovery-field">
+      <span className="field-label">{label}</span>
+      {availableOptions.length > 0 ? (
+        <label className="model-discovery-select">
+          <span>Доступные модели</span>
+          <select
+            aria-label={`${label}: доступные модели`}
+            onChange={(event) => {
+              if (event.currentTarget.value) onSelect(event.currentTarget.value);
+            }}
+            value={selectedValue}
+          >
+            <option value="">Выберите модель</option>
+            {availableOptions.map((option) => <option key={option.id} value={option.id}>{option.id}</option>)}
+          </select>
+        </label>
+      ) : null}
+      <button
+        aria-busy={state === "loading"}
+        className="secondary-btn model-discovery-refresh"
+        disabled={state === "loading"}
+        onClick={onDiscover}
+        type="button"
+      >
+        {state === "loading" ? <span aria-hidden="true" className="button-spinner" /> : null}
+        {buttonLabel}
+      </button>
+      <label className="model-discovery-manual">
+        <span>Model ID вручную</span>
+        <input
+          onChange={(event) => onManualChange(event.currentTarget.value)}
+          placeholder={manualPlaceholder}
+          spellCheck={false}
+          value={manualValue}
+        />
+      </label>
+      {statusMessage ? (
+        <span aria-live="polite" className={`field-help model-discovery-status ${state === "error" ? "error" : ""}`}>
+          {statusMessage}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 interface SettingsModalShellProps {
   children: ReactNode;
   className?: string;

@@ -63,6 +63,20 @@ export interface EmbeddingModelListInput {
 export interface EmbeddingModelListResult {
   status: "success" | "manual";
   models: string[];
+  options: EmbeddingModelDiscoveryOption[];
+  message: string;
+}
+
+export interface EmbeddingModelDiscoveryOption {
+  id: string;
+  supportsChat: boolean | null;
+  supportsEmbeddings: boolean | null;
+}
+
+interface EmbeddingModelListResultDto {
+  status: "success" | "manual";
+  models: string[];
+  options?: EmbeddingModelDiscoveryOption[];
   message: string;
 }
 
@@ -154,8 +168,12 @@ export function testEmbeddingProvider(profileId: string) {
   return invoke<EmbeddingProviderTestResult>("test_embedding_provider", { profileId });
 }
 
-export function listEmbeddingModels(input: EmbeddingModelListInput) {
-  return invoke<EmbeddingModelListResult>("list_embedding_models", { request: input });
+export async function listEmbeddingModels(input: EmbeddingModelListInput): Promise<EmbeddingModelListResult> {
+  const result = await invoke<EmbeddingModelListResultDto>("list_embedding_models", { request: input });
+  return {
+    ...result,
+    options: result.options ?? result.models.map((id) => ({ id, supportsChat: null, supportsEmbeddings: null })),
+  };
 }
 
 export function getEmbeddingIndexStatus(profileId: string) {
