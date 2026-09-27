@@ -34,6 +34,10 @@ const MANAGED_ATTACHMENT_ROOTS: [&str; 3] = ["attachments", "images", assets::AS
 const RESTORE_STATE_FILE: &str = "restore-state.json";
 const RESTORE_COMMIT_SETTING_KEY: &str = "internal.restore.commit.v1";
 const UI_SETTINGS_KEY: &str = "ui.settings.v1";
+const FIRST_RUN_COMPLETED_KEY: &str = "onboarding.completed.v1";
+const MAX_MARKDOWN_IMPORT_FILES: usize = 32;
+const MAX_MARKDOWN_IMPORT_FILE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MARKDOWN_IMPORT_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 const NOTE_AI_PRIVACY_LOCAL_KEY: &str = "ai.note.privacy.local.v1";
 const NOTE_AI_PRIVACY_EXTERNAL_KEY: &str = "ai.note.privacy.external.v1";
 const LEGACY_TIPTAP_SIDECAR_KIND: &str = revisions::LEGACY_TIPTAP_SIDECAR_KIND;
@@ -284,6 +288,49 @@ pub struct WorkspaceSnapshotDto {
     pub data_location: DataLocationDto,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRunStateDto {
+    pub required: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRunCompletionDto {
+    pub note: NoteDto,
+    pub settings: UiSettingsDto,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompleteFirstRunRequest {
+    pub profile_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportMarkdownNoteInput {
+    pub title: String,
+    pub content_json: Value,
+    pub content_markdown: String,
+    pub content_html: String,
+    pub plain_text: String,
+    #[serde(default)]
+    pub content_sidecars: Vec<NoteContentSidecarInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportMarkdownRequest {
+    pub notes: Vec<ImportMarkdownNoteInput>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportMarkdownResultDto {
+    pub notes: Vec<NoteDto>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupContentsSummaryDto {
@@ -481,6 +528,14 @@ pub struct MoveNoteRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateProjectRequest {
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProjectRequest {
+    pub project_id: String,
     pub title: String,
     pub description: String,
 }
@@ -958,7 +1013,6 @@ impl DataStore {
         let knowledge_migration_applied = Self::run_migrations(&mut conn)?;
         recover_interrupted_restore(&base_dir, &conn)?;
         let mut store = Self { base_dir, conn };
-        store.seed_demo_data_if_needed()?;
         revisions::run_startup_maintenance(&mut store.conn, &now_iso())?;
         assets::run_startup_maintenance(&mut store.conn, &store.base_dir, &now_iso())?;
         let _ = assets::collect_garbage(&mut store.conn, &store.base_dir);
@@ -1004,6 +1058,7 @@ impl DataStore {
         Ok(knowledge_migration_applied)
     }
 
+    #[cfg(test)]
     fn seed_demo_data_if_needed(&mut self) -> DataResult<()> {
         let existing_seed = self.get_setting("seed.demo.v1")?;
         if existing_seed.is_some() {
@@ -1037,6 +1092,59 @@ impl DataStore {
             .optional()?
             .map(|value| serde_json::from_str(&value).map_err(DataError::from))
             .transpose()
+    }
+
+    fn first_run_required(&self) -> DataResult<bool> {
+        if self.get_setting(FIRST_RUN_COMPLETED_KEY)?.is_some()
+            || self.get_setting("seed.demo.v1")?.is_some()
+        {
+            return Ok(false);
+        }
+        let existing_data: i64 = self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM notes) + (SELECT COUNT(*) FROM projects)
+                    + (SELECT COUNT(*) FROM tags)",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(existing_data == 0)
+    }
+
+    fn complete_first_run(
+        &mut self,
+        request: CompleteFirstRunRequest,
+    ) -> DataResult<FirstRunCompletionDto> {
+        if !self.first_run_required()? {
+            return Err(DataError::InvalidInput(
+                "Первый запуск уже завершён".to_string(),
+            ));
+        }
+        let profile_name = normalize_required_text(&request.profile_name, "Имя профиля")?;
+        if profile_name.chars().count() > 48 {
+            return Err(DataError::InvalidInput(
+                "Имя профиля слишком длинное".to_string(),
+            ));
+        }
+        let mut settings = self.get_ui_settings()?;
+        settings.local_profile_name = profile_name;
+        let now = now_iso();
+        let note_request = CreateNoteRequest {
+            title: "Первая заметка".to_string(),
+            note_date: Utc::now().format("%Y-%m-%d").to_string(),
+        };
+        let transaction = self.conn.transaction()?;
+        let note_id = Self::insert_new_note(&transaction, &note_request, &now)?;
+        set_setting_tx(
+            &transaction,
+            UI_SETTINGS_KEY,
+            serde_json::to_value(&settings)?,
+        )?;
+        set_setting_tx(&transaction, FIRST_RUN_COMPLETED_KEY, json!(true))?;
+        transaction.commit()?;
+        knowledge::sync_note_best_effort(&mut self.conn, &note_id);
+        Ok(FirstRunCompletionDto {
+            note: self.get_note(&note_id)?,
+            settings,
+        })
     }
 
     fn get_ui_settings(&self) -> DataResult<UiSettingsDto> {
@@ -1723,18 +1831,29 @@ impl DataStore {
     }
 
     fn create_note(&mut self, request: CreateNoteRequest) -> DataResult<NoteDto> {
-        let title = normalize_required_text(&request.title, "Название заметки")?;
-        validate_iso_date(&request.note_date)?;
         let now = now_iso();
-        let note_id = Uuid::new_v4().to_string();
-        let content_json = empty_document();
         let transaction = self
             .conn
             .transaction()
             .map_err(|_| DataError::Transaction)?;
+        let note_id = Self::insert_new_note(&transaction, &request, &now)?;
+        transaction.commit().map_err(|_| DataError::Transaction)?;
+        knowledge::sync_note_best_effort(&mut self.conn, &note_id);
+        self.get_note(&note_id)
+    }
+
+    fn insert_new_note(
+        transaction: &Transaction<'_>,
+        request: &CreateNoteRequest,
+        now: &str,
+    ) -> DataResult<String> {
+        let title = normalize_required_text(&request.title, "Название заметки")?;
+        validate_iso_date(&request.note_date)?;
+        let note_id = Uuid::new_v4().to_string();
+        let content_json = empty_document();
         let default_tag_id =
-            ensure_tag_on(&transaction, "новая", "blue").map_err(|_| DataError::Transaction)?;
-        let project_id = ensure_project_on(&transaction, "Входящие", "Быстрые заметки без проекта")
+            ensure_tag_on(transaction, "новая", "blue").map_err(|_| DataError::Transaction)?;
+        let project_id = ensure_project_on(transaction, "Входящие", "Быстрые заметки без проекта")
             .map_err(|_| DataError::Transaction)?;
 
         transaction
@@ -1753,7 +1872,7 @@ impl DataStore {
                 ],
             )
             .map_err(|_| DataError::Transaction)?;
-        Self::persist_note_content_sidecars(&transaction, &note_id, &content_json, &[], &now)
+        Self::persist_note_content_sidecars(transaction, &note_id, &content_json, &[], now)
             .map_err(|_| DataError::Sidecar)?;
         transaction
             .execute(
@@ -1761,9 +1880,7 @@ impl DataStore {
                 params![note_id, default_tag_id],
             )
             .map_err(|_| DataError::Transaction)?;
-        transaction.commit().map_err(|_| DataError::Transaction)?;
-        knowledge::sync_note_best_effort(&mut self.conn, &note_id);
-        self.get_note(&note_id)
+        Ok(note_id)
     }
 
     fn update_note_content(&mut self, request: UpdateNoteContentRequest) -> DataResult<NoteDto> {
@@ -2380,6 +2497,119 @@ impl DataStore {
             .ok_or_else(|| DataError::NotFound("Проект не найден после создания".to_string()))
     }
 
+    fn update_project(&mut self, request: UpdateProjectRequest) -> DataResult<ProjectCardDto> {
+        let title = normalize_required_text(&request.title, "Название проекта")?;
+        let description = request.description.trim();
+        let updated = self.conn.execute(
+            "UPDATE projects SET title = ?1, description = ?2, updated_at = ?3
+             WHERE id = ?4 AND archived_at IS NULL",
+            params![title, description, now_iso(), request.project_id],
+        )?;
+        if updated == 0 {
+            return Err(DataError::NotFound("Проект не найден".to_string()));
+        }
+        self.list_projects(false)?
+            .into_iter()
+            .find(|project| project.id == request.project_id)
+            .ok_or_else(|| DataError::NotFound("Проект не найден".to_string()))
+    }
+
+    fn archive_project(&mut self, project_id: &str) -> DataResult<()> {
+        let updated = self.conn.execute(
+            "UPDATE projects SET archived_at = ?1, status = 'archived', updated_at = ?1
+             WHERE id = ?2 AND archived_at IS NULL",
+            params![now_iso(), project_id],
+        )?;
+        if updated == 0 {
+            return Err(DataError::NotFound("Проект не найден".to_string()));
+        }
+        Ok(())
+    }
+
+    fn import_markdown(
+        &mut self,
+        request: ImportMarkdownRequest,
+    ) -> DataResult<ImportMarkdownResultDto> {
+        if request.notes.is_empty() || request.notes.len() > MAX_MARKDOWN_IMPORT_FILES {
+            return Err(DataError::InvalidInput(
+                "Выберите от 1 до 32 Markdown-файлов".to_string(),
+            ));
+        }
+        let mut total_bytes = 0usize;
+        for note in &request.notes {
+            total_bytes = total_bytes.saturating_add(note.content_markdown.len());
+            if note.content_markdown.len() > MAX_MARKDOWN_IMPORT_FILE_BYTES
+                || total_bytes > MAX_MARKDOWN_IMPORT_TOTAL_BYTES
+            {
+                return Err(DataError::InvalidInput(
+                    "Markdown-файлы слишком большие".to_string(),
+                ));
+            }
+            normalize_required_text(&note.title, "Название заметки")?;
+            if note.content_markdown.contains("noteflow-asset://")
+                || note.content_markdown.contains("noteflow-file://")
+            {
+                return Err(DataError::InvalidInput(
+                    "Локальные вложения нельзя импортировать из Markdown".to_string(),
+                ));
+            }
+            validate_note_content_request(&UpdateNoteContentRequest {
+                note_id: String::new(),
+                expected_content_version: 0,
+                content_json: note.content_json.clone(),
+                content_markdown: note.content_markdown.clone(),
+                content_html: note.content_html.clone(),
+                plain_text: note.plain_text.clone(),
+                content_sidecars: note.content_sidecars.clone(),
+            })?;
+        }
+
+        let now = now_iso();
+        let note_date = Utc::now().format("%Y-%m-%d").to_string();
+        let transaction = self.conn.transaction()?;
+        let project_id =
+            ensure_project_on(&transaction, "Входящие", "Быстрые заметки без проекта")?;
+        let mut ids = Vec::with_capacity(request.notes.len());
+        for note in &request.notes {
+            let id = Uuid::new_v4().to_string();
+            transaction.execute(
+                "INSERT INTO notes (
+                    id, title, note_date, content_json, content_markdown, content_html, plain_text,
+                    project_id, is_favorite, icon, created_at, updated_at, revision_checkpoint_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 'doc', ?9, ?9, ?9)",
+                params![
+                    id,
+                    note.title.trim(),
+                    note_date,
+                    note.content_json.to_string(),
+                    note.content_markdown,
+                    note.content_html,
+                    note.plain_text,
+                    project_id,
+                    now
+                ],
+            )?;
+            Self::persist_note_content_sidecars(
+                &transaction,
+                &id,
+                &note.content_json,
+                &note.content_sidecars,
+                &now,
+            )?;
+            ids.push(id);
+        }
+        transaction.commit()?;
+        for id in &ids {
+            knowledge::sync_note_best_effort(&mut self.conn, id);
+        }
+        Ok(ImportMarkdownResultDto {
+            notes: ids
+                .iter()
+                .map(|id| self.get_note(id))
+                .collect::<DataResult<_>>()?,
+        })
+    }
+
     fn list_tags(&self, query: Option<String>) -> DataResult<Vec<TagRowDto>> {
         let trimmed_query = query.unwrap_or_default().trim().to_lowercase();
         let like_query = format!("%{trimmed_query}%");
@@ -2555,15 +2785,17 @@ impl DataStore {
     }
 
     fn restore_archive_item(&mut self, item_id: &str, kind: &str) -> DataResult<()> {
-        let table = if kind == "Проект" {
-            "projects"
+        if kind == "Проект" {
+            self.conn.execute(
+                "UPDATE projects SET archived_at = NULL, status = 'active', updated_at = ?1 WHERE id = ?2",
+                params![now_iso(), item_id],
+            )?;
         } else {
-            "notes"
-        };
-        self.conn.execute(
-            &format!("UPDATE {table} SET archived_at = NULL, updated_at = ?1 WHERE id = ?2"),
-            params![now_iso(), item_id],
-        )?;
+            self.conn.execute(
+                "UPDATE notes SET archived_at = NULL, updated_at = ?1 WHERE id = ?2",
+                params![now_iso(), item_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -3686,6 +3918,7 @@ impl DataStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    #[cfg(test)]
     fn rebuild_search_index(&mut self) -> DataResult<()> {
         search::rebuild_search_index(&mut self.conn)?;
         Ok(())
@@ -4191,6 +4424,7 @@ fn migrations() -> Vec<Migration> {
     ]
 }
 
+#[cfg(test)]
 fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
     let now = now_iso();
     let projects = [
@@ -4242,6 +4476,7 @@ fn seed_projects(transaction: &Transaction<'_>) -> DataResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn seed_tags(transaction: &Transaction<'_>) -> DataResult<()> {
     let now = now_iso();
     let tags = [
@@ -4263,6 +4498,7 @@ fn seed_tags(transaction: &Transaction<'_>) -> DataResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
     let now = now_iso();
     let notes = [
@@ -4405,6 +4641,7 @@ fn seed_notes(transaction: &Transaction<'_>) -> DataResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 struct SeedNote {
     id: &'static str,
     title: &'static str,
@@ -5606,6 +5843,7 @@ fn empty_document() -> Value {
     json!({ "type": "doc", "content": [{ "type": "paragraph" }] })
 }
 
+#[cfg(test)]
 fn document_from_text(text: &str) -> Value {
     let content: Vec<Value> = text
         .split("\n\n")
@@ -5620,6 +5858,7 @@ fn document_from_text(text: &str) -> Value {
     }
 }
 
+#[cfg(test)]
 fn markdown_to_plain_text(markdown: &str) -> String {
     markdown
         .lines()
@@ -5641,6 +5880,7 @@ fn markdown_to_plain_text(markdown: &str) -> String {
         .join(" ")
 }
 
+#[cfg(test)]
 fn plain_text_to_html(text: &str) -> String {
     if text.trim().is_empty() {
         String::new()
@@ -5649,6 +5889,7 @@ fn plain_text_to_html(text: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -6639,6 +6880,56 @@ pub fn create_project(
 }
 
 #[tauri::command]
+pub fn update_project(
+    request: UpdateProjectRequest,
+    state: State<'_, AppState>,
+) -> Result<ProjectCardDto, String> {
+    state
+        .with_store(|store| store.update_project(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn archive_project(project_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .with_store(|store| store.archive_project(&project_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn get_first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateDto, String> {
+    state
+        .with_store(|store| {
+            store
+                .first_run_required()
+                .map(|required| FirstRunStateDto { required })
+        })
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn complete_first_run(
+    request: CompleteFirstRunRequest,
+    state: State<'_, AppState>,
+) -> Result<FirstRunCompletionDto, String> {
+    state
+        .with_store(|store| store.complete_first_run(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn import_markdown(
+    request: ImportMarkdownRequest,
+    state: State<'_, AppState>,
+) -> Result<ImportMarkdownResultDto, String> {
+    with_store_blocking(Arc::clone(&state.store), move |store| {
+        store.import_markdown(request)
+    })
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
 pub fn list_tags(
     query: Option<String>,
     state: State<'_, AppState>,
@@ -6844,7 +7135,9 @@ mod tests {
 
     fn temp_store() -> DataStore {
         let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));
-        DataStore::open(dir).expect("store opens")
+        let mut store = DataStore::open(dir).expect("store opens");
+        store.seed_demo_data_if_needed().expect("seed test fixture");
+        store
     }
 
     fn temp_store_dir() -> PathBuf {
@@ -7027,6 +7320,216 @@ mod tests {
                 plain_text: content.to_string(),
             })
             .expect("save note")
+    }
+
+    fn markdown_import_input(title: &str, markdown: &str) -> ImportMarkdownNoteInput {
+        ImportMarkdownNoteInput {
+            title: title.to_string(),
+            content_json: document_from_text(markdown),
+            content_markdown: markdown.to_string(),
+            content_html: format!("<p>{markdown}</p>"),
+            plain_text: markdown.to_string(),
+            content_sidecars: vec![],
+        }
+    }
+
+    #[test]
+    fn clean_profile_starts_without_demo_and_first_run_persists() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open clean profile");
+        assert!(store.first_run_required().expect("first run state"));
+        assert!(store.list_notes(None, false).expect("notes").is_empty());
+        assert!(store.list_projects(false).expect("projects").is_empty());
+
+        let completion = store
+            .complete_first_run(CompleteFirstRunRequest {
+                profile_name: "Рубен".to_string(),
+            })
+            .expect("complete first run");
+        assert_eq!(completion.note.title, "Первая заметка");
+        assert_eq!(completion.settings.local_profile_name, "Рубен");
+        let note_id = completion.note.id;
+        drop(store);
+
+        let reopened = DataStore::open(dir).expect("reopen profile");
+        assert!(!reopened.first_run_required().expect("first run state"));
+        assert_eq!(
+            reopened
+                .get_ui_settings()
+                .expect("settings")
+                .local_profile_name,
+            "Рубен"
+        );
+        assert_eq!(reopened.list_notes(None, false).expect("notes").len(), 1);
+        assert_eq!(
+            reopened.get_note(&note_id).expect("first note").title,
+            "Первая заметка"
+        );
+    }
+
+    #[test]
+    fn first_run_failure_rolls_back_note_and_settings() {
+        let mut store = DataStore::open(temp_store_dir()).expect("open clean profile");
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_first_run BEFORE INSERT ON app_settings
+             WHEN NEW.key = 'onboarding.completed.v1'
+             BEGIN SELECT RAISE(ABORT, 'first run fault'); END;",
+            )
+            .expect("install fault");
+        assert!(store
+            .complete_first_run(CompleteFirstRunRequest {
+                profile_name: "Тест".to_string(),
+            })
+            .is_err());
+        assert!(store.first_run_required().expect("first run state"));
+        assert!(store.list_notes(None, false).expect("notes").is_empty());
+        assert_ne!(
+            store
+                .get_ui_settings()
+                .expect("settings")
+                .local_profile_name,
+            "Тест"
+        );
+    }
+
+    #[test]
+    fn project_edit_archive_restore_preserves_note_relationship_after_reopen() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open profile");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Проект".to_string(),
+                description: "Начало".to_string(),
+            })
+            .expect("create project");
+        let note = create_note_with_content(&mut store, "Связанная", "Текст проекта");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: note.id.clone(),
+                project_title: project.title.clone(),
+            })
+            .expect("move note");
+        let updated = store
+            .update_project(UpdateProjectRequest {
+                project_id: project.id.clone(),
+                title: "Переименован".to_string(),
+                description: "Новое описание".to_string(),
+            })
+            .expect("update project");
+        assert_eq!(updated.description, "Новое описание");
+        assert_eq!(
+            store.get_note(&note.id).expect("note").project_id,
+            Some(project.id.clone())
+        );
+        store.archive_project(&project.id).expect("archive project");
+        assert!(!store
+            .list_projects(false)
+            .expect("active projects")
+            .iter()
+            .any(|p| p.id == project.id));
+        assert!(store
+            .list_archive(None)
+            .expect("archive")
+            .iter()
+            .any(|p| p.id == project.id));
+        assert_eq!(
+            store.get_note(&note.id).expect("note preserved").project_id,
+            Some(project.id.clone())
+        );
+        store
+            .restore_archive_item(&project.id, "Проект")
+            .expect("restore project");
+        drop(store);
+
+        let reopened = DataStore::open(dir).expect("reopen profile");
+        let restored = reopened
+            .list_projects(false)
+            .expect("projects")
+            .into_iter()
+            .find(|p| p.id == project.id)
+            .expect("restored project");
+        assert_eq!(restored.title, "Переименован");
+        assert_eq!(restored.status, "active");
+        assert_eq!(restored.notes, 1);
+        assert_eq!(
+            reopened.get_note(&note.id).expect("linked note").project_id,
+            Some(project.id)
+        );
+    }
+
+    #[test]
+    fn markdown_batch_import_keeps_duplicates_distinct_and_persists() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open profile");
+        let existing = create_note_with_content(&mut store, "Одинаковая", "Старый текст");
+        let result = store
+            .import_markdown(ImportMarkdownRequest {
+                notes: vec![
+                    markdown_import_input("Одинаковая", "# Русский заголовок\n\nПривет 😊"),
+                    markdown_import_input("Одинаковая", ""),
+                ],
+            })
+            .expect("import batch");
+        assert_eq!(result.notes.len(), 2);
+        assert_ne!(result.notes[0].id, result.notes[1].id);
+        assert_ne!(result.notes[0].id, existing.id);
+        assert_eq!(
+            store
+                .get_note(&existing.id)
+                .expect("existing note")
+                .content_markdown,
+            "Старый текст"
+        );
+        let ids: Vec<_> = result.notes.iter().map(|note| note.id.clone()).collect();
+        drop(store);
+
+        let reopened = DataStore::open(dir).expect("reopen profile");
+        assert_eq!(
+            reopened
+                .get_note(&ids[0])
+                .expect("imported note")
+                .content_markdown,
+            "# Русский заголовок\n\nПривет 😊"
+        );
+        assert_eq!(
+            reopened
+                .get_note(&ids[1])
+                .expect("empty note")
+                .content_markdown,
+            ""
+        );
+        assert_eq!(
+            reopened
+                .get_note(&existing.id)
+                .expect("original note")
+                .content_markdown,
+            "Старый текст"
+        );
+    }
+
+    #[test]
+    fn markdown_batch_import_rolls_back_all_notes_on_sidecar_failure() {
+        let mut store = DataStore::open(temp_store_dir()).expect("open profile");
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_second_import BEFORE INSERT ON note_content_sidecars
+             WHEN (SELECT COUNT(*) FROM notes) = 2
+             BEGIN SELECT RAISE(ABORT, 'sidecar fault'); END;",
+            )
+            .expect("install fault");
+        assert!(store
+            .import_markdown(ImportMarkdownRequest {
+                notes: vec![
+                    markdown_import_input("A", "one"),
+                    markdown_import_input("B", "two")
+                ],
+            })
+            .is_err());
+        assert!(store.list_notes(None, false).expect("notes").is_empty());
+        assert!(store.list_projects(false).expect("projects").is_empty());
     }
 
     fn remove_newer_backup_fields(manifest: &mut Value, version: u32) {
@@ -9178,7 +9681,12 @@ mod tests {
     fn knowledge_migration_backfills_an_existing_v8_database() {
         let dir = temp_store_dir();
         {
-            let store = DataStore::open(dir.clone()).expect("initial store");
+            let mut store = DataStore::open(dir.clone()).expect("initial store");
+            create_note_with_content(
+                &mut store,
+                "Legacy knowledge",
+                "# Заметка\n\nСодержимое для проверки восстановления индекса знаний.",
+            );
             store
                 .conn
                 .execute("DELETE FROM schema_migrations WHERE version = 9", [])

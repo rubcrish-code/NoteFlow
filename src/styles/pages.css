@@ -374,7 +374,7 @@
 }
 
 .project-card:hover,
-.project-card:focus-visible {
+.project-card:focus-within {
   background: color-mix(in srgb, var(--surface-hover) 72%, transparent);
   box-shadow: none;
   outline: 0;
@@ -447,9 +447,46 @@
 }
 
 .project-card:hover .project-open-icon,
-.project-card:focus-visible .project-open-icon {
+.project-card:focus-within .project-open-icon {
   opacity: 1;
   transform: translateX(0);
+}
+
+.project-card {
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+}
+
+.project-card-open {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: 38px minmax(0, 1fr) 20px;
+  min-width: 0;
+  padding: var(--space-3) 0;
+  text-align: left;
+}
+
+.project-card-open:focus-visible,
+.project-menu-trigger:focus-visible {
+  border-radius: var(--radius-control);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.project-menu-trigger {
+  align-self: center;
+}
+
+.first-run-note {
+  color: var(--text-secondary);
+  font-size: var(--text-sm-size);
+  line-height: var(--text-sm-line);
+  margin: 0;
 }
 
 .archive-search,

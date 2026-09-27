@@ -9,6 +9,7 @@ import { EditorArea } from "../features/editor/EditorArea";
 import { MainSidebar } from "../features/navigation/MainSidebar";
 import type { PageShellSidebarProps } from "../features/navigation/PageShell";
 import { NewNoteModal } from "../features/notes/NewNoteModal";
+import { FirstRunModal } from "../features/notes/FirstRunModal";
 import { NoteListPanel, type NoteSearchStatus } from "../features/notes/NoteListPanel";
 import { NoteChatPanel } from "../features/note-chat/NoteChatPanel";
 import type { TagEditorValue } from "../features/tags/TagEditorModal";
@@ -108,6 +109,9 @@ export function AppShell() {
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
   const [isDataLoading, setIsDataLoading] = useState(true);
+  const [isSettingsLoading, setIsSettingsLoading] = useState(true);
+  const [firstRunRequired, setFirstRunRequired] = useState(false);
+  const [firstRunDismissed, setFirstRunDismissed] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [editorSelectionText, setEditorSelectionText] = useState("");
   const [isFocusMode, setIsFocusMode] = useState(false);
@@ -189,6 +193,8 @@ export function AppShell() {
           settingsHydratedRef.current = true;
           showToast(`Не удалось открыть настройки интерфейса: ${String(error)}`);
         }
+      } finally {
+        if (!isCancelled) setIsSettingsLoading(false);
       }
     }
 
@@ -212,11 +218,12 @@ export function AppShell() {
 
     async function loadInitialWorkspace() {
       try {
-        const snapshot = await dataService.loadWorkspace();
+        const [snapshot, firstRun] = await Promise.all([dataService.loadWorkspace(), dataService.getFirstRunState()]);
         if (isCancelled) {
           return;
         }
         applyWorkspaceSnapshot(snapshot);
+        setFirstRunRequired(firstRun.required);
       } catch (error) {
         showToast(`Не удалось открыть локальную базу: ${String(error)}`);
       } finally {
@@ -717,6 +724,17 @@ export function AppShell() {
     }
   }
 
+  async function completeFirstRun(name: string) {
+    await flushUiSettings();
+    const completion = await dataService.completeFirstRun(name);
+    updateUiSettings({ localProfileName: completion.localProfileName });
+    setNotes((currentNotes) => sortNotesForDisplay([completion.note, ...currentNotes]));
+    setActiveNoteId(completion.note.id);
+    setFirstRunRequired(false);
+    void refreshSecondaryData().catch(() => showToast("Заметка создана, но список проектов обновится после перезапуска"));
+    showToast("Первая заметка создана");
+  }
+
   async function openNote(noteId: string, archivedHint?: boolean, failureMessage?: string) {
     if (!await tryFlushPendingSave()) return false;
     const archivedResult = archivedHint ?? searchResults.find((result) => result.noteId === noteId)?.archived;
@@ -857,13 +875,28 @@ export function AppShell() {
   }
 
   function createProject(title: string, description: string) {
-    void dataService
-      .createProject(title, description)
-      .then((project) => {
-        setProjects((currentProjects) => [...currentProjects, project]);
-        showToast("Проект создан");
-      })
-      .catch((error) => showToast(`Не удалось создать проект: ${String(error)}`));
+    return dataService.createProject(title, description).then((project) => {
+      setProjects((currentProjects) => [...currentProjects, project]);
+      showToast("Проект создан");
+      return project;
+    });
+  }
+
+  function updateProject(projectId: string, title: string, description: string) {
+    return dataService.updateProject(projectId, title, description).then((project) => {
+      setProjects((currentProjects) => currentProjects.map((item) => item.id === project.id ? project : item));
+      setNotes((currentNotes) => currentNotes.map((note) => note.projectId === project.id ? { ...note, project: project.title } : note));
+      setSearchRevision((revision) => revision + 1);
+      showToast("Проект обновлён");
+      return project;
+    });
+  }
+
+  async function archiveProject(projectId: string) {
+    await dataService.archiveProject(projectId);
+    await refreshSecondaryData();
+    setSearchRevision((revision) => revision + 1);
+    showToast("Проект архивирован. Заметки остались на месте");
   }
 
   async function persistTag(value: TagEditorValue) {
@@ -1033,6 +1066,19 @@ export function AppShell() {
     return result;
   }
 
+  async function importMarkdown(notesToImport: Parameters<typeof dataService.importMarkdown>[0]) {
+    if (!await tryFlushPendingSave()) throw new Error("Сначала сохраните текущую заметку");
+    const importedNotes = await dataService.importMarkdown(notesToImport);
+    setNotes((currentNotes) => sortNotesForDisplay([...importedNotes, ...currentNotes]));
+    setActiveNoteId(importedNotes[0]?.id ?? activeNoteId);
+    setQuery("");
+    activateSection("notes");
+    void refreshSecondaryData().catch(() => showToast("Импорт завершён, но список проектов обновится после перезапуска"));
+    setSearchRevision((revision) => revision + 1);
+    showToast(`Импортировано заметок: ${importedNotes.length}`);
+    return importedNotes.length;
+  }
+
   function toggleFocusMode() {
     setIsFocusMode((currentValue) => {
       const nextValue = !currentValue;
@@ -1051,11 +1097,14 @@ export function AppShell() {
   const sharedFooter = (
     <SharedOverlays
       isNewNoteModalOpen={isNewNoteModalOpen}
+      isFirstRunOpen={firstRunRequired && !firstRunDismissed && !isDataLoading && !isSettingsLoading}
       isProfileNameModalOpen={isProfileNameModalOpen}
       localProfileName={uiSettings.localProfileName}
       onCloseNewNote={() => setIsNewNoteModalOpen(false)}
       onCloseProfileName={() => setIsProfileNameModalOpen(false)}
       onCreateNote={createNote}
+      onCompleteFirstRun={completeFirstRun}
+      onDismissFirstRun={() => setFirstRunDismissed(true)}
       onSaveProfileName={(localProfileName) => {
         updateUiSettings({ localProfileName });
         setIsProfileNameModalOpen(false);
@@ -1113,7 +1162,7 @@ export function AppShell() {
     return renderLazyFeaturePage(
       "projects",
       "проекты",
-      <LazyProjectsPage onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} projects={projects} sidebar={sharedPageSidebar} />,
+      <LazyProjectsPage onArchiveProject={archiveProject} onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} onUpdateProject={updateProject} projects={projects} sidebar={sharedPageSidebar} />,
     );
   }
 
@@ -1201,6 +1250,7 @@ export function AppShell() {
         onExportCurrentNote={exportCurrentNoteZip}
         onExportCurrentProject={exportCurrentProjectZip}
         onImportBackup={importBackup}
+        onImportMarkdown={importMarkdown}
         onEditLocalProfile={() => setIsProfileNameModalOpen(true)}
         onThemeChange={(nextTheme) => updateUiSettings({ theme: nextTheme })}
         onToast={showToast}
@@ -1372,6 +1422,7 @@ function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFram
 }
 
 interface SharedOverlaysProps {
+  isFirstRunOpen: boolean;
   isNewNoteModalOpen: boolean;
   isProfileNameModalOpen: boolean;
   localProfileName: string;
@@ -1380,12 +1431,15 @@ interface SharedOverlaysProps {
   onCloseNewNote: () => void;
   onCloseProfileName: () => void;
   onCreateNote: (title: string, noteDate: string) => void;
+  onCompleteFirstRun: (name: string) => Promise<void>;
+  onDismissFirstRun: () => void;
   onSaveProfileName: (name: string) => void;
 }
 
-function SharedOverlays({ isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onSaveProfileName }: SharedOverlaysProps) {
+function SharedOverlays({ isFirstRunOpen, isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onCompleteFirstRun, onDismissFirstRun, onSaveProfileName }: SharedOverlaysProps) {
   return (
     <>
+      <FirstRunModal onClose={onDismissFirstRun} onCreate={onCompleteFirstRun} open={isFirstRunOpen} />
       <NewNoteModal isOpen={isNewNoteModalOpen} onClose={onCloseNewNote} onCreate={onCreateNote} />
       <LocalProfileModal name={localProfileName} onClose={onCloseProfileName} onSave={onSaveProfileName} open={isProfileNameModalOpen} />
       <Toast action={toastAction} message={toastMessage} />

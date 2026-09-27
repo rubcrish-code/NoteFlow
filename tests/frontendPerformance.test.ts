@@ -132,6 +132,7 @@ describe("P1.4 lazy loading behavior", () => {
         workspaceLoads += 1;
         return { notes: [note], projects: [], tags: [], archiveItems: [], dataLocation: { dataDir: "", databasePath: "" } };
       }
+      if (command === "get_first_run_state") return { required: false };
       if (command === "get_ui_settings" || command === "update_ui_settings") return DEFAULT_UI_SETTINGS;
       if (command === "update_note_content") {
         saves += 1;

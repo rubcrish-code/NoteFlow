@@ -5,6 +5,7 @@ import type { ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, Note
 import { buildEditorDocumentFromStoredNoteContent } from "../features/editor/editorContentSerializer";
 import { createNotePreview } from "../features/notes/notePreview";
 import { normalizeNoteIconKey } from "../shared/noteIconRegistry";
+import type { PreparedMarkdownNote } from "../features/settings/markdownImport";
 
 export type NotePersistenceErrorCode = "invalid_input" | "not_found" | "revision" | "serialization" | "sidecar" | "stale_write" | "transaction";
 const notePersistenceErrorCodes = new Set<NotePersistenceErrorCode>([
@@ -63,6 +64,11 @@ export interface WorkspaceSnapshot {
   notes: Note[];
   projects: ProjectCard[];
   tags: TagRow[];
+}
+
+export interface FirstRunCompletion {
+  note: Note;
+  localProfileName: string;
 }
 
 export interface ExportResult {
@@ -409,6 +415,17 @@ export async function loadWorkspace() {
   return mapWorkspace(await invoke<WorkspaceSnapshotDto>("load_workspace"));
 }
 
+export async function getFirstRunState() {
+  return await invoke<{ required: boolean }>("get_first_run_state");
+}
+
+export async function completeFirstRun(profileName: string): Promise<FirstRunCompletion> {
+  const result = await invoke<{ note: NoteDto; settings: { localProfileName: string } }>("complete_first_run", {
+    request: { profileName },
+  });
+  return { note: mapNote(result.note), localProfileName: result.settings.localProfileName };
+}
+
 export async function listNotes(query: string, includeArchived = false) {
   const notes = await invoke<NoteDto[]>("list_notes", {
     includeArchived,
@@ -510,6 +527,23 @@ export async function listProjects(includeArchived = false) {
 
 export async function createProject(title: string, description: string) {
   return mapProject(await invoke<ProjectDto>("create_project", { request: { description, title } }));
+}
+
+export async function updateProject(projectId: string, title: string, description: string) {
+  return mapProject(await invoke<ProjectDto>("update_project", { request: { description, projectId, title } }));
+}
+
+export async function archiveProject(projectId: string) {
+  await invoke<void>("archive_project", { projectId });
+}
+
+export async function importMarkdown(notes: readonly PreparedMarkdownNote[]) {
+  const result = await invoke<{ notes: NoteDto[] }>("import_markdown", {
+    request: {
+      notes: notes.map(({ skippedReferences: _skippedReferences, ...note }) => note),
+    },
+  });
+  return result.notes.map(mapNote);
 }
 
 export async function listTags(query = "") {

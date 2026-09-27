@@ -28,6 +28,8 @@ import {
 import type { ModelDiscoveryOption, ModelDiscoveryState } from "./ModelSettingsUi";
 import { SemanticSearchSettings } from "./SemanticSearchSettings";
 import { getSettingsLayoutMode } from "./settingsResponsive";
+import { MarkdownImportControl } from "./MarkdownImportControl";
+import type { PreparedMarkdownNote } from "./markdownImport";
 import {
   formatBackupDate,
   getBackupPreviewErrorMessage,
@@ -50,6 +52,7 @@ interface SettingsPageProps {
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
   onImportBackup: (file: File) => Promise<ImportBackupResult>;
+  onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
   onEditLocalProfile: () => void;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
@@ -149,6 +152,7 @@ export function SettingsPage({
   onExportCurrentNote,
   onExportCurrentProject,
   onImportBackup,
+  onImportMarkdown,
   onEditLocalProfile,
   onNavigate,
   onNewNote,
@@ -208,6 +212,7 @@ export function SettingsPage({
               onExportCurrentNote={onExportCurrentNote}
               onExportCurrentProject={onExportCurrentProject}
               onImportBackup={onImportBackup}
+              onImportMarkdown={onImportMarkdown}
               onToast={onToast}
             />
           ) : null}
@@ -1404,6 +1409,7 @@ interface DataSettingsProps {
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
   onImportBackup: (file: File) => Promise<ImportBackupResult>;
+  onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
   onToast: (message: string) => void;
 }
 
@@ -1433,7 +1439,7 @@ export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()
     : new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
-function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, onExportCurrentProject, onImportBackup, onToast }: DataSettingsProps) {
+function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, onExportCurrentProject, onImportBackup, onImportMarkdown, onToast }: DataSettingsProps) {
   const importInputRef = useRef<HTMLInputElement>(null);
   const importRequestIdRef = useRef(0);
   const knowledgeMoreRef = useRef<HTMLDetailsElement>(null);
@@ -1617,8 +1623,9 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
         <div className="export-action-group recovery">
           <div className="export-action-head">
             <b>Импорт и восстановление</b>
-            <span>Резервная копия NoteFlow в формате ZIP</span>
+            <span>Markdown-файлы или резервная копия NoteFlow</span>
           </div>
+          <MarkdownImportControl onImport={onImportMarkdown} />
           <button
             className="export-action secondary"
             disabled={importState.phase === "previewing" || importState.phase === "restoring"}
