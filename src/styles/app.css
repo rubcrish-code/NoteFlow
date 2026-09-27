@@ -1587,6 +1587,26 @@
   color: var(--danger);
 }
 
+.saved-retry {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  padding: 4px 6px;
+  transition: background var(--motion-fast, 120ms) ease;
+}
+
+.saved-retry:hover,
+.saved-retry:focus-visible {
+  background: var(--danger-soft, rgba(190, 55, 55, 0.09));
+}
+
+.saved-retry:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
 .empty-editor-state {
   align-items: center;
   justify-content: center;

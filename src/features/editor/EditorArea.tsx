@@ -71,6 +71,7 @@ interface EditorAreaProps {
   onCreateNoteTag: (noteId: string, value: TagEditorValue) => Promise<void>;
   onPickAndStoreAttachment: (kind: "file" | "image") => Promise<{ attachment: NoteAttachment; sizeLabel: string } | null>;
   onRenameNote: (noteId: string, title: string) => Promise<void>;
+  onRetrySave: () => void;
   onSetNoteTag: (noteId: string, tagId: string, assigned: boolean) => Promise<void>;
   onRevealAttachment: (attachmentId: string) => Promise<void>;
   onSelectionTextChange: (text: string) => void;
@@ -211,6 +212,7 @@ export function EditorArea({
   onCreateNoteTag,
   onPickAndStoreAttachment,
   onRenameNote,
+  onRetrySave,
   onSetNoteTag,
   onRevealAttachment,
   onSelectionTextChange,
@@ -644,15 +646,28 @@ export function EditorArea({
             <span>{note.project}</span>
           </div>
           <div className="ed-act">
-            <div
-              aria-label={saveStatus === "saving" ? "Сохранение" : saveStatus === "error" ? "Ошибка сохранения" : "Сохранено"}
-              className={`saved ${saveStatus === "saving" ? "saving" : ""} ${saveStatus === "error" ? "error" : ""}`}
-              data-tooltip={saveStatus === "saving" ? "Сохранение…" : saveStatus === "error" ? "Ошибка сохранения" : "Сохранено"}
-              role="status"
-            >
-              <Icon name="check" />
-              <span>{saveStatus === "saving" ? "Сохранение…" : saveStatus === "error" ? "Ошибка сохранения" : "Сохранено"}</span>
-            </div>
+            {saveStatus === "error" ? (
+              <button
+                aria-label="Не сохранено. Повторить сохранение"
+                className="saved saved-retry error"
+                data-tooltip="Повторить сохранение"
+                onClick={onRetrySave}
+                type="button"
+              >
+                <Icon name="redo" />
+                <span>Не сохранено · Повторить</span>
+              </button>
+            ) : (
+              <div
+                aria-label={saveStatus === "saving" ? "Сохранение" : "Сохранено"}
+                className={`saved ${saveStatus === "saving" ? "saving" : ""}`}
+                data-tooltip={saveStatus === "saving" ? "Сохранение…" : "Сохранено"}
+                role="status"
+              >
+                <Icon name="check" />
+                <span>{saveStatus === "saving" ? "Сохранение…" : "Сохранено"}</span>
+              </div>
+            )}
             <button className="ibtn ai" data-tooltip="Чат по заметке" onClick={onOpenChat} type="button">
               <Icon name="chat" />
               <span>Чат по заметке</span>

@@ -25,7 +25,8 @@ import { shouldTemporarilyHideNoteList } from "../shared/physicalLayout";
 import { usePhysicalViewportWidth } from "../shared/usePhysicalViewportWidth";
 import { clearLegacyUiSettings, migrateLegacyUiSettings } from "../services/legacyUiSettingsMigration";
 import { DEFAULT_UI_SETTINGS, getUiSettings, normalizeUiSettings, updateUiSettings as persistUiSettings, type UiSettings } from "../services/uiSettingsService";
-import { advancePendingSaveVersion, hasNewerPendingSave, shouldRestoreFailedSave } from "./noteAutosaveCoordinator";
+import { PendingNoteSaves } from "./noteAutosaveCoordinator";
+import { interceptCloseRequest, waitForCloseFlush } from "./closeFlush";
 import { restoreWorkspaceBackup } from "./backupImportCoordinator";
 import { LazyArchivePage, LazyProjectsPage, LazyRagChatPage, LazySettingsPage, LazyTagsPage } from "./lazyFeatures";
 import { PageShell } from "../features/navigation/PageShell";
@@ -119,8 +120,7 @@ export function AppShell() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [uiSettings, setUiSettings] = useState<UiSettings>(DEFAULT_UI_SETTINGS);
   const saveTimeoutRef = useRef<number | null>(null);
-  const pendingSaveRef = useRef<PendingNoteSave | null>(null);
-  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const pendingSavesRef = useRef(new PendingNoteSaves<PendingNoteSave>());
   const saveSequenceRef = useRef(0);
   const noteContentVersionsRef = useRef(new Map<string, number>());
   const isClosingRef = useRef(false);
@@ -337,12 +337,9 @@ export function AppShell() {
 
     void appWindow
       .onCloseRequested(async (event) => {
-        if (isClosingRef.current) {
-          return;
-        }
-
-        event.preventDefault();
-        void closeWindowAfterSafeFlush(appWindow);
+        interceptCloseRequest(event, isClosingRef.current, () => {
+          void closeWindowAfterSafeFlush(appWindow);
+        });
       })
       .then((unlisten) => {
         detachCloseListener = unlisten;
@@ -507,81 +504,57 @@ export function AppShell() {
       saveTimeoutRef.current = null;
     }
 
-    if (saveInFlightRef.current) {
-      await saveInFlightRef.current;
-    }
-
-    const pendingSave = pendingSaveRef.current;
-    if (!pendingSave) {
+    const pendingSaves = pendingSavesRef.current;
+    if (!pendingSaves.hasPending()) {
       return;
     }
 
-    pendingSaveRef.current = null;
     setSaveStatus("saving");
-    let savePromise: Promise<void>;
-    savePromise = dataService
-      .updateNoteContent({
-        contentHtml: pendingSave.contentHtml,
-        contentMarkdown: pendingSave.contentMarkdown,
-        contentSidecars: pendingSave.contentSidecars,
-        editorDocument: pendingSave.editorDocument,
-        expectedContentVersion: pendingSave.expectedContentVersion,
-        id: pendingSave.noteId,
-        plainText: pendingSave.plainText,
-      })
-      .then((savedNote) => {
-        const hasNewerSave = hasNewerPendingSave(
-          pendingSaveRef.current,
-          pendingSave.noteId,
-          pendingSave.sequence,
-        );
-        pendingSaveRef.current = advancePendingSaveVersion(
-          pendingSaveRef.current,
-          pendingSave.noteId,
-          pendingSave.sequence,
-          savedNote.contentVersion,
-        );
+    await pendingSaves.flush(
+      async (pendingSave) => {
+        try {
+          const savedNote = await dataService.updateNoteContent({
+            contentHtml: pendingSave.contentHtml,
+            contentMarkdown: pendingSave.contentMarkdown,
+            contentSidecars: pendingSave.contentSidecars,
+            editorDocument: pendingSave.editorDocument,
+            expectedContentVersion: pendingSave.expectedContentVersion,
+            id: pendingSave.noteId,
+            plainText: pendingSave.plainText,
+          });
+          return savedNote;
+        } catch (error) {
+          setSaveStatus("error");
+          showToast(
+            error instanceof dataService.NotePersistenceError ? error.message : "Не удалось сохранить заметку",
+            { label: "Повторить", onClick: () => { void flushPendingSave().catch(() => undefined); } },
+          );
+          throw error;
+        }
+      },
+      (_pendingSave, savedNote, hasNewerSave) => {
         noteContentVersionsRef.current.set(savedNote.id, savedNote.contentVersion);
         if (hasNewerSave) {
-          setNotes((currentNotes) =>
-            currentNotes.map((note) =>
-              note.id === savedNote.id
-                ? { ...note, contentVersion: savedNote.contentVersion }
-                : note,
-            ),
-          );
+          setNotes((currentNotes) => currentNotes.map((note) =>
+            note.id === savedNote.id ? { ...note, contentVersion: savedNote.contentVersion } : note,
+          ));
           setSearchRevision((revision) => revision + 1);
           setSaveStatus("saving");
         } else {
           replaceNote(savedNote);
           setSaveStatus("saved");
         }
-      })
-      .catch(async (error) => {
-        if (error instanceof dataService.NotePersistenceError && error.code === "stale_write") {
-          pendingSaveRef.current = null;
-          setSaveStatus("error");
-          try {
-            replaceNote(await dataService.getNote(pendingSave.noteId));
-          } catch {
-            // The persistence error is already safe and actionable for the user.
-          }
-          showToast(error.message);
-          return;
-        }
-        if (shouldRestoreFailedSave(pendingSaveRef.current, pendingSave)) {
-          pendingSaveRef.current = pendingSave;
-        }
-        setSaveStatus("error");
-        showToast(error instanceof dataService.NotePersistenceError ? error.message : "Не удалось сохранить заметку");
-      })
-      .finally(() => {
-        if (saveInFlightRef.current === savePromise) {
-          saveInFlightRef.current = null;
-        }
-      });
-    saveInFlightRef.current = savePromise;
-    await savePromise;
+      },
+    );
+  }
+
+  async function tryFlushPendingSave() {
+    try {
+      await flushPendingSave();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function closeWindowAfterSafeFlush(appWindow: ReturnType<typeof getCurrentWindow>) {
@@ -590,9 +563,19 @@ export function AppShell() {
     }
 
     isClosingRef.current = true;
-    const flushResult = await waitForCloseFlush();
-    if (flushResult === "timeout") {
+    const flushResult = await waitForCloseFlush(async () => {
+      await Promise.all([flushPendingSave(), flushUiSettings()]);
+    }, closeFlushTimeoutMs);
+    if (flushResult !== "completed") {
       setSaveStatus("error");
+      showToast(
+        flushResult === "timeout"
+          ? "Сохранение не завершилось. Окно оставлено открытым, чтобы не потерять изменения"
+          : "Не удалось сохранить заметку. Окно оставлено открытым, чтобы не потерять изменения",
+        { label: "Повторить", onClick: () => { void flushPendingSave().catch(() => undefined); } },
+      );
+      isClosingRef.current = false;
+      return;
     }
 
     requestNativeAppQuit(appWindow);
@@ -609,22 +592,6 @@ export function AppShell() {
   function closeWindowFallback(appWindow: ReturnType<typeof getCurrentWindow>) {
     void appWindow.destroy().catch(() => {
       void appWindow.close().catch(() => undefined);
-    });
-  }
-
-  function waitForCloseFlush(): Promise<"completed" | "timeout"> {
-    return new Promise((resolve) => {
-      const timeoutId = window.setTimeout(() => resolve("timeout"), closeFlushTimeoutMs);
-      void Promise.all([flushPendingSave(), flushUiSettings()]).then(
-        () => {
-          window.clearTimeout(timeoutId);
-          resolve("completed");
-        },
-        () => {
-          window.clearTimeout(timeoutId);
-          resolve("completed");
-        },
-      );
     });
   }
 
@@ -648,7 +615,7 @@ export function AppShell() {
     const safeWordCount = shouldPreserveFallbackContent && currentNote ? currentNote.wordCount : wordCount;
     const sequence = saveSequenceRef.current + 1;
     saveSequenceRef.current = sequence;
-    pendingSaveRef.current = {
+    pendingSavesRef.current.enqueue({
       contentHtml: safeContentHtml,
       contentMarkdown: safeContentMarkdown,
       contentSidecars,
@@ -658,7 +625,7 @@ export function AppShell() {
       plainText: safePlainText,
       sequence,
       wordCount: safeWordCount,
-    };
+    });
 
     setNotes((currentNotes) =>
       currentNotes.map((note) =>
@@ -686,7 +653,7 @@ export function AppShell() {
       window.clearTimeout(saveTimeoutRef.current);
     }
     saveTimeoutRef.current = window.setTimeout(() => {
-      void flushPendingSave();
+      void flushPendingSave().catch(() => undefined);
     }, 850);
   }
 
@@ -709,10 +676,14 @@ export function AppShell() {
     ];
   }
 
-  function navigate(section: AppSection) {
-    setSettingsTarget(undefined);
+  function navigate(section: AppSection, target?: "semantic-search") {
     void (async () => {
-      await flushPendingSave();
+      if (!await tryFlushPendingSave()) return;
+      if (target === "semantic-search") {
+        setSettingsTarget("semantic-search");
+      } else {
+        setSettingsTarget(undefined);
+      }
       activateSection(section);
       if (section !== "notes") {
         setIsFocusMode(false);
@@ -723,7 +694,7 @@ export function AppShell() {
 
   function openNewNoteModal() {
     void (async () => {
-      await flushPendingSave();
+      if (!await tryFlushPendingSave()) return;
       activateSection("notes");
       setIsFocusMode(false);
       setIsChatOpen(false);
@@ -732,8 +703,8 @@ export function AppShell() {
   }
 
   async function createNote(title: string, noteDate: string) {
+    if (!await tryFlushPendingSave()) return;
     try {
-      await flushPendingSave();
       const newNote = await dataService.createNote(title, noteDate);
       setNotes((currentNotes) => sortNotesForDisplay([newNote, ...currentNotes.filter((note) => note.id !== newNote.id)]));
       setActiveNoteId(newNote.id);
@@ -747,7 +718,7 @@ export function AppShell() {
   }
 
   async function openNote(noteId: string, archivedHint?: boolean, failureMessage?: string) {
-    await flushPendingSave();
+    if (!await tryFlushPendingSave()) return false;
     const archivedResult = archivedHint ?? searchResults.find((result) => result.noteId === noteId)?.archived;
     openedArchivedNoteIdRef.current = archivedResult ? noteId : null;
     if (!notes.some((note) => note.id === noteId)) {
@@ -973,7 +944,7 @@ export function AppShell() {
 
   function openTagNotes(tagName: string) {
     void (async () => {
-      await flushPendingSave();
+      if (!await tryFlushPendingSave()) return;
       activateSection("notes");
       setQuery(tagName);
       showToast(`Открыты заметки с тегом «${tagName}»`);
@@ -982,7 +953,7 @@ export function AppShell() {
 
   function openProjectNotes(projectTitle: string) {
     void (async () => {
-      await flushPendingSave();
+      if (!await tryFlushPendingSave()) return;
       activateSection("notes");
       setQuery(projectTitle);
       showToast(`Открыт проект «${projectTitle}»`);
@@ -1053,7 +1024,7 @@ export function AppShell() {
       flushPendingSave,
       importBackup: dataService.importBackup,
       invalidatePendingSaves: () => {
-        pendingSaveRef.current = null;
+        pendingSavesRef.current.clear();
         saveSequenceRef.current += 1;
       },
       refreshExternalViews: () => setWorkspaceReloadGeneration((generation) => generation + 1),
@@ -1155,8 +1126,7 @@ export function AppShell() {
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
         onOpenModelSettings={() => {
-          navigate("settings");
-          setSettingsTarget("semantic-search");
+          navigate("settings", "semantic-search");
         }}
         onOpenSemanticResult={(result) => void openSemanticResult(result)}
         onRagConversationReset={() => updateUiSettings({ ragConversationWidth: 280 })}
@@ -1328,12 +1298,11 @@ export function AppShell() {
             onOpenAttachment={dataService.openAttachment}
             onOpenNote={(noteId) => void openNote(noteId)}
             onOpenSettingsModels={() => {
-              setIsFocusMode(false);
-              setIsChatOpen(false);
-              activateSection("settings");
+              navigate("settings");
             }}
             onPickAndStoreAttachment={pickAndStoreAttachment}
             onRenameNote={renameNote}
+            onRetrySave={() => { void flushPendingSave().catch(() => undefined); }}
             onSetNoteTag={setNoteTag}
             onCreateNoteTag={createNoteTag}
             onRevealAttachment={dataService.revealAttachment}
@@ -1360,8 +1329,7 @@ export function AppShell() {
             note={activeNote}
             onClose={() => setIsChatOpen(false)}
             onOpenAiSettings={() => {
-              setIsChatOpen(false);
-              activateSection("settings");
+              navigate("settings");
             }}
             onResetWidth={() => updateUiSettings({ chatWidth: 380 })}
             onResize={(deltaX) =>

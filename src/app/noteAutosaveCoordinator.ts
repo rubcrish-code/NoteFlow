@@ -34,3 +34,75 @@ export function shouldRestoreFailedSave<T extends PendingSaveVersion>(
 ) {
   return !pendingSave || pendingSave.sequence <= failedSave.sequence;
 }
+
+export class PendingNoteSaves<T extends PendingSaveVersion> {
+  private readonly pending = new Map<string, T>();
+  private inFlight: Promise<void> | null = null;
+
+  enqueue(save: T) {
+    const current = this.pending.get(save.noteId);
+    if (!current || current.sequence <= save.sequence) {
+      this.pending.set(save.noteId, save);
+    }
+  }
+
+  get(noteId: string) {
+    return this.pending.get(noteId) ?? null;
+  }
+
+  hasPending() {
+    return this.pending.size > 0 || this.inFlight !== null;
+  }
+
+  clear() {
+    this.pending.clear();
+  }
+
+  flush<Saved extends { contentVersion: number }>(
+    persist: (save: T) => Promise<Saved>,
+    onSaved: (save: T, saved: Saved, hasNewerSave: boolean) => void,
+  ): Promise<void> {
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+
+    const run = this.drain(persist, onSaved);
+    this.inFlight = run;
+    void run.finally(() => {
+      if (this.inFlight === run) {
+        this.inFlight = null;
+      }
+    }).catch(() => undefined);
+    return run;
+  }
+
+  private async drain<Saved extends { contentVersion: number }>(
+    persist: (save: T) => Promise<Saved>,
+    onSaved: (save: T, saved: Saved, hasNewerSave: boolean) => void,
+  ) {
+    while (this.pending.size > 0) {
+      const save = [...this.pending.values()].reduce((first, next) =>
+        next.sequence < first.sequence ? next : first,
+      );
+      this.pending.delete(save.noteId);
+
+      let saved: Saved;
+      try {
+        saved = await persist(save);
+      } catch (error) {
+        if (shouldRestoreFailedSave(this.get(save.noteId), save)) {
+          this.pending.set(save.noteId, save);
+        }
+        throw error;
+      }
+
+      const pending = this.get(save.noteId);
+      const hasNewerSave = hasNewerPendingSave(pending, save.noteId, save.sequence);
+      const advanced = advancePendingSaveVersion(pending, save.noteId, save.sequence, saved.contentVersion);
+      if (advanced) {
+        this.pending.set(save.noteId, advanced);
+      }
+      onSaved(save, saved, hasNewerSave);
+    }
+  }
+}
