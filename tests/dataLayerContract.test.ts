@@ -35,7 +35,7 @@ describe("production data layer contract", () => {
     assert.match(source, /invoke<WorkspaceSnapshotDto>\("load_workspace"/);
     assert.match(source, /return await invoke<T>\(command, args\)/);
     assert.match(source, /invokeNotePersistence<NoteDto>\("update_note_content"/);
-    assert.match(source, /invoke<ExportResultDto>\("create_backup"/);
+    assert.match(source, /invoke<ExportResultDto>\("create_backup_at_path"/);
     assert.match(source, /invoke<BackupPreviewDto>\("preview_backup"/);
     assert.match(source, /invoke<ImportBackupResultDto>\("import_backup"/);
     assert.match(source, /invoke<void>\("open_attachment", \{ attachmentId \}\)/);

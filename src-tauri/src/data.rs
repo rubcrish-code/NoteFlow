@@ -3112,7 +3112,6 @@ impl DataStore {
     }
 
     fn create_backup(&self) -> DataResult<ExportResultDto> {
-        let backup_data = self.collect_backup_data()?;
         let stamp = Utc::now().format("%Y%m%d-%H%M%S");
         let mut relative_path = format!("backups/noteflow-backup-{stamp}.zip");
         if self.resolve_storage_path(&relative_path)?.exists() {
@@ -3122,9 +3121,35 @@ impl DataStore {
             );
         }
         let path = self.resolve_storage_path(&relative_path)?;
-        let temp_path = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+        self.write_backup_archive(&path)?;
+
+        Ok(export_result(
+            path,
+            relative_path,
+            "Резервная копия базы создана",
+        ))
+    }
+
+    fn create_backup_at_path(&self, path: &Path) -> DataResult<ExportResultDto> {
+        validate_external_backup_path(path)?;
+        self.write_backup_archive(path)?;
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("NoteFlow-backup.zip")
+            .to_string();
+        Ok(export_result(
+            path.to_path_buf(),
+            file_name,
+            "Резервная копия создана",
+        ))
+    }
+
+    fn write_backup_archive(&self, path: &Path) -> DataResult<()> {
+        let backup_data = self.collect_backup_data()?;
+        let temp_path = path.with_extension(format!("zip.{}.tmp", Uuid::new_v4()));
         let write_result = (|| -> DataResult<()> {
-            let file = File::create(&temp_path)?;
+            let file = File::create_new(&temp_path)?;
             let mut zip = ZipWriter::new(file);
             let options = zip_options();
             let backup_json = serde_json::to_vec_pretty(&backup_data)?;
@@ -3157,22 +3182,22 @@ impl DataStore {
                     "Не удалось проверить созданную резервную копию",
                 ));
             }
+            for index in 0..verification.len() {
+                let mut entry = verification.by_index(index)?;
+                std::io::copy(&mut entry, &mut std::io::sink())?;
+            }
             Ok(())
         })();
         if let Err(error) = write_result {
             let _ = fs::remove_file(&temp_path);
             return Err(error);
         }
-        if let Err(error) = fs::rename(&temp_path, &path) {
+        if let Err(error) = fs::rename(&temp_path, path) {
             let _ = fs::remove_file(&temp_path);
             return Err(DataError::Io(error));
         }
 
-        Ok(export_result(
-            path,
-            relative_path,
-            "Резервная копия базы создана",
-        ))
+        Ok(())
     }
 
     fn preview_backup(&self, request: &ImportBackupRequest) -> DataResult<BackupPreviewDto> {
@@ -4777,6 +4802,20 @@ impl Default for BackupLimits {
 
 fn backup_invalid(message: &str) -> DataError {
     DataError::InvalidInput(message.to_string())
+}
+
+fn validate_external_backup_path(path: &Path) -> DataResult<()> {
+    let valid_extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"));
+    if !path.is_absolute() || !valid_extension || path.file_name().is_none() {
+        return Err(backup_invalid("Выберите файл ZIP для резервной копии"));
+    }
+    if !path.parent().is_some_and(Path::is_dir) || path.is_dir() {
+        return Err(backup_invalid("Выбранная папка недоступна для сохранения"));
+    }
+    Ok(())
 }
 
 fn validate_managed_attachment_path(relative_path: &str) -> DataResult<String> {
@@ -7104,6 +7143,18 @@ pub async fn create_backup(state: State<'_, AppState>) -> Result<ExportResultDto
 }
 
 #[tauri::command]
+pub async fn create_backup_at_path(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, String> {
+    with_store_blocking(Arc::clone(&state.store), move |store| {
+        store.create_backup_at_path(Path::new(&path))
+    })
+    .await
+    .map_err(backup_command_error)
+}
+
+#[tauri::command]
 pub async fn preview_backup(
     request: ImportBackupRequest,
     state: State<'_, AppState>,
@@ -8950,6 +9001,120 @@ mod tests {
             })
             .expect("imported search index rebuilt");
         assert_eq!(search_results[0].note_id, imported_note.id);
+    }
+
+    #[test]
+    fn external_backup_roundtrip_survives_reopen() {
+        let mut source = temp_store();
+        let note = create_note_with_content(&mut source, "Внешняя копия", "# Привет\n\nТекст");
+        let destination_dir =
+            std::env::temp_dir().join(format!("noteflow-export-{}", Uuid::new_v4()));
+        fs::create_dir(&destination_dir).expect("external directory");
+        let path = destination_dir.join("NoteFlow-backup.zip");
+        let result = source
+            .create_backup_at_path(&path)
+            .expect("external backup");
+        assert_eq!(result.path, path.to_string_lossy());
+        assert!(result.relative_path.ends_with(".zip"));
+        let bytes = fs::read(&path).expect("external archive");
+        let validated = validate_backup_archive(&bytes).expect("v6 archive validates");
+        assert_eq!(validated.data.version, CURRENT_BACKUP_VERSION);
+        let updated = source
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                expected_content_version: note.content_version,
+                content_json: document_from_text("Обновлённый текст"),
+                content_markdown: "Обновлённый текст".to_string(),
+                content_html: "<p>Обновлённый текст</p>".to_string(),
+                content_sidecars: vec![],
+                plain_text: "Обновлённый текст".to_string(),
+            })
+            .expect("update before overwrite");
+        source
+            .create_backup_at_path(&path)
+            .expect("replace existing archive");
+        let replaced_bytes = fs::read(&path).expect("replaced archive");
+        assert_ne!(replaced_bytes, bytes);
+        assert_eq!(
+            source
+                .get_note(&updated.id)
+                .expect("updated note")
+                .content_markdown,
+            "Обновлённый текст"
+        );
+        let mut target = temp_store();
+        let target_dir = target.base_dir.clone();
+        target
+            .import_backup(ImportBackupRequest {
+                file_name: "NoteFlow-backup.zip".to_string(),
+                bytes: replaced_bytes,
+            })
+            .expect("restore external backup");
+        drop(target);
+        let reopened = DataStore::open(target_dir).expect("reopen restored profile");
+        assert_eq!(
+            reopened
+                .get_note(&note.id)
+                .expect("restored note")
+                .content_markdown,
+            "Обновлённый текст"
+        );
+        fs::remove_dir_all(destination_dir).expect("remove external test directory");
+    }
+
+    #[test]
+    fn external_backup_rejects_invalid_destination_without_creating_archive() {
+        let store = temp_store();
+        let directory = std::env::temp_dir().join(format!("noteflow-export-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).expect("external directory");
+        let invalid_extension = directory.join("backup.txt");
+        assert!(store.create_backup_at_path(&invalid_extension).is_err());
+        assert!(!invalid_extension.exists());
+        let missing_parent = directory.join("missing").join("backup.zip");
+        assert!(store.create_backup_at_path(&missing_parent).is_err());
+        assert!(!missing_parent.exists());
+        fs::remove_dir_all(directory).expect("remove external test directory");
+    }
+
+    #[test]
+    fn failed_external_backup_preserves_previous_archive_and_cleans_temp_file() {
+        let mut store = temp_store();
+        let directory = std::env::temp_dir().join(format!("noteflow-export-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).expect("external directory");
+        let path = directory.join("backup.zip");
+        store.create_backup_at_path(&path).expect("previous backup");
+        let previous_bytes = fs::read(&path).expect("previous archive");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Missing asset".to_string(),
+                note_date: "2026-09-27".to_string(),
+            })
+            .expect("note");
+        let attached = store
+            .store_attachment(StoreAttachmentRequest {
+                note_id: note.id,
+                kind: "file".to_string(),
+                original_name: "asset.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                original_attachment_id: None,
+                edit_metadata: None,
+                bytes: b"asset".to_vec(),
+            })
+            .expect("attachment");
+        let blob_id = attached.attachment.blob_id.as_deref().expect("blob id");
+        let (blob_path, _) =
+            assets::resolve_blob_path(&store.conn, &store.base_dir, blob_id).expect("blob path");
+        fs::remove_file(blob_path).expect("simulate missing asset");
+        assert!(store.create_backup_at_path(&path).is_err());
+        assert_eq!(
+            fs::read(&path).expect("previous archive intact"),
+            previous_bytes
+        );
+        assert_eq!(
+            fs::read_dir(&directory).expect("read export dir").count(),
+            1
+        );
+        fs::remove_dir_all(directory).expect("remove external test directory");
     }
 
     #[test]

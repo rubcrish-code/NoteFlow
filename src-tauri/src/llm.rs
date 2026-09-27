@@ -2872,6 +2872,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn legacy_streaming_preference_does_not_enable_streaming_requests() {
+        let mut provider = provider_record();
+        provider.streaming_enabled = true;
+        let prompt = NoteAiPrompt {
+            system: "System".to_string(),
+            user: "User".to_string(),
+        };
+        let chat = ChatCompletionRequest {
+            system: "System".to_string(),
+            messages: vec![ChatCompletionMessage {
+                role: "user".to_string(),
+                content: "User".to_string(),
+            }],
+            max_output_tokens: 128,
+            operation_label: "test",
+        };
+
+        for provider_type in ["openai", "ollama"] {
+            provider.provider_type = provider_type.to_string();
+            assert_eq!(note_ai_request_body(&provider, &prompt)["stream"], false);
+            assert_eq!(
+                chat_completion_request_body(&provider, &chat, 128)["stream"],
+                false
+            );
+        }
+    }
+
     fn draft_request(provider_type: &str, base_url: &str) -> DraftLlmProviderRequest {
         let (models_endpoint, chat_endpoint, embeddings_endpoint, chat_model) =
             if provider_type == "ollama" {

@@ -662,6 +662,26 @@
   min-width: 0;
 }
 
+.backup-export-status {
+  color: var(--text-secondary);
+  display: grid;
+  font-size: var(--text-sm-size);
+  gap: var(--space-2);
+  line-height: var(--text-sm-line);
+  margin-top: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.backup-export-status .export-action {
+  justify-self: start;
+}
+
+.backup-export-error {
+  color: var(--danger);
+  font-size: var(--text-sm-size);
+  margin: var(--space-3) 0 0;
+}
+
 .knowledge-primary-action .export-action {
   justify-self: start;
   width: auto;

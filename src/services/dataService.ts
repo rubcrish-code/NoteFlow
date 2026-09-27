@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, NoteContentSidecar, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
 import { buildEditorDocumentFromStoredNoteContent } from "../features/editor/editorContentSerializer";
 import { createNotePreview } from "../features/notes/notePreview";
 import { normalizeNoteIconKey } from "../shared/noteIconRegistry";
 import type { PreparedMarkdownNote } from "../features/settings/markdownImport";
+import { runBackupExport } from "../features/settings/backupExportFlow";
 
 export type NotePersistenceErrorCode = "invalid_input" | "not_found" | "revision" | "serialization" | "sidecar" | "stale_write" | "transaction";
 const notePersistenceErrorCodes = new Set<NotePersistenceErrorCode>([
@@ -666,7 +667,14 @@ export async function exportProjectZip(projectId: string) {
 }
 
 export async function createBackup() {
-  return mapExportResult(await invoke<ExportResultDto>("create_backup"));
+  return runBackupExport(
+    () => save({
+      title: "Создать резервную копию NoteFlow",
+      defaultPath: `NoteFlow-backup-${new Intl.DateTimeFormat("sv-SE").format(new Date())}.zip`,
+      filters: [{ name: "Резервная копия NoteFlow", extensions: ["zip"] }],
+    }),
+    async (path) => mapExportResult(await invoke<ExportResultDto>("create_backup_at_path", { path })),
+  );
 }
 
 export async function previewBackup(file: File): Promise<BackupPreview> {

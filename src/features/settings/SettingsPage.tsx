@@ -1,7 +1,8 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
-import type { BackupPreview, ImportBackupResult } from "../../services/dataService";
+import * as dataService from "../../services/dataService";
+import type { BackupPreview, ExportResult, ImportBackupResult } from "../../services/dataService";
 import { Icon } from "../../shared/Icon";
 import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
@@ -47,7 +48,7 @@ interface SettingsPageProps {
   theme: ThemeMode;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
-  onBackupCreate: () => void;
+  onBackupCreate: () => Promise<ExportResult | null>;
   onBackupPreview: (file: File) => Promise<BackupPreview>;
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
@@ -137,7 +138,6 @@ interface ProviderFormState {
   timeoutSec: string;
   contextSize: string;
   temperature: string;
-  streamingEnabled: boolean;
   customHeadersJson: string;
   isDefault: boolean;
 }
@@ -284,7 +284,6 @@ function createProviderForm(preset: ProviderPreset = providerPresets[0]): Provid
     timeoutSec: "120",
     contextSize: "16384",
     temperature: "0.3",
-    streamingEnabled: true,
     customHeadersJson: "{}",
     isDefault: true,
   };
@@ -305,7 +304,6 @@ function formFromProvider(provider: LlmProvider): ProviderFormState {
     timeoutSec: String(Math.round(provider.timeoutMs / 1000)),
     contextSize: String(provider.contextSize),
     temperature: String(provider.temperature),
-    streamingEnabled: provider.streamingEnabled,
     customHeadersJson: provider.customHeadersJson,
     isDefault: provider.isDefault,
   };
@@ -381,7 +379,7 @@ function draftInputFromForm(form: ProviderFormState): llmProviderService.DraftLl
     timeoutMs: parseProviderNumber(form.timeoutSec, 120) * 1000,
     contextSize: parseProviderNumber(form.contextSize, 16384),
     temperature: parseProviderNumber(form.temperature, 0.3),
-    streamingEnabled: form.streamingEnabled,
+    streamingEnabled: false,
     customHeadersJson: form.customHeadersJson,
   };
 }
@@ -789,7 +787,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       timeoutMs: Number.isFinite(timeoutSec) ? timeoutSec * 1000 : 120000,
       contextSize: Number.isFinite(contextSize) ? contextSize : 16384,
       temperature: Number.isFinite(temperature) ? temperature : 0.3,
-      streamingEnabled: providerForm.streamingEnabled,
+      streamingEnabled: false,
       customHeadersJson: providerForm.customHeadersJson,
       isDefault: providerForm.isDefault,
     });
@@ -1283,13 +1281,6 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                   Температура
                   <input max="2" min="0" onChange={(event) => updateDraft({ temperature: event.currentTarget.value })} step="0.1" type="number" value={form.temperature} />
                 </label>
-                <label className="field switch-field">
-                  <span>
-                    <b>Потоковая выдача</b>
-                    <small>Показывать ответ по мере генерации</small>
-                  </span>
-                  <input checked={form.streamingEnabled} onChange={(event) => updateDraft({ streamingEnabled: event.currentTarget.checked })} type="checkbox" />
-                </label>
                 <label className="field full">
                   Дополнительные HTTP-заголовки
                   <textarea onChange={(event) => updateDraft({ customHeadersJson: event.currentTarget.value })} placeholder='{"X-Organization":"example"}' rows={3} value={form.customHeadersJson} />
@@ -1404,7 +1395,7 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
 }
 
 interface DataSettingsProps {
-  onBackupCreate: () => void;
+  onBackupCreate: () => Promise<ExportResult | null>;
   onBackupPreview: (file: File) => Promise<BackupPreview>;
   onExportCurrentNote: () => void;
   onExportCurrentProject: () => void;
@@ -1449,7 +1440,28 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
   const [knowledgeHasError, setKnowledgeHasError] = useState(false);
   const [isRebuildConfirmationOpen, setIsRebuildConfirmationOpen] = useState(false);
   const [selectedBackupFile, setSelectedBackupFile] = useState<File | null>(null);
+  const [backupExportState, setBackupExportState] = useState<"idle" | "creating" | "success" | "error">("idle");
+  const [backupExportResult, setBackupExportResult] = useState<ExportResult | null>(null);
   const [importState, dispatchImport] = useReducer(reduceBackupImportState, initialBackupImportState);
+
+  async function createExternalBackup() {
+    if (backupExportState === "creating") return;
+    setBackupExportState("creating");
+    setBackupExportResult(null);
+    try {
+      const result = await onBackupCreate();
+      if (!result) {
+        setBackupExportState("idle");
+        return;
+      }
+      setBackupExportResult(result);
+      setBackupExportState("success");
+      onToast("Резервная копия создана");
+    } catch {
+      setBackupExportState("error");
+      onToast("Не удалось создать резервную копию");
+    }
+  }
 
   async function prepareBackupImport(file: File) {
     const requestId = importRequestIdRef.current + 1;
@@ -1614,11 +1626,18 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
               <Icon name="folder" />
               Проект
             </button>
-            <button className="export-action secondary" onClick={onBackupCreate} type="button">
-              <Icon name="archive" />
-              Вся база и вложения
+            <button className="export-action secondary" disabled={backupExportState === "creating"} onClick={() => void createExternalBackup()} type="button">
+              {backupExportState === "creating" ? <span aria-hidden="true" className="button-spinner" /> : <Icon name="archive" />}
+              {backupExportState === "creating" ? "Создаём копию…" : "Создать резервную копию"}
             </button>
           </div>
+          {backupExportState === "success" && backupExportResult ? (
+            <div aria-live="polite" className="backup-export-status">
+              <span>Резервная копия создана: {backupExportResult.path}</span>
+              <button className="export-action secondary" onClick={() => void dataService.revealExportedItem(backupExportResult.path).catch(() => onToast("Не удалось показать файл в Проводнике"))} type="button">Показать в Проводнике</button>
+            </div>
+          ) : null}
+          {backupExportState === "error" ? <p className="backup-export-error" role="alert">Не удалось создать резервную копию. Проверьте доступность выбранной папки и повторите попытку.</p> : null}
         </div>
         <div className="export-action-group recovery">
           <div className="export-action-head">

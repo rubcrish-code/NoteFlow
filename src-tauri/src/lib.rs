@@ -59,6 +59,7 @@ pub fn run() {
             data::accept_embedding_cloud_consent,
             data::cancel_embedding_indexing,
             data::create_backup,
+            data::create_backup_at_path,
             data::create_note,
             data::create_project,
             data::complete_first_run,

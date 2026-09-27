@@ -1039,11 +1039,9 @@ export function AppShell() {
       .catch((error) => showToast(`Не удалось экспортировать проект: ${String(error)}`));
   }
 
-  function createBackup() {
-    void flushPendingSave()
-      .then(() => dataService.createBackup())
-      .then((result) => showToast(`${result.message}: ${result.relativePath}`))
-      .catch((error) => showToast(`Не удалось создать резервную копию: ${String(error)}`));
+  async function createBackup() {
+    await flushPendingSave();
+    return dataService.createBackup();
   }
 
   function previewBackup(file: File) {
