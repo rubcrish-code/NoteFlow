@@ -18,7 +18,7 @@ const llmSource = readFileSync("src-tauri/src/llm.rs", "utf8");
 
 describe("current note AI contract", () => {
   it("routes note AI through typed Tauri commands only", () => {
-    assert.match(noteAiServiceSource, /from "@tauri-apps\/api\/core"/);
+    assert.match(noteAiServiceSource, /from "\.\/safeInvoke"/);
     assert.match(noteAiServiceSource, /invoke<NoteAiStatusDto>\("get_note_ai_status"/);
     assert.match(noteAiServiceSource, /invoke<NoteAiStatusDto>\("accept_note_ai_privacy"/);
     assert.match(noteAiServiceSource, /invoke<NoteChatMessageDto\[]>\("list_note_chat_messages"/);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Color } from "@tiptap/extension-color";
 import Highlight from "@tiptap/extension-highlight";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import Link from "@tiptap/extension-link";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
@@ -15,6 +16,7 @@ import StarterKit from "@tiptap/starter-kit";
 import type { EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, SaveStatus, TagRow } from "../../app/types";
 import { acceptNoteAiPrivacy, createNoteAiContext, getNoteAiStatus, runNoteAi, type NoteAiActionId, type NoteAiScope, type NoteAiStatus } from "../../services/noteAiService";
 import { Icon } from "../../shared/Icon";
+import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
 import { EditableImage, type EditableImageTarget } from "../imageEditor/ImageNodeView";
 import { createEditedImageFileName, dataUrlToFile, type ImageEditMode, type ImageEditMetadata } from "../imageEditor/imageEditService";
 import { BlockInsertMenu, type EditorInsertSelection, type EditorInsertTarget } from "./BlockInsertMenu";
@@ -29,6 +31,7 @@ import { TableToolsPopover } from "./TableToolsPopover";
 import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
 import { serializeEditorDocumentForStorage } from "./editorContentSerializer";
 import { shouldReloadEditorDocument, type EditorDocumentLoadToken } from "./editorDocumentReload";
+import { handleEditorLinkClick } from "./editorLinkClick";
 import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
 import { NoteFlowTable, NoteFlowTableCell, NoteFlowTableHeader, NoteFlowTableView, TableToolsAnchor } from "./tableExtensions";
 import { NoteFlowTaskItem } from "./taskExtensions";
@@ -168,6 +171,7 @@ function createEditorExtensions(options: {
       autolink: true,
       linkOnPaste: true,
       openOnClick: false,
+      isAllowedUri: (url) => Boolean(sanitizeMarkdownLinkHref(url)),
     }),
     EditableImage.configure({
       inline: false,
@@ -264,6 +268,9 @@ export function EditorArea({
   const editor = useEditor({
     content: note.editorDocument,
     editorProps: {
+      handleClick: (_view, _pos, event) => handleEditorLinkClick(event, (url) => {
+        void openUrl(url).catch(() => onToast("Не удалось открыть ссылку"));
+      }),
       handleClickOn: (_view, _pos, node, _nodePos, event, direct) => {
         if (!direct) {
           return false;

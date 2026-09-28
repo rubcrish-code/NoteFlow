@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./safeInvoke";
 
 export type EmbeddingProviderType = "ollama" | "openai" | "custom";
 export type EmbeddingLocality = "local" | "cloud";

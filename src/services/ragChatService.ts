@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./safeInvoke";
 import type { SemanticSearchResult } from "./embeddingService";
 
 export type RagChatRole = "assistant" | "user";

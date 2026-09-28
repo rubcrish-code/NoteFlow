@@ -2,6 +2,7 @@ use crate::{
     data::{DataError, DataResult},
     knowledge,
     llm::{self, HttpClient, HttpRequest, SecretStorage},
+    provider_url::{is_local_destination, normalize_provider_url, ProviderLocality},
 };
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -1054,10 +1055,10 @@ fn normalize_profile_request(
             ))
         }
     };
-    let base_url = normalize_base_url(&request.base_url)?;
+    let base_url = normalize_base_url(&request.base_url, &locality)?;
     if locality == "local" && !is_local_base_url(&base_url) {
         return Err(DataError::InvalidInput(
-            "Для локальной обработки используйте адрес localhost, 127.0.0.1 или ::1".to_string(),
+            "Для локальной обработки используйте локальный или частный сетевой адрес".to_string(),
         ));
     }
     let endpoint = normalize_endpoint(&request.embeddings_endpoint)?;
@@ -1934,19 +1935,15 @@ fn search_snippet(content: &str, query: &str) -> String {
     )
 }
 
-fn normalize_base_url(value: &str) -> DataResult<String> {
-    let value = value.trim().trim_end_matches('/');
-    if !(value.starts_with("http://") || value.starts_with("https://")) {
-        return Err(DataError::InvalidInput(
-            "Адрес модели должен начинаться с http:// или https://".to_string(),
-        ));
-    }
-    if value.contains(['\r', '\n', '\t', ' ']) {
-        return Err(DataError::InvalidInput(
-            "Некорректный адрес модели".to_string(),
-        ));
-    }
-    Ok(value.to_string())
+fn normalize_base_url(value: &str, locality: &str) -> DataResult<String> {
+    normalize_provider_url(
+        value,
+        if locality == "local" {
+            ProviderLocality::Local
+        } else {
+            ProviderLocality::Cloud
+        },
+    )
 }
 
 fn normalize_endpoint(value: &str) -> DataResult<String> {
@@ -1970,26 +1967,7 @@ fn required_text(value: &str, field_name: &str) -> DataResult<String> {
 }
 
 fn is_local_base_url(base_url: &str) -> bool {
-    let host = base_url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(base_url)
-        .split('/')
-        .next()
-        .unwrap_or_default()
-        .split('@')
-        .next_back()
-        .unwrap_or_default()
-        .trim_matches(['[', ']']);
-    let host_without_port = if host.starts_with("::1") {
-        "::1"
-    } else {
-        host.split(':').next().unwrap_or_default()
-    };
-    matches!(
-        host_without_port.to_ascii_lowercase().as_str(),
-        "localhost" | "127.0.0.1" | "::1"
-    )
+    url::Url::parse(base_url).is_ok_and(|url| is_local_destination(&url))
 }
 
 fn join_url(base_url: &str, endpoint: &str) -> String {
@@ -2008,8 +1986,12 @@ fn provider_error(code: &'static str, message: &str, retryable: bool) -> Provide
     }
 }
 
-fn storage_failure(error: DataError) -> ProviderFailure {
-    provider_error("secure_storage_unavailable", &error.to_string(), false)
+fn storage_failure(_error: DataError) -> ProviderFailure {
+    provider_error(
+        "secure_storage_unavailable",
+        "Безопасное хранилище ключей недоступно",
+        false,
+    )
 }
 
 fn http_transport_failure(error: DataError) -> ProviderFailure {

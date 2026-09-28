@@ -1,6 +1,15 @@
 export type LlmNetworkAction = "listModels" | "testConnection";
 export type LlmNetworkTargetKind = "draft" | "provider";
 
+export function modelDiscoveryFeedbackFromConnectionTest(result: { status: "success" | "error"; message: string; models: readonly string[] }) {
+  if (result.status === "error") {
+    return { state: "error" as const, message: result.message };
+  }
+  return result.models.length > 0
+    ? { state: "success" as const, message: `Получено моделей: ${result.models.length}` }
+    : { state: "empty" as const, message: "Endpoint доступен, но список моделей пуст" };
+}
+
 export interface LlmNetworkOperation {
   readonly id: number;
   readonly action: LlmNetworkAction;

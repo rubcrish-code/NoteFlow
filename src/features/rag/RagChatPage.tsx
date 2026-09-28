@@ -42,7 +42,11 @@ export function RagChatPage({
   sidebar,
 }: RagChatPageProps) {
   const shellRef = useRef<HTMLDivElement>(null);
-  const layoutMode = getRagLayoutMode(useObservedPhysicalElementWidth(shellRef));
+  const layoutMode = getRagLayoutMode(useObservedPhysicalElementWidth(shellRef), {
+    conversationWidth: ragConversationWidth,
+    sourcesWidth: ragSourcesWidth,
+    sourcesCollapsed: ragSourcesCollapsed,
+  });
 
   return (
     <PageShell

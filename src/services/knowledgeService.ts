@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./safeInvoke";
 
 export type KnowledgeIndexStatusCode = "current" | "pending" | "needs_update" | "failed";
 export type KnowledgeIndexOperation = "reconcile" | "rebuild";

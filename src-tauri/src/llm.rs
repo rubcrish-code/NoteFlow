@@ -1,4 +1,5 @@
 use crate::data::{DataError, DataResult};
+use crate::provider_url::{is_local_destination, normalize_provider_url, ProviderLocality};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -29,13 +30,14 @@ const OPENAI_COMPATIBLE_TEST_MAX_TOKENS: i64 = 512;
 const OPENAI_COMPATIBLE_NOTE_AI_MAX_TOKENS: i64 = 2048;
 
 pub fn diagnostic_url(url: &str) -> String {
-    let without_query = url.split(['?', '#']).next().unwrap_or_default();
-    if let Some((scheme, rest)) = without_query.split_once("://") {
-        if let Some((_, host_and_path)) = rest.rsplit_once('@') {
-            return format!("{scheme}://{host_and_path}");
-        }
-    }
-    without_query.to_string()
+    url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| {
+            parsed
+                .host_str()
+                .map(|host| format!("{}://{host}", parsed.scheme()))
+        })
+        .unwrap_or_else(|| "<invalid-provider-url>".to_string())
 }
 
 pub fn log_llm_diagnostic(event: &str, fields: &[(&str, String)]) {
@@ -43,6 +45,22 @@ pub fn log_llm_diagnostic(event: &str, fields: &[(&str, String)]) {
     {
         let rendered = fields
             .iter()
+            .filter(|(key, _)| {
+                matches!(
+                    *key,
+                    "command"
+                        | "providerType"
+                        | "status"
+                        | "modelsCount"
+                        | "chatOk"
+                        | "embeddingsOk"
+                        | "timeoutMs"
+                        | "maxTokens"
+                        | "hasContent"
+                        | "hasReasoning"
+                        | "operation"
+                )
+            })
             .map(|(key, value)| {
                 let safe_value = value.replace(['\r', '\n', '\t'], " ");
                 format!("{key}={safe_value}")
@@ -411,20 +429,23 @@ pub struct CurlHttpClient;
 
 impl HttpClient for CurlHttpClient {
     fn send(&self, request: HttpRequest) -> DataResult<HttpResponse> {
-        validate_http_url(&request.url)?;
+        let url = normalize_provider_url(&request.url, ProviderLocality::Local)?;
+        if !matches!(request.method.as_str(), "GET" | "POST") {
+            return Err(DataError::InvalidInput(
+                "Неподдерживаемый HTTP-метод".to_string(),
+            ));
+        }
         let timeout_seconds = ((request.timeout_ms.clamp(1000, 600_000) + 999) / 1000).max(1);
         let connect_timeout_seconds = timeout_seconds.clamp(1, 4);
         let mut config = String::new();
-        config.push_str(&format!(
-            "url = \"{}\"\n",
-            escape_curl_config_value(&request.url)
-        ));
+        config.push_str(&format!("url = \"{}\"\n", escape_curl_config_value(&url)));
         config.push_str(&format!(
             "request = \"{}\"\n",
             escape_curl_config_value(&request.method)
         ));
         config.push_str("header = \"Accept: application/json\"\n");
         for (name, value) in &request.headers {
+            validate_request_header(name, value)?;
             config.push_str(&format!(
                 "header = \"{}: {}\"\n",
                 escape_curl_config_value(name),
@@ -439,27 +460,12 @@ impl HttpClient for CurlHttpClient {
             ));
         }
 
-        let mut child = Command::new(curl_binary_name())
-            .arg("--silent")
-            .arg("--show-error")
-            .arg("--location")
-            .arg("--max-time")
-            .arg(timeout_seconds.to_string())
-            .arg("--connect-timeout")
-            .arg(connect_timeout_seconds.to_string())
-            .arg("--write-out")
-            .arg("\n%{http_code}")
-            .arg("--config")
-            .arg("-")
+        let mut child = curl_command(&url, timeout_seconds, connect_timeout_seconds)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| {
-                DataError::InvalidInput(format!(
-                    "HTTP-клиент недоступен: не удалось запустить curl ({error})"
-                ))
-            })?;
+            .map_err(|_| DataError::InvalidInput("HTTP-клиент недоступен".to_string()))?;
 
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(config.as_bytes())?;
@@ -969,7 +975,7 @@ pub fn import_provider_backups(
 ) -> DataResult<()> {
     for provider in providers {
         let normalized_type = normalize_provider_type(&provider.provider_type)?;
-        validate_http_url(&provider.base_url)?;
+        normalize_provider_url(&provider.base_url, ProviderLocality::Local)?;
         validate_endpoint(&provider.models_endpoint, "Путь списка моделей")?;
         validate_endpoint(&provider.chat_endpoint, "Путь чата")?;
         validate_endpoint(&provider.embeddings_endpoint, "Путь embeddings")?;
@@ -1211,7 +1217,7 @@ pub fn connection_error_result(
 ) -> LlmConnectionTestResultDto {
     LlmConnectionTestResultDto {
         status: STATUS_ERROR.to_string(),
-        message: error.to_string(),
+        message: crate::data::safe_command_message(error),
         checked_at: now_iso(),
         models: Vec::new(),
         chat_ok: false,
@@ -1226,7 +1232,7 @@ pub fn connection_error_result_for_base_url(
 ) -> LlmConnectionTestResultDto {
     LlmConnectionTestResultDto {
         status: STATUS_ERROR.to_string(),
-        message: error.to_string(),
+        message: crate::data::safe_command_message(error),
         checked_at: now_iso(),
         models: Vec::new(),
         chat_ok: false,
@@ -1238,7 +1244,7 @@ pub fn connection_error_result_for_base_url(
 pub fn models_error_result(error: DataError) -> LlmModelsResultDto {
     LlmModelsResultDto {
         status: STATUS_ERROR.to_string(),
-        message: error.to_string(),
+        message: crate::data::safe_command_message(error),
         models: Vec::new(),
         options: Vec::new(),
     }
@@ -1483,8 +1489,12 @@ fn normalize_provider_type(provider_type: &str) -> DataResult<String> {
 }
 
 fn normalize_provider_base_url(provider_type: &str, base_url: &str) -> DataResult<String> {
-    let mut normalized = base_url.trim().trim_end_matches('/').to_string();
-    validate_http_url(&normalized)?;
+    let locality = if matches!(provider_type, "ollama" | "lmstudio" | "custom") {
+        ProviderLocality::Local
+    } else {
+        ProviderLocality::Cloud
+    };
+    let mut normalized = normalize_provider_url(base_url, locality)?;
 
     if provider_type == "ollama" {
         if ends_with_path_segment(&normalized, "v1") {
@@ -1499,7 +1509,7 @@ fn normalize_provider_base_url(provider_type: &str, base_url: &str) -> DataResul
         normalized = strip_endpoint_suffix(&normalized, "/chat/completions");
     }
 
-    validate_http_url(&normalized)?;
+    normalize_provider_url(&normalized, locality)?;
     Ok(normalized)
 }
 
@@ -1543,30 +1553,17 @@ fn normalize_name(name: &str) -> DataResult<String> {
 }
 
 fn validate_http_url(url: &str) -> DataResult<()> {
-    let trimmed = url.trim();
-    let without_scheme = if let Some(rest) = trimmed.strip_prefix("http://") {
-        rest
-    } else if let Some(rest) = trimmed.strip_prefix("https://") {
-        rest
-    } else {
-        return Err(DataError::InvalidInput(
-            "Base URL должен начинаться с http:// или https://".to_string(),
-        ));
-    };
-
-    let host = without_scheme
-        .split(['/', ':', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    if host.is_empty() || trimmed.chars().any(char::is_whitespace) {
-        return Err(DataError::InvalidInput("Некорректный Base URL".to_string()));
-    }
-    Ok(())
+    normalize_provider_url(url, ProviderLocality::Local).map(|_| ())
 }
 
 fn validate_endpoint(endpoint: &str, field_name: &str) -> DataResult<()> {
     let trimmed = endpoint.trim();
-    if trimmed.starts_with('/') && !trimmed.chars().any(char::is_whitespace) {
+    if trimmed.starts_with('/')
+        && !trimmed.starts_with("//")
+        && !trimmed.contains("..")
+        && !trimmed.contains(['?', '#', '\\'])
+        && !trimmed.chars().any(char::is_whitespace)
+    {
         Ok(())
     } else {
         Err(DataError::InvalidInput(format!(
@@ -1614,6 +1611,11 @@ fn safe_custom_headers_for_backup(value: &str) -> String {
 }
 
 fn validate_custom_header(key: &str, value: &Value) -> DataResult<()> {
+    let header_value = value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string());
+    validate_request_header(key, &header_value)?;
     let lower_key = key.trim().to_ascii_lowercase();
     let looks_secret = lower_key == "authorization"
         || lower_key.contains("api-key")
@@ -1813,10 +1815,10 @@ fn is_openai_compatible_provider_type(provider_type: &str) -> bool {
 }
 
 fn safe_diagnostic_error(error: &DataError) -> String {
-    error
-        .to_string()
-        .replace("Authorization", "[redacted-header]")
-        .replace("Bearer", "[redacted-auth-scheme]")
+    crate::data::safe_command_message(match error {
+        DataError::InvalidInput(message) => DataError::InvalidInput(message.clone()),
+        _ => DataError::State("Provider operation failed".to_string()),
+    })
 }
 
 fn build_note_ai_prompt(request: &NoteAiRequestDto) -> DataResult<NoteAiPrompt> {
@@ -2369,18 +2371,7 @@ fn path_ends_with_endpoint(base_url: &str, endpoint: &str) -> bool {
 }
 
 fn is_local_base_url(base_url: &str) -> bool {
-    let without_scheme = base_url
-        .trim()
-        .strip_prefix("http://")
-        .or_else(|| base_url.trim().strip_prefix("https://"))
-        .unwrap_or_default();
-    let host = without_scheme
-        .trim_start_matches('[')
-        .split([']', '/', ':'])
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "0.0.0.0")
+    url::Url::parse(base_url).is_ok_and(|url| is_local_destination(&url))
 }
 
 fn privacy_notice(is_local: bool) -> String {
@@ -2395,6 +2386,20 @@ fn privacy_notice(is_local: bool) -> String {
 
 fn escape_curl_config_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn validate_request_header(name: &str, value: &str) -> DataResult<()> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        || value.chars().any(char::is_control)
+    {
+        return Err(DataError::InvalidInput(
+            "Некорректный HTTP-заголовок подключения".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn map_curl_error(stderr: &str) -> String {
@@ -2419,6 +2424,39 @@ fn curl_binary_name() -> &'static str {
     } else {
         "curl"
     }
+}
+
+fn curl_command(url: &str, timeout_seconds: i64, connect_timeout_seconds: i64) -> Command {
+    let mut command = Command::new(curl_binary_name());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--location")
+        .arg("--max-redirs")
+        .arg("2")
+        .arg("--proto")
+        .arg("=http,https")
+        .arg("--proto-redir")
+        .arg(if url.starts_with("https://") {
+            "=https"
+        } else {
+            "=http,https"
+        })
+        .arg("--max-time")
+        .arg(timeout_seconds.to_string())
+        .arg("--connect-timeout")
+        .arg(connect_timeout_seconds.to_string())
+        .arg("--write-out")
+        .arg("\n%{http_code}")
+        .arg("--config")
+        .arg("-");
+    command
 }
 
 fn now_iso() -> String {
@@ -3376,13 +3414,38 @@ mod tests {
     }
 
     #[test]
+    fn curl_config_rejects_injected_header_lines() {
+        let error =
+            validate_request_header("X-Test", "safe\nheader = \"Authorization: Bearer secret\"")
+                .unwrap_err();
+        assert!(!error.to_string().contains("secret"));
+        assert!(validate_request_header("X-Test", "ordinary-value").is_ok());
+        assert!(validate_request_header("X-Test\r\nAnother", "value").is_err());
+    }
+
+    #[test]
+    fn curl_invocation_keeps_authorization_out_of_process_arguments() {
+        let command = curl_command("https://bridge.example.test/api/v1/models", 10, 4);
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(args.windows(2).any(|pair| pair == ["--config", "-"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--proto-redir", "=https"]));
+        assert!(!args.join(" ").contains("Authorization"));
+        assert!(!args.join(" ").contains("Bearer"));
+    }
+
+    #[test]
     fn timeout_error_results_clear_model_loading_payload() {
         let result = models_error_result(DataError::InvalidInput(map_curl_error(
             "curl: (28) Timeout was reached sk-secret",
         )));
 
         assert_eq!(result.status, STATUS_ERROR);
-        assert!(result.message.contains("Timeout"));
+        assert!(result.message.contains("не ответила вовремя"));
         assert!(result.models.is_empty());
         assert!(!result.message.contains("sk-secret"));
     }

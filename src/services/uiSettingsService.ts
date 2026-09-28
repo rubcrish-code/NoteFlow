@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./safeInvoke";
 import type { AppLanguage, AppSection, ThemeMode } from "../app/types";
 import { normalizeAppZoom } from "../shared/appZoom";
 import { EDITOR_CONTENT_DEFAULT_OFFSET, EDITOR_CONTENT_DEFAULT_WIDTH, clampEditorContentOffset, clampEditorContentWidth } from "../shared/editorPageLayout";

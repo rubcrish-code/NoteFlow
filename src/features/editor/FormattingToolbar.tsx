@@ -60,7 +60,7 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
   const toolbarCssWidth = useObservedElementWidth(toolbarWrapRef);
   const toolbarPhysicalWidth = toPhysicalLayoutPixels(toolbarCssWidth, appZoomPercent);
   const toolbarLayoutMode = getEditorToolbarLayoutMode(toolbarPhysicalWidth);
-  const { overflowActions, visibleActions } = resolveEditorToolbarActions(toolbarCssWidth);
+  const { overflowActions, visibleActions } = resolveEditorToolbarActions(toolbarCssWidth, undefined, toolbarLayoutMode);
   const aiMenuStyle = useFloatingPopoverPosition({
     anchorRef: aiButtonRef,
     isOpen: isAiMenuOpen,

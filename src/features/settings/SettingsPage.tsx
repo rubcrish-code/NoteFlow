@@ -16,6 +16,7 @@ import {
   createLlmNetworkOperation,
   getVisibleLlmNetworkAction,
   isLlmNetworkOperationActiveById,
+  modelDiscoveryFeedbackFromConnectionTest,
   shouldClearLlmNetworkOperationForTarget,
 } from "./llmNetworkOperation";
 import type { LlmNetworkAction, LlmNetworkOperation } from "./llmNetworkOperation";
@@ -908,9 +909,10 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
         });
         return;
       }
+      const discoveryFeedback = modelDiscoveryFeedbackFromConnectionTest(result);
       setModelOptions(result.models.map((id) => ({ id, supportsChat: null, supportsEmbeddings: null })));
-      setModelDiscoveryState(result.models.length > 0 ? "success" : "empty");
-      setModelDiscoveryMessage(result.models.length > 0 ? `Получено моделей: ${result.models.length}` : "Endpoint доступен, но список моделей пуст");
+      setModelDiscoveryState(discoveryFeedback.state);
+      setModelDiscoveryMessage(discoveryFeedback.message);
       updateMessage(result.message, result.status === "error" ? "error" : "neutral");
       onToast(result.message);
     } catch (error) {

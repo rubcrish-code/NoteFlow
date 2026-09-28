@@ -4,11 +4,16 @@ mod embedding;
 mod knowledge;
 mod knowledge_agent;
 mod llm;
+mod provider_url;
 mod rag;
 mod revisions;
 mod search;
 
 use tauri::Manager;
+
+fn renderable_asset_mime(mime: &str) -> bool {
+    matches!(mime, "image/png" | "image/jpeg" | "image/webp")
+}
 
 fn exit_process(app_handle: &tauri::AppHandle) -> ! {
     app_handle.cleanup_before_exit();
@@ -29,20 +34,27 @@ pub fn run() {
             let asset_id = request.uri().path().trim_start_matches('/');
             let state = context.app_handle().state::<data::AppState>();
             match state.resolve_asset_protocol(asset_id) {
-                Ok((path, mime_type)) => match std::fs::read(path) {
-                    Ok(bytes) => tauri::http::Response::builder()
-                        .header(tauri::http::header::CONTENT_TYPE, mime_type)
-                        .header(
-                            tauri::http::header::CACHE_CONTROL,
-                            "private, max-age=31536000, immutable",
-                        )
-                        .body(bytes)
-                        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
-                    Err(_) => tauri::http::Response::builder()
-                        .status(404)
-                        .body(Vec::new())
-                        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
-                },
+                Ok((path, mime_type)) if renderable_asset_mime(&mime_type) => {
+                    match std::fs::read(path) {
+                        Ok(bytes) => tauri::http::Response::builder()
+                            .header(tauri::http::header::CONTENT_TYPE, mime_type)
+                            .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                            .header(
+                                tauri::http::header::CACHE_CONTROL,
+                                "private, max-age=31536000, immutable",
+                            )
+                            .body(bytes)
+                            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                        Err(_) => tauri::http::Response::builder()
+                            .status(404)
+                            .body(Vec::new())
+                            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                    }
+                }
+                Ok(_) => tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
                 Err(_) => tauri::http::Response::builder()
                     .status(404)
                     .body(Vec::new())
@@ -164,4 +176,25 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::renderable_asset_mime;
+
+    #[test]
+    fn custom_asset_protocol_never_serves_active_documents() {
+        assert!(renderable_asset_mime("image/png"));
+        assert!(renderable_asset_mime("image/jpeg"));
+        assert!(renderable_asset_mime("image/webp"));
+        for mime in [
+            "text/html",
+            "image/svg+xml",
+            "application/javascript",
+            "application/pdf",
+            "application/octet-stream",
+        ] {
+            assert!(!renderable_asset_mime(mime));
+        }
+    }
 }

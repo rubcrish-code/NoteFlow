@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./safeInvoke";
 import type { NoteIconKey, TagColor } from "../app/types";
 
 export type SearchMatchSource = "title" | "text" | "tag" | "project";

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./safeInvoke";
 import type { Note } from "../app/types";
 
 export const NOTE_AI_TIMEOUT_MS = 45_000;

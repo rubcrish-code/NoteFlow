@@ -6,10 +6,22 @@ import {
   isLlmNetworkOperationActiveById,
   isLlmNetworkOperationCurrent,
   isLlmNetworkOperationTargetCurrent,
+  modelDiscoveryFeedbackFromConnectionTest,
   shouldClearLlmNetworkOperationForTarget,
 } from "../src/features/settings/llmNetworkOperation";
 
 describe("LLM settings network operation lifecycle", () => {
+  it("does not label a failed connection as an accessible empty model endpoint", () => {
+    assert.deepEqual(
+      modelDiscoveryFeedbackFromConnectionTest({ status: "error", message: "Нет соединения с моделью.", models: [] }),
+      { state: "error", message: "Нет соединения с моделью." },
+    );
+    assert.deepEqual(
+      modelDiscoveryFeedbackFromConnectionTest({ status: "success", message: "Готово", models: [] }),
+      { state: "empty", message: "Endpoint доступен, но список моделей пуст" },
+    );
+  });
+
   it("keeps loading scoped to the active draft target", () => {
     const operation = createLlmNetworkOperation("testConnection", 7, "draft", "draft-a", "sig-a", 10_000, 1000);
 

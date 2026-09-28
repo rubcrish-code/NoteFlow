@@ -82,18 +82,14 @@ export const EDITOR_TOOLBAR_COMPACT_BREAKPOINT = 980;
 export const EDITOR_TOOLBAR_NARROW_BREAKPOINT = 560;
 export const EDITOR_SURFACE_COMPACT_BREAKPOINT = 560;
 
-const TOOLBAR_ACTION_WIDTH = 30;
 const TOOLBAR_GAP = 1;
-const TOOLBAR_GROUP_SEPARATOR_WIDTH = 5;
-const TOOLBAR_HORIZONTAL_PADDING = 16;
-const TOOLBAR_OVERFLOW_WIDTH = 31;
 const TOOLBAR_LAYOUT_SAFETY_WIDTH = 8;
 
 function orderedActions(actions: readonly EditorToolbarAction[], selectedIds: ReadonlySet<EditorToolbarActionId>) {
   return actions.filter((action) => selectedIds.has(action.id));
 }
 
-function estimateToolbarWidth(actions: readonly EditorToolbarAction[], includesOverflow: boolean) {
+function estimateToolbarWidth(actions: readonly EditorToolbarAction[], includesOverflow: boolean, mode: EditorToolbarLayoutMode) {
   const groupSeparators = actions.reduce((count, action, index) => {
     const nextAction = actions[index + 1];
     return count + (nextAction && nextAction.group !== action.group ? 1 : 0);
@@ -101,21 +97,23 @@ function estimateToolbarWidth(actions: readonly EditorToolbarAction[], includesO
   const itemCount = actions.length + (includesOverflow ? 1 : 0);
   const gaps = Math.max(0, itemCount - 1);
 
-  return TOOLBAR_HORIZONTAL_PADDING
-    + actions.length * TOOLBAR_ACTION_WIDTH
+  const narrow = mode === "narrow";
+  return (narrow ? 16 : 24)
+    + actions.length * (narrow ? 29 : 30)
     + gaps * TOOLBAR_GAP
-    + groupSeparators * TOOLBAR_GROUP_SEPARATOR_WIDTH
-    + (includesOverflow ? TOOLBAR_OVERFLOW_WIDTH : 0)
+    + groupSeparators * (narrow ? 5 : 7)
+    + (includesOverflow ? 30 : 0)
     + TOOLBAR_LAYOUT_SAFETY_WIDTH;
 }
 
 export function resolveEditorToolbarActions(
   availableWidth: number,
   actions: readonly EditorToolbarAction[] = EDITOR_TOOLBAR_ACTIONS,
+  mode: EditorToolbarLayoutMode = getEditorToolbarLayoutMode(availableWidth),
 ): EditorToolbarActionLayout {
   const safeWidth = Number.isFinite(availableWidth) ? Math.max(0, availableWidth) : EDITOR_TOOLBAR_NARROW_BREAKPOINT;
   const allActions = [...actions];
-  if (estimateToolbarWidth(allActions, false) <= safeWidth) {
+  if (estimateToolbarWidth(allActions, false, mode) <= safeWidth) {
     return { overflowActions: [], visibleActions: allActions };
   }
 
@@ -127,7 +125,7 @@ export function resolveEditorToolbarActions(
   for (const { action } of candidates) {
     const candidateIds = new Set(selectedIds);
     candidateIds.add(action.id);
-    if (estimateToolbarWidth(orderedActions(allActions, candidateIds), true) <= safeWidth) {
+    if (estimateToolbarWidth(orderedActions(allActions, candidateIds), true, mode) <= safeWidth) {
       selectedIds.add(action.id);
     }
   }

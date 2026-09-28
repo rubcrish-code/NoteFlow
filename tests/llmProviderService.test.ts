@@ -6,7 +6,7 @@ describe("LLM provider frontend contract", () => {
   it("routes provider access through typed Tauri commands", () => {
     const source = readFileSync("src/services/llmProviderService.ts", "utf8");
 
-    assert.match(source, /from "@tauri-apps\/api\/core"/);
+    assert.match(source, /from "\.\/safeInvoke"/);
     assert.match(source, /invoke<LlmProviderDto\[]>\("list_llm_providers"/);
     assert.match(source, /invoke<LlmProviderDto>\("save_llm_provider"/);
     assert.match(source, /const command = "test_llm_provider"/);
@@ -146,7 +146,8 @@ describe("LLM provider frontend contract", () => {
     const llmSource = readFileSync("src-tauri/src/llm.rs", "utf8");
 
     assert.match(frontendSource, /if \(!import\.meta\.env\?\.DEV\) \{\s*return;\s*\}/);
-    assert.match(frontendSource, /console\.debug\("\[NoteFlow LLM\]", event, fields\)/);
+    assert.match(frontendSource, /console\.debug\("\[NoteFlow LLM\]", event, safeFields\)/);
+    assert.match(frontendSource, /Object\.entries\(fields\)\.filter/);
     assert.match(frontendSource, /hasApiKey: Boolean\(input\.apiKey\?\.trim\(\)\)/);
     assert.doesNotMatch(frontendSource, /console\.(?:debug|log|info|warn|error)\([^)]*input\.apiKey/);
 

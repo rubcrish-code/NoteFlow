@@ -986,7 +986,7 @@ pub fn init_state(app: &mut App) -> Result<AppState, String> {
     let platform_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|error| format!("Не удалось определить директорию данных: {error}"))?;
+        .map_err(|_| "Не удалось определить директорию данных".to_string())?;
     #[cfg(debug_assertions)]
     let data_dir = std::env::var_os("NOTEFLOW_DEV_DATA_DIR")
         .map(PathBuf::from)
@@ -995,7 +995,7 @@ pub fn init_state(app: &mut App) -> Result<AppState, String> {
     let data_dir = platform_data_dir;
     DataStore::open(data_dir)
         .map(AppState::new)
-        .map_err(command_error)
+        .map_err(|_| "Не удалось открыть хранилище данных".to_string())
 }
 
 pub struct DataStore {
@@ -5967,30 +5967,173 @@ fn export_result(path: PathBuf, relative_path: String, message: &str) -> ExportR
     }
 }
 
-fn command_error(error: DataError) -> String {
-    error.to_string()
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicCommandError {
+    code: &'static str,
+    message: &'static str,
+    retryable: bool,
 }
 
-fn backup_command_error(error: DataError) -> String {
+impl PublicCommandError {
+    fn interrupted() -> Self {
+        Self {
+            code: "OPERATION_INTERRUPTED",
+            message: "Операция была прервана. Попробуйте ещё раз.",
+            retryable: true,
+        }
+    }
+}
+
+fn command_error(error: DataError) -> PublicCommandError {
+    let (code, message, retryable) = match &error {
+        DataError::Sql(_) => (
+            "DATABASE_FAILED",
+            "Не удалось получить доступ к данным. Попробуйте ещё раз.",
+            true,
+        ),
+        DataError::Io(_) => (
+            "FILE_ACCESS_FAILED",
+            "Не удалось обработать файл. Проверьте доступ и повторите попытку.",
+            true,
+        ),
+        DataError::Zip(_) => ("FILE_ACCESS_FAILED", "Не удалось обработать архив.", false),
+        DataError::Json(_) | DataError::Serialization => (
+            "SERIALIZATION_FAILED",
+            "Не удалось обработать данные.",
+            false,
+        ),
+        DataError::NotFound(_) => ("NOT_FOUND", "Запрошенные данные больше не доступны.", false),
+        DataError::StaleWrite => (
+            "STALE_WRITE",
+            "Заметка уже была изменена. Загружена более новая версия.",
+            true,
+        ),
+        DataError::Revision => (
+            "REVISION_FAILED",
+            "Не удалось сохранить историю изменений заметки.",
+            true,
+        ),
+        DataError::Sidecar => (
+            "SIDECAR_FAILED",
+            "Не удалось сохранить расширенное оформление заметки.",
+            true,
+        ),
+        DataError::Transaction => (
+            "DATABASE_WRITE_FAILED",
+            "Не удалось сохранить изменения. Попробуйте ещё раз.",
+            true,
+        ),
+        DataError::RestoreApplied => (
+            "RESTORE_APPLIED",
+            "Данные восстановлены. Перезапустите NoteFlow для обновления интерфейса.",
+            false,
+        ),
+        DataError::State(_) => (
+            "OPERATION_UNAVAILABLE",
+            "Операция временно недоступна. Попробуйте ещё раз.",
+            true,
+        ),
+        DataError::InvalidInput(raw) => {
+            let lower = raw.to_lowercase();
+            if lower.contains("timeout")
+                || lower.contains("timed out")
+                || lower.contains("время ожидания")
+            {
+                (
+                    "PROVIDER_TIMEOUT",
+                    "Модель не ответила вовремя. Повторите запрос.",
+                    true,
+                )
+            } else if lower.contains("401")
+                || lower.contains("403")
+                || lower.contains("unauthorized")
+                || lower.contains("forbidden")
+            {
+                (
+                    "PROVIDER_UNAUTHORIZED",
+                    "Проверьте API-ключ и настройки модели.",
+                    false,
+                )
+            } else if lower.contains("429") || lower.contains("rate limit") {
+                (
+                    "PROVIDER_RATE_LIMITED",
+                    "Провайдер ограничил число запросов. Повторите позже.",
+                    true,
+                )
+            } else if lower.contains("404") {
+                (
+                    "PROVIDER_UNAVAILABLE",
+                    "Модель или endpoint недоступны.",
+                    false,
+                )
+            } else if (500..=599).contains(
+                &lower
+                    .split(':')
+                    .next()
+                    .unwrap_or_default()
+                    .parse::<u16>()
+                    .unwrap_or_default(),
+            ) {
+                (
+                    "PROVIDER_UNAVAILABLE",
+                    "Сервис модели временно недоступен.",
+                    true,
+                )
+            } else if lower.contains("некорректный ответ")
+                || lower.contains("неподдерживаемом формате")
+            {
+                (
+                    "INVALID_PROVIDER_RESPONSE",
+                    "Модель вернула некорректный ответ.",
+                    false,
+                )
+            } else if lower.contains("endpoint")
+                || lower.contains("соединени")
+                || lower.contains("curl")
+            {
+                (
+                    "NETWORK_UNAVAILABLE",
+                    "Нет соединения с моделью. Проверьте её доступность.",
+                    true,
+                )
+            } else {
+                (
+                    "INVALID_CONFIGURATION",
+                    "Проверьте введённые данные и повторите попытку.",
+                    false,
+                )
+            }
+        }
+    };
+    PublicCommandError {
+        code,
+        message,
+        retryable,
+    }
+}
+
+pub(crate) fn safe_command_message(error: DataError) -> String {
+    command_error(error).message.to_string()
+}
+
+fn backup_command_error(error: DataError) -> PublicCommandError {
     match error {
-        DataError::InvalidInput(message) => message,
-        DataError::Io(_) => "Не удалось безопасно обработать файл резервной копии".to_string(),
-        DataError::Json(_) | DataError::Zip(_) => {
-            "Файл резервной копии повреждён или имеет неподдерживаемый формат".to_string()
-        }
-        DataError::Sql(_) | DataError::Transaction => {
-            "Не удалось восстановить резервную копию. Текущие данные не изменены".to_string()
-        }
-        DataError::RestoreApplied => {
-            "Резервная копия восстановлена, но интерфейс не удалось обновить. Перезапустите NoteFlow"
-                .to_string()
-        }
-        DataError::State(_)
-        | DataError::NotFound(_)
-        | DataError::Serialization
-        | DataError::Revision
-        | DataError::Sidecar
-        | DataError::StaleWrite => "Не удалось обработать резервную копию".to_string(),
+        DataError::RestoreApplied => PublicCommandError {
+            code: "RESTORE_APPLIED",
+            message: "Резервная копия восстановлена. Перезапустите NoteFlow.",
+            retryable: false,
+        },
+        DataError::Sql(_) | DataError::Transaction => PublicCommandError {
+            code: "IMPORT_FAILED",
+            message: "Не удалось восстановить резервную копию. Текущие данные не изменены.",
+            retryable: true,
+        },
+        _ => PublicCommandError {
+            code: "BACKUP_FAILED",
+            message: "Не удалось обработать резервную копию. Проверьте файл и повторите попытку.",
+            retryable: false,
+        },
     }
 }
 
@@ -6003,14 +6146,16 @@ fn open_background_connection(database_path: &Path) -> DataResult<Connection> {
 }
 
 #[tauri::command]
-pub fn load_workspace(state: State<'_, AppState>) -> Result<WorkspaceSnapshotDto, String> {
+pub fn load_workspace(
+    state: State<'_, AppState>,
+) -> Result<WorkspaceSnapshotDto, PublicCommandError> {
     state
         .with_store(|store| store.load_workspace())
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn get_ui_settings(state: State<'_, AppState>) -> Result<UiSettingsDto, String> {
+pub fn get_ui_settings(state: State<'_, AppState>) -> Result<UiSettingsDto, PublicCommandError> {
     state
         .with_store(|store| store.get_ui_settings())
         .map_err(command_error)
@@ -6020,14 +6165,16 @@ pub fn get_ui_settings(state: State<'_, AppState>) -> Result<UiSettingsDto, Stri
 pub fn update_ui_settings(
     request: UiSettingsDto,
     state: State<'_, AppState>,
-) -> Result<UiSettingsDto, String> {
+) -> Result<UiSettingsDto, PublicCommandError> {
     state
         .with_store(|store| store.update_ui_settings(request))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn list_llm_providers(state: State<'_, AppState>) -> Result<Vec<llm::LlmProviderDto>, String> {
+pub fn list_llm_providers(
+    state: State<'_, AppState>,
+) -> Result<Vec<llm::LlmProviderDto>, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| store.list_llm_providers(&storage))
@@ -6038,7 +6185,7 @@ pub fn list_llm_providers(state: State<'_, AppState>) -> Result<Vec<llm::LlmProv
 pub fn save_llm_provider(
     request: llm::SaveLlmProviderRequest,
     state: State<'_, AppState>,
-) -> Result<llm::LlmProviderDto, String> {
+) -> Result<llm::LlmProviderDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| store.save_llm_provider(&storage, request))
@@ -6046,7 +6193,10 @@ pub fn save_llm_provider(
 }
 
 #[tauri::command]
-pub fn delete_llm_provider(provider_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn delete_llm_provider(
+    provider_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| store.delete_llm_provider(&storage, &provider_id))
@@ -6057,7 +6207,7 @@ pub fn delete_llm_provider(provider_id: String, state: State<'_, AppState>) -> R
 pub fn set_default_llm_provider(
     provider_id: String,
     state: State<'_, AppState>,
-) -> Result<llm::LlmProviderDto, String> {
+) -> Result<llm::LlmProviderDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| store.set_default_llm_provider(&storage, &provider_id))
@@ -6068,7 +6218,7 @@ pub fn set_default_llm_provider(
 pub fn delete_llm_provider_key(
     provider_id: String,
     state: State<'_, AppState>,
-) -> Result<llm::LlmProviderDto, String> {
+) -> Result<llm::LlmProviderDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| store.delete_llm_provider_key(&storage, &provider_id))
@@ -6079,7 +6229,7 @@ pub fn delete_llm_provider_key(
 pub fn check_llm_provider_key(
     provider_id: String,
     state: State<'_, AppState>,
-) -> Result<llm::LlmKeyStatusDto, String> {
+) -> Result<llm::LlmKeyStatusDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| store.check_llm_provider_key(&storage, &provider_id))
@@ -6090,7 +6240,7 @@ pub fn check_llm_provider_key(
 pub async fn list_llm_models_for_draft(
     request: llm::DraftLlmProviderRequest,
     state: State<'_, AppState>,
-) -> Result<llm::LlmModelsResultDto, String> {
+) -> Result<llm::LlmModelsResultDto, PublicCommandError> {
     llm::log_llm_diagnostic(
         "rust_command_entered",
         &[
@@ -6140,13 +6290,13 @@ pub async fn list_llm_models_for_draft(
         result
     })
     .await
-    .map_err(|error| format!("Получение списка моделей было прервано: {error}"))
+    .map_err(|_| PublicCommandError::interrupted())
 }
 
 #[tauri::command]
 pub async fn test_llm_provider_draft(
     request: llm::DraftLlmProviderRequest,
-) -> Result<llm::LlmConnectionTestResultDto, String> {
+) -> Result<llm::LlmConnectionTestResultDto, PublicCommandError> {
     let base_url = request.base_url.clone();
     llm::log_llm_diagnostic(
         "rust_command_entered",
@@ -6176,11 +6326,13 @@ pub async fn test_llm_provider_draft(
         result
     })
     .await
-    .map_err(|error| format!("Проверка подключения была прервана: {error}"))
+    .map_err(|_| PublicCommandError::interrupted())
 }
 
 #[tauri::command]
-pub fn get_note_ai_status(state: State<'_, AppState>) -> Result<llm::NoteAiStatusDto, String> {
+pub fn get_note_ai_status(
+    state: State<'_, AppState>,
+) -> Result<llm::NoteAiStatusDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| store.note_ai_status(&storage))
@@ -6191,7 +6343,7 @@ pub fn get_note_ai_status(state: State<'_, AppState>) -> Result<llm::NoteAiStatu
 pub fn accept_note_ai_privacy(
     privacy_scope: String,
     state: State<'_, AppState>,
-) -> Result<llm::NoteAiStatusDto, String> {
+) -> Result<llm::NoteAiStatusDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| {
@@ -6205,7 +6357,7 @@ pub fn accept_note_ai_privacy(
 pub fn list_note_chat_messages(
     note_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<NoteChatMessageDto>, String> {
+) -> Result<Vec<NoteChatMessageDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_note_chat_messages(&note_id))
         .map_err(command_error)
@@ -6215,14 +6367,14 @@ pub fn list_note_chat_messages(
 pub fn save_note_chat_message(
     request: SaveNoteChatMessageRequest,
     state: State<'_, AppState>,
-) -> Result<NoteChatMessageDto, String> {
+) -> Result<NoteChatMessageDto, PublicCommandError> {
     state
         .with_store(|store| store.save_note_chat_message(request))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn list_rag_chats(state: State<'_, AppState>) -> Result<Vec<RagChatDto>, String> {
+pub fn list_rag_chats(state: State<'_, AppState>) -> Result<Vec<RagChatDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_rag_chats())
         .map_err(command_error)
@@ -6232,7 +6384,7 @@ pub fn list_rag_chats(state: State<'_, AppState>) -> Result<Vec<RagChatDto>, Str
 pub fn create_rag_chat(
     request: CreateRagChatRequest,
     state: State<'_, AppState>,
-) -> Result<RagChatDto, String> {
+) -> Result<RagChatDto, PublicCommandError> {
     state
         .with_store(|store| store.create_rag_chat(request))
         .map_err(command_error)
@@ -6242,14 +6394,17 @@ pub fn create_rag_chat(
 pub fn rename_rag_chat(
     request: RenameRagChatRequest,
     state: State<'_, AppState>,
-) -> Result<RagChatDto, String> {
+) -> Result<RagChatDto, PublicCommandError> {
     state
         .with_store(|store| store.rename_rag_chat(request))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn delete_rag_chat(chat_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn delete_rag_chat(
+    chat_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.delete_rag_chat(&chat_id))
         .map_err(command_error)
@@ -6259,7 +6414,7 @@ pub fn delete_rag_chat(chat_id: String, state: State<'_, AppState>) -> Result<()
 pub fn list_rag_chat_messages(
     chat_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<RagChatMessageDto>, String> {
+) -> Result<Vec<RagChatMessageDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_rag_chat_messages(&chat_id))
         .map_err(command_error)
@@ -6269,7 +6424,7 @@ pub fn list_rag_chat_messages(
 pub fn save_rag_chat_message(
     request: SaveRagChatMessageRequest,
     state: State<'_, AppState>,
-) -> Result<RagChatMessageDto, String> {
+) -> Result<RagChatMessageDto, PublicCommandError> {
     state
         .with_store(|store| store.save_rag_chat_message(request))
         .map_err(command_error)
@@ -6279,7 +6434,7 @@ pub fn save_rag_chat_message(
 pub async fn run_note_ai(
     request: llm::NoteAiRequestDto,
     state: State<'_, AppState>,
-) -> Result<llm::NoteAiResponseDto, String> {
+) -> Result<llm::NoteAiResponseDto, PublicCommandError> {
     let provider = state
         .with_store(|store| {
             let provider = store.get_default_llm_provider_record()?.ok_or_else(|| {
@@ -6301,7 +6456,7 @@ pub async fn run_note_ai(
         llm::run_note_ai_request(&provider, &storage, &http, request)
     })
     .await
-    .map_err(|error| format!("AI-запрос был прерван: {error}"))?
+    .map_err(|_| PublicCommandError::interrupted())?
     .map_err(command_error)
 }
 
@@ -6367,7 +6522,7 @@ pub async fn plan_rag_question(
 pub async fn list_llm_models(
     provider_id: String,
     state: State<'_, AppState>,
-) -> Result<llm::LlmModelsResultDto, String> {
+) -> Result<llm::LlmModelsResultDto, PublicCommandError> {
     let provider = state
         .with_store(|store| store.get_llm_provider_record(&provider_id))
         .map_err(command_error)?;
@@ -6399,14 +6554,14 @@ pub async fn list_llm_models(
         result
     })
     .await
-    .map_err(|error| format!("Получение списка моделей было прервано: {error}"))
+    .map_err(|_| PublicCommandError::interrupted())
 }
 
 #[tauri::command]
 pub async fn test_llm_provider(
     provider_id: String,
     state: State<'_, AppState>,
-) -> Result<llm::LlmConnectionTestResultDto, String> {
+) -> Result<llm::LlmConnectionTestResultDto, PublicCommandError> {
     let provider = state
         .with_store(|store| store.get_llm_provider_record(&provider_id))
         .map_err(command_error)?;
@@ -6440,7 +6595,7 @@ pub async fn test_llm_provider(
         result
     })
     .await
-    .map_err(|error| format!("Проверка подключения была прервана: {error}"))?;
+    .map_err(|_| PublicCommandError::interrupted())?;
     state
         .with_store(|store| store.update_llm_provider_status(&provider_id, &result))
         .map_err(command_error)?;
@@ -6452,14 +6607,17 @@ pub fn list_notes(
     query: Option<String>,
     include_archived: bool,
     state: State<'_, AppState>,
-) -> Result<Vec<NoteDto>, String> {
+) -> Result<Vec<NoteDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_notes(query, include_archived))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn get_note(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, String> {
+pub fn get_note(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, PublicCommandError> {
     state
         .with_store(|store| store.get_note(&note_id))
         .map_err(command_error)
@@ -6469,7 +6627,7 @@ pub fn get_note(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, 
 pub fn search_notes(
     request: search::SearchNotesRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<search::SearchNoteResultDto>, String> {
+) -> Result<Vec<search::SearchNoteResultDto>, PublicCommandError> {
     state
         .with_store(|store| store.search_notes(request))
         .map_err(command_error)
@@ -6478,7 +6636,7 @@ pub fn search_notes(
 #[tauri::command]
 pub fn rebuild_search_index(
     state: State<'_, AppState>,
-) -> Result<search::RebuildSearchIndexResultDto, String> {
+) -> Result<search::RebuildSearchIndexResultDto, PublicCommandError> {
     state
         .with_store(DataStore::rebuild_knowledge_search_index)
         .map_err(command_error)
@@ -6488,7 +6646,7 @@ pub fn rebuild_search_index(
 pub fn get_knowledge_documents(
     request: search::KnowledgeDocumentsRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<search::KnowledgeDocumentDto>, String> {
+) -> Result<Vec<search::KnowledgeDocumentDto>, PublicCommandError> {
     state
         .with_store(|store| store.get_knowledge_documents(request))
         .map_err(command_error)
@@ -6498,7 +6656,7 @@ pub fn get_knowledge_documents(
 pub fn get_knowledge_document_by_note_id(
     note_id: String,
     state: State<'_, AppState>,
-) -> Result<search::KnowledgeDocumentDto, String> {
+) -> Result<search::KnowledgeDocumentDto, PublicCommandError> {
     state
         .with_store(|store| store.get_knowledge_document_by_note_id(&note_id))
         .map_err(command_error)
@@ -6508,7 +6666,7 @@ pub fn get_knowledge_document_by_note_id(
 pub fn sync_knowledge_chunks_for_note(
     note_id: String,
     state: State<'_, AppState>,
-) -> Result<i64, String> {
+) -> Result<i64, PublicCommandError> {
     state
         .with_store(|store| knowledge::sync_note(&mut store.conn, &note_id))
         .map_err(command_error)
@@ -6517,7 +6675,7 @@ pub fn sync_knowledge_chunks_for_note(
 #[tauri::command]
 pub fn get_knowledge_index_status(
     state: State<'_, AppState>,
-) -> Result<knowledge::KnowledgeIndexStatusDto, String> {
+) -> Result<knowledge::KnowledgeIndexStatusDto, PublicCommandError> {
     state
         .with_store(|store| knowledge::index_status(&store.conn))
         .map_err(command_error)
@@ -6527,7 +6685,7 @@ pub fn get_knowledge_index_status(
 pub fn get_knowledge_chunks_by_note_id(
     note_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<knowledge::KnowledgeChunkDto>, String> {
+) -> Result<Vec<knowledge::KnowledgeChunkDto>, PublicCommandError> {
     state
         .with_store(|store| knowledge::get_chunks_by_note_id(&store.conn, &note_id))
         .map_err(command_error)
@@ -6537,7 +6695,7 @@ pub fn get_knowledge_chunks_by_note_id(
 pub fn get_knowledge_chunks_by_note_ids(
     request: knowledge::KnowledgeChunksByNoteIdsRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<knowledge::KnowledgeChunkDto>, String> {
+) -> Result<Vec<knowledge::KnowledgeChunkDto>, PublicCommandError> {
     state
         .with_store(|store| knowledge::get_chunks_by_note_ids(&store.conn, &request))
         .map_err(command_error)
@@ -6547,7 +6705,7 @@ pub fn get_knowledge_chunks_by_note_ids(
 pub fn get_neighbor_knowledge_chunks(
     request: knowledge::KnowledgeChunkNeighborsRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<knowledge::KnowledgeChunkDto>, String> {
+) -> Result<Vec<knowledge::KnowledgeChunkDto>, PublicCommandError> {
     state
         .with_store(|store| knowledge::get_neighbor_chunks(&store.conn, &request))
         .map_err(command_error)
@@ -6557,7 +6715,7 @@ pub fn get_neighbor_knowledge_chunks(
 pub fn get_knowledge_chunk_state(
     note_id: String,
     state: State<'_, AppState>,
-) -> Result<Option<knowledge::KnowledgeChunkStateDto>, String> {
+) -> Result<Option<knowledge::KnowledgeChunkStateDto>, PublicCommandError> {
     state
         .with_store(|store| knowledge::get_state(&store.conn, &note_id))
         .map_err(command_error)
@@ -6566,7 +6724,7 @@ pub fn get_knowledge_chunk_state(
 #[tauri::command]
 pub async fn reconcile_knowledge_chunks(
     state: State<'_, AppState>,
-) -> Result<knowledge::RebuildKnowledgeChunksResultDto, String> {
+) -> Result<knowledge::RebuildKnowledgeChunksResultDto, PublicCommandError> {
     let database_path = state
         .with_store(|store| Ok(store.base_dir.join(DATABASE_FILE)))
         .map_err(command_error)?;
@@ -6575,14 +6733,14 @@ pub async fn reconcile_knowledge_chunks(
         knowledge::reconcile(&mut conn)
     })
     .await
-    .map_err(|error| format!("Обновление базы знаний было прервано: {error}"))?
+    .map_err(|_| PublicCommandError::interrupted())?
     .map_err(command_error)
 }
 
 #[tauri::command]
 pub async fn rebuild_knowledge_chunks(
     state: State<'_, AppState>,
-) -> Result<knowledge::RebuildKnowledgeChunksResultDto, String> {
+) -> Result<knowledge::RebuildKnowledgeChunksResultDto, PublicCommandError> {
     let database_path = state
         .with_store(|store| Ok(store.base_dir.join(DATABASE_FILE)))
         .map_err(command_error)?;
@@ -6591,14 +6749,14 @@ pub async fn rebuild_knowledge_chunks(
         knowledge::rebuild(&mut conn)
     })
     .await
-    .map_err(|error| format!("Перестроение базы знаний было прервано: {error}"))?
+    .map_err(|_| PublicCommandError::interrupted())?
     .map_err(command_error)
 }
 
 #[tauri::command]
 pub fn list_embedding_profiles(
     state: State<'_, AppState>,
-) -> Result<Vec<embedding::EmbeddingProfileDto>, String> {
+) -> Result<Vec<embedding::EmbeddingProfileDto>, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| embedding::list_profiles(&store.conn, &storage))
@@ -6609,7 +6767,7 @@ pub fn list_embedding_profiles(
 pub fn save_embedding_profile(
     request: embedding::SaveEmbeddingProfileRequest,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingProfileDto, String> {
+) -> Result<embedding::EmbeddingProfileDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| embedding::save_profile(&mut store.conn, &storage, request))
@@ -6620,7 +6778,7 @@ pub fn save_embedding_profile(
 pub fn delete_embedding_profile(
     profile_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<(), PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| embedding::delete_profile(&mut store.conn, &storage, &profile_id))
@@ -6631,7 +6789,7 @@ pub fn delete_embedding_profile(
 pub fn accept_embedding_cloud_consent(
     profile_id: String,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingProfileDto, String> {
+) -> Result<embedding::EmbeddingProfileDto, PublicCommandError> {
     let storage = llm::SystemSecretStorage;
     state
         .with_store(|store| {
@@ -6650,7 +6808,7 @@ pub fn accept_embedding_cloud_consent(
 pub async fn test_embedding_provider(
     profile_id: String,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingProviderTestResultDto, String> {
+) -> Result<embedding::EmbeddingProviderTestResultDto, PublicCommandError> {
     let profile = state
         .with_store(|store| embedding::get_profile(&store.conn, &profile_id))
         .map_err(command_error)?;
@@ -6660,7 +6818,7 @@ pub async fn test_embedding_provider(
         embedding::test_profile(&profile, &storage, &http)
     })
     .await
-    .map_err(|error| format!("Проверка модели смыслового поиска (RAG) была прервана: {error}"))?;
+    .map_err(|_| PublicCommandError::interrupted())?;
     state
         .with_store(|store| embedding::record_test_result(&mut store.conn, &profile_id, &result))
         .map_err(command_error)?;
@@ -6671,7 +6829,7 @@ pub async fn test_embedding_provider(
 pub async fn list_embedding_models(
     request: embedding::EmbeddingModelListRequest,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingModelListResultDto, String> {
+) -> Result<embedding::EmbeddingModelListResultDto, PublicCommandError> {
     let has_draft_key = request
         .api_key
         .as_deref()
@@ -6699,14 +6857,14 @@ pub async fn list_embedding_models(
         embedding::list_models(&request, saved_api_key.as_deref(), &http)
     })
     .await
-    .map_err(|error| format!("Получение моделей было прервано: {error}"))
+    .map_err(|_| PublicCommandError::interrupted())
 }
 
 #[tauri::command]
 pub fn get_embedding_index_status(
     profile_id: String,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingIndexStatusDto, String> {
+) -> Result<embedding::EmbeddingIndexStatusDto, PublicCommandError> {
     state
         .with_store(|store| embedding::get_index_status(&mut store.conn, &profile_id))
         .map_err(command_error)
@@ -6716,7 +6874,7 @@ async fn run_embedding_index_operation(
     profile_id: String,
     rebuild: bool,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingIndexUpdateResultDto, String> {
+) -> Result<embedding::EmbeddingIndexUpdateResultDto, PublicCommandError> {
     let (database_path, profile) = state
         .with_store(|store| {
             Ok((
@@ -6737,7 +6895,7 @@ async fn run_embedding_index_operation(
     .await;
     state.finish_embedding_operation(&profile_id);
     operation_result
-        .map_err(|error| format!("Обновление смыслового поиска (RAG) было прервано: {error}"))?
+        .map_err(|_| PublicCommandError::interrupted())?
         .map_err(command_error)
 }
 
@@ -6745,7 +6903,7 @@ async fn run_embedding_index_operation(
 pub async fn update_embedding_index(
     profile_id: String,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingIndexUpdateResultDto, String> {
+) -> Result<embedding::EmbeddingIndexUpdateResultDto, PublicCommandError> {
     run_embedding_index_operation(profile_id, false, state).await
 }
 
@@ -6753,7 +6911,7 @@ pub async fn update_embedding_index(
 pub async fn rebuild_embedding_index(
     profile_id: String,
     state: State<'_, AppState>,
-) -> Result<embedding::EmbeddingIndexUpdateResultDto, String> {
+) -> Result<embedding::EmbeddingIndexUpdateResultDto, PublicCommandError> {
     run_embedding_index_operation(profile_id, true, state).await
 }
 
@@ -6761,7 +6919,7 @@ pub async fn rebuild_embedding_index(
 pub fn cancel_embedding_indexing(
     profile_id: String,
     state: State<'_, AppState>,
-) -> Result<bool, String> {
+) -> Result<bool, PublicCommandError> {
     state
         .cancel_embedding_operation(&profile_id)
         .map_err(command_error)
@@ -6771,7 +6929,7 @@ pub fn cancel_embedding_indexing(
 pub async fn semantic_search(
     request: embedding::SemanticSearchRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<embedding::SemanticSearchResultDto>, String> {
+) -> Result<Vec<embedding::SemanticSearchResultDto>, PublicCommandError> {
     let (database_path, profile) = state
         .with_store(|store| {
             Ok((
@@ -6787,7 +6945,7 @@ pub async fn semantic_search(
         embedding::semantic_search(&conn, &profile, &storage, &http, &request)
     })
     .await
-    .map_err(|error| format!("Смысловой поиск (RAG) был прерван: {error}"))?
+    .map_err(|_| PublicCommandError::interrupted())?
     .map_err(command_error)
 }
 
@@ -6795,7 +6953,7 @@ pub async fn semantic_search(
 pub async fn hybrid_search(
     request: embedding::SemanticSearchRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<embedding::SemanticSearchResultDto>, String> {
+) -> Result<Vec<embedding::SemanticSearchResultDto>, PublicCommandError> {
     let (database_path, profile) = state
         .with_store(|store| {
             Ok((
@@ -6811,7 +6969,7 @@ pub async fn hybrid_search(
         embedding::hybrid_search(&conn, &profile, &storage, &http, &request)
     })
     .await
-    .map_err(|error| format!("Гибридный поиск был прерван: {error}"))?
+    .map_err(|_| PublicCommandError::interrupted())?
     .map_err(command_error)
 }
 
@@ -6849,7 +7007,7 @@ pub fn restore_note_revision(
 pub fn rename_note(
     request: RenameNoteRequest,
     state: State<'_, AppState>,
-) -> Result<NoteDto, String> {
+) -> Result<NoteDto, PublicCommandError> {
     state
         .with_store(|store| store.rename_note(request))
         .map_err(command_error)
@@ -6859,7 +7017,7 @@ pub fn rename_note(
 pub fn set_note_tag(
     request: SetNoteTagRequest,
     state: State<'_, AppState>,
-) -> Result<NoteDto, String> {
+) -> Result<NoteDto, PublicCommandError> {
     state
         .with_store(|store| store.set_note_tag(request))
         .map_err(command_error)
@@ -6876,7 +7034,10 @@ pub fn duplicate_note(
 }
 
 #[tauri::command]
-pub fn toggle_note_pin(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, String> {
+pub fn toggle_note_pin(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, PublicCommandError> {
     state
         .with_store(|store| store.toggle_note_pin(&note_id))
         .map_err(command_error)
@@ -6886,35 +7047,41 @@ pub fn toggle_note_pin(note_id: String, state: State<'_, AppState>) -> Result<No
 pub fn move_note_to_project(
     request: MoveNoteRequest,
     state: State<'_, AppState>,
-) -> Result<NoteDto, String> {
+) -> Result<NoteDto, PublicCommandError> {
     state
         .with_store(|store| store.move_note_to_project(request))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn archive_note(note_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn archive_note(note_id: String, state: State<'_, AppState>) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.archive_note(&note_id))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn restore_note(note_id: String, state: State<'_, AppState>) -> Result<NoteDto, String> {
+pub fn restore_note(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, PublicCommandError> {
     state
         .with_store(|store| store.restore_note(&note_id))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn delete_note(note_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn delete_note(note_id: String, state: State<'_, AppState>) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.delete_note(&note_id))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn delete_note_permanently(note_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn delete_note_permanently(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.delete_note_permanently(&note_id))
         .map_err(command_error)
@@ -6924,7 +7091,7 @@ pub fn delete_note_permanently(note_id: String, state: State<'_, AppState>) -> R
 pub fn list_projects(
     include_archived: bool,
     state: State<'_, AppState>,
-) -> Result<Vec<ProjectCardDto>, String> {
+) -> Result<Vec<ProjectCardDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_projects(include_archived))
         .map_err(command_error)
@@ -6934,7 +7101,7 @@ pub fn list_projects(
 pub fn create_project(
     request: CreateProjectRequest,
     state: State<'_, AppState>,
-) -> Result<ProjectCardDto, String> {
+) -> Result<ProjectCardDto, PublicCommandError> {
     state
         .with_store(|store| store.create_project(request))
         .map_err(command_error)
@@ -6944,21 +7111,26 @@ pub fn create_project(
 pub fn update_project(
     request: UpdateProjectRequest,
     state: State<'_, AppState>,
-) -> Result<ProjectCardDto, String> {
+) -> Result<ProjectCardDto, PublicCommandError> {
     state
         .with_store(|store| store.update_project(request))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn archive_project(project_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn archive_project(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.archive_project(&project_id))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn get_first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateDto, String> {
+pub fn get_first_run_state(
+    state: State<'_, AppState>,
+) -> Result<FirstRunStateDto, PublicCommandError> {
     state
         .with_store(|store| {
             store
@@ -6972,7 +7144,7 @@ pub fn get_first_run_state(state: State<'_, AppState>) -> Result<FirstRunStateDt
 pub fn complete_first_run(
     request: CompleteFirstRunRequest,
     state: State<'_, AppState>,
-) -> Result<FirstRunCompletionDto, String> {
+) -> Result<FirstRunCompletionDto, PublicCommandError> {
     state
         .with_store(|store| store.complete_first_run(request))
         .map_err(command_error)
@@ -6982,7 +7154,7 @@ pub fn complete_first_run(
 pub async fn import_markdown(
     request: ImportMarkdownRequest,
     state: State<'_, AppState>,
-) -> Result<ImportMarkdownResultDto, String> {
+) -> Result<ImportMarkdownResultDto, PublicCommandError> {
     with_store_blocking(Arc::clone(&state.store), move |store| {
         store.import_markdown(request)
     })
@@ -6994,7 +7166,7 @@ pub async fn import_markdown(
 pub fn list_tags(
     query: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Vec<TagRowDto>, String> {
+) -> Result<Vec<TagRowDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_tags(query))
         .map_err(command_error)
@@ -7004,7 +7176,7 @@ pub fn list_tags(
 pub fn create_tag(
     request: CreateTagRequest,
     state: State<'_, AppState>,
-) -> Result<TagRowDto, String> {
+) -> Result<TagRowDto, PublicCommandError> {
     state
         .with_store(|store| store.create_tag(request))
         .map_err(command_error)
@@ -7014,7 +7186,7 @@ pub fn create_tag(
 pub fn update_tag(
     request: UpdateTagRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<TagRowDto>, String> {
+) -> Result<Vec<TagRowDto>, PublicCommandError> {
     state
         .with_store(|store| store.update_tag(request))
         .map_err(command_error)
@@ -7024,7 +7196,7 @@ pub fn update_tag(
 pub fn rename_tag(
     request: RenameTagRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<TagRowDto>, String> {
+) -> Result<Vec<TagRowDto>, PublicCommandError> {
     state
         .with_store(|store| store.rename_tag(request))
         .map_err(command_error)
@@ -7034,14 +7206,17 @@ pub fn rename_tag(
 pub fn update_tag_color(
     request: UpdateTagColorRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<TagRowDto>, String> {
+) -> Result<Vec<TagRowDto>, PublicCommandError> {
     state
         .with_store(|store| store.update_tag_color(request))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn delete_tag(tag_id: String, state: State<'_, AppState>) -> Result<Vec<TagRowDto>, String> {
+pub fn delete_tag(
+    tag_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<TagRowDto>, PublicCommandError> {
     state
         .with_store(|store| store.delete_tag(&tag_id))
         .map_err(command_error)
@@ -7051,7 +7226,7 @@ pub fn delete_tag(tag_id: String, state: State<'_, AppState>) -> Result<Vec<TagR
 pub fn merge_tags(
     request: MergeTagsRequest,
     state: State<'_, AppState>,
-) -> Result<Vec<TagRowDto>, String> {
+) -> Result<Vec<TagRowDto>, PublicCommandError> {
     state
         .with_store(|store| store.merge_tags(request))
         .map_err(command_error)
@@ -7061,7 +7236,7 @@ pub fn merge_tags(
 pub fn list_archive(
     query: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Vec<ArchiveItemDto>, String> {
+) -> Result<Vec<ArchiveItemDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_archive(query))
         .map_err(command_error)
@@ -7072,7 +7247,7 @@ pub fn restore_archive_item(
     item_id: String,
     kind: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.restore_archive_item(&item_id, &kind))
         .map_err(command_error)
@@ -7083,7 +7258,7 @@ pub fn delete_archive_item(
     item_id: String,
     kind: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.delete_archive_item(&item_id, &kind))
         .map_err(command_error)
@@ -7093,7 +7268,7 @@ pub fn delete_archive_item(
 pub fn store_attachment(
     request: StoreAttachmentRequest,
     state: State<'_, AppState>,
-) -> Result<AttachmentStoreResultDto, String> {
+) -> Result<AttachmentStoreResultDto, PublicCommandError> {
     state
         .with_store(|store| store.store_attachment(request))
         .map_err(command_error)
@@ -7103,35 +7278,41 @@ pub fn store_attachment(
 pub fn store_attachment_from_path(
     request: StoreAttachmentPathRequest,
     state: State<'_, AppState>,
-) -> Result<AttachmentStoreResultDto, String> {
+) -> Result<AttachmentStoreResultDto, PublicCommandError> {
     state
         .with_store(|store| store.store_attachment_from_path(request))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub fn open_attachment(attachment_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn open_attachment(
+    attachment_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
     let path = state
         .with_store(|store| store.resolve_attachment_path(&attachment_id))
         .map_err(command_error)?;
     tauri_plugin_opener::open_path(path, None::<&str>)
-        .map_err(|_| "Не удалось открыть вложение".to_string())
+        .map_err(|_| command_error(DataError::State("Не удалось открыть вложение".to_string())))
 }
 
 #[tauri::command]
-pub fn reveal_attachment(attachment_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub fn reveal_attachment(
+    attachment_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
     let path = state
         .with_store(|store| store.resolve_attachment_path(&attachment_id))
         .map_err(command_error)?;
     tauri_plugin_opener::reveal_item_in_dir(path)
-        .map_err(|_| "Не удалось показать вложение в проводнике".to_string())
+        .map_err(|_| command_error(DataError::State("Не удалось показать вложение".to_string())))
 }
 
 #[tauri::command]
 pub fn export_note_markdown(
     note_id: String,
     state: State<'_, AppState>,
-) -> Result<ExportResultDto, String> {
+) -> Result<ExportResultDto, PublicCommandError> {
     state
         .with_store(|store| store.export_note_markdown(&note_id))
         .map_err(command_error)
@@ -7141,7 +7322,7 @@ pub fn export_note_markdown(
 pub fn export_note_zip(
     note_id: String,
     state: State<'_, AppState>,
-) -> Result<ExportResultDto, String> {
+) -> Result<ExportResultDto, PublicCommandError> {
     state
         .with_store(|store| store.export_note_zip(&note_id))
         .map_err(command_error)
@@ -7151,14 +7332,16 @@ pub fn export_note_zip(
 pub fn export_project_zip(
     project_id: String,
     state: State<'_, AppState>,
-) -> Result<ExportResultDto, String> {
+) -> Result<ExportResultDto, PublicCommandError> {
     state
         .with_store(|store| store.export_project_zip(&project_id))
         .map_err(command_error)
 }
 
 #[tauri::command]
-pub async fn create_backup(state: State<'_, AppState>) -> Result<ExportResultDto, String> {
+pub async fn create_backup(
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, PublicCommandError> {
     with_store_blocking(Arc::clone(&state.store), |store| store.create_backup())
         .await
         .map_err(backup_command_error)
@@ -7168,7 +7351,7 @@ pub async fn create_backup(state: State<'_, AppState>) -> Result<ExportResultDto
 pub async fn create_backup_at_path(
     path: String,
     state: State<'_, AppState>,
-) -> Result<ExportResultDto, String> {
+) -> Result<ExportResultDto, PublicCommandError> {
     with_store_blocking(Arc::clone(&state.store), move |store| {
         store.create_backup_at_path(Path::new(&path))
     })
@@ -7180,7 +7363,7 @@ pub async fn create_backup_at_path(
 pub async fn preview_backup(
     request: ImportBackupRequest,
     state: State<'_, AppState>,
-) -> Result<BackupPreviewDto, String> {
+) -> Result<BackupPreviewDto, PublicCommandError> {
     with_store_blocking(Arc::clone(&state.store), move |store| {
         store.preview_backup(&request)
     })
@@ -7192,7 +7375,7 @@ pub async fn preview_backup(
 pub async fn import_backup(
     request: ImportBackupRequest,
     state: State<'_, AppState>,
-) -> Result<ImportBackupResultDto, String> {
+) -> Result<ImportBackupResultDto, PublicCommandError> {
     with_store_blocking(Arc::clone(&state.store), move |store| {
         store.import_backup(request)
     })
@@ -7215,6 +7398,30 @@ mod tests {
 
     fn temp_store_dir() -> PathBuf {
         std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn public_errors_never_expose_database_paths_or_provider_bodies() {
+        let database = command_error(DataError::Sql(rusqlite::Error::InvalidPath(PathBuf::from(
+            "C:/Users/private/database.sqlite",
+        ))));
+        assert_eq!(database.code, "DATABASE_FAILED");
+        assert!(!database.message.contains("private"));
+
+        for (raw, expected_code) in [
+            ("401 Unauthorized Bearer sk-secret", "PROVIDER_UNAUTHORIZED"),
+            ("Timeout with prompt text", "PROVIDER_TIMEOUT"),
+            ("429 rate limit with source text", "PROVIDER_RATE_LIMITED"),
+            ("500: raw provider response", "PROVIDER_UNAVAILABLE"),
+            ("Некорректный ответ модели", "INVALID_PROVIDER_RESPONSE"),
+        ] {
+            let mapped = command_error(DataError::InvalidInput(raw.to_string()));
+            assert_eq!(mapped.code, expected_code);
+            assert!(!mapped.message.contains("sk-secret"));
+            assert!(!mapped.message.contains("prompt text"));
+            assert!(!mapped.message.contains("source text"));
+            assert!(!mapped.message.contains("raw provider response"));
+        }
     }
 
     fn create_v6_database_with_notes(dir: &Path) {
@@ -8540,7 +8747,7 @@ mod tests {
             )
             .expect_err("invalid url rejected");
 
-        assert!(error.to_string().contains("http:// или https://"));
+        assert!(error.to_string().contains("корректный адрес модели"));
     }
 
     #[test]

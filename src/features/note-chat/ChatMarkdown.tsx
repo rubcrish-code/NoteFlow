@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import type { RagMessageSource } from "../../services/ragChatService";
 import { markdownToTiptapDoc, type EditorMark, type EditorNode } from "../editor/markdownService";
 import { ragCitationLabel, splitRagCitationText } from "../rag/ragCitations";
+import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
+
+export { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
 
 interface ChatMarkdownProps {
   citations?: readonly RagMessageSource[];
@@ -26,26 +29,6 @@ export function getNoteChatSourceTitle(title?: string) {
   }
   const trimmedTitle = title.trim();
   return trimmedTitle || "Без названия";
-}
-
-export function sanitizeMarkdownLinkHref(href: string) {
-  const trimmedHref = href.trim();
-  if (!trimmedHref) {
-    return undefined;
-  }
-  if (trimmedHref.startsWith("//")) {
-    return undefined;
-  }
-  if (trimmedHref.startsWith("#") || trimmedHref.startsWith("/") || trimmedHref.startsWith("./") || trimmedHref.startsWith("../")) {
-    return trimmedHref;
-  }
-
-  try {
-    const url = new URL(trimmedHref);
-    return ["http:", "https:", "mailto:"].includes(url.protocol) ? trimmedHref : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function renderBlockNode(node: EditorNode, key: string, citationContext: CitationRenderContext): ReactNode {

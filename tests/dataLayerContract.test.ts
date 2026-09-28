@@ -31,7 +31,7 @@ describe("production data layer contract", () => {
     const uiSettingsSource = readFileSync("src/services/uiSettingsService.ts", "utf8");
     const llmProviderSource = readFileSync("src/services/llmProviderService.ts", "utf8");
 
-    assert.match(source, /from "@tauri-apps\/api\/core"/);
+    assert.match(source, /from "\.\/safeInvoke"/);
     assert.match(source, /invoke<WorkspaceSnapshotDto>\("load_workspace"/);
     assert.match(source, /return await invoke<T>\(command, args\)/);
     assert.match(source, /invokeNotePersistence<NoteDto>\("update_note_content"/);
@@ -47,12 +47,12 @@ describe("production data layer contract", () => {
     assert.doesNotMatch(source, /editorDocument: note\.contentJson/);
     assert.doesNotMatch(source, /localStorage/);
 
-    assert.match(uiSettingsSource, /from "@tauri-apps\/api\/core"/);
+    assert.match(uiSettingsSource, /from "\.\/safeInvoke"/);
     assert.match(uiSettingsSource, /invoke<UiSettingsDto>\("get_ui_settings"/);
     assert.match(uiSettingsSource, /invoke<UiSettingsDto>\("update_ui_settings"/);
     assert.doesNotMatch(uiSettingsSource, /localStorage/);
 
-    assert.match(llmProviderSource, /from "@tauri-apps\/api\/core"/);
+    assert.match(llmProviderSource, /from "\.\/safeInvoke"/);
     assert.match(llmProviderSource, /invoke<LlmProviderDto\[]>\("list_llm_providers"/);
     assert.match(llmProviderSource, /invoke<LlmProviderDto>\("save_llm_provider"/);
     assert.doesNotMatch(llmProviderSource, /localStorage/);

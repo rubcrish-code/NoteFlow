@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./safeInvoke";
 
 export const LLM_MODEL_LIST_TIMEOUT_MS = 15_000;
 export const LLM_TEST_CONNECTION_TIMEOUT_MS = 10_000;
@@ -160,13 +160,9 @@ const providerTypes: readonly LlmProviderType[] = ["openai", "ollama", "lmstudio
 function safeUrlForDiagnostics(url: string) {
   try {
     const parsed = new URL(url);
-    parsed.username = "";
-    parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString().replace(/\/$/, "");
+    return parsed.origin;
   } catch {
-    return url.split("?")[0]?.split("#")[0] ?? "";
+    return "<invalid-provider-url>";
   }
 }
 
@@ -188,7 +184,9 @@ export function logLlmDiagnostic(event: string, fields: Record<string, LlmDiagno
   if (!import.meta.env?.DEV) {
     return;
   }
-  console.debug("[NoteFlow LLM]", event, fields);
+  const allowed = new Set(["command", "providerType", "status", "modelsCount", "chatOk", "embeddingsOk", "timeoutMs", "maxTokens", "operationId"]);
+  const safeFields = Object.fromEntries(Object.entries(fields).filter(([key]) => allowed.has(key)));
+  console.debug("[NoteFlow LLM]", event, safeFields);
 }
 
 function safeErrorMessage(error: unknown, fallback: string) {

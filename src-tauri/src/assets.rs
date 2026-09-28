@@ -475,10 +475,14 @@ pub fn resolve_blob_path(
         .optional()?
         .ok_or_else(|| DataError::NotFound("Managed asset не найден".to_string()))?;
     let path = resolve_managed_path(base_dir, &relative_path)?;
-    if !path.is_file() {
+    let managed_root = base_dir.join(ASSET_ROOT).canonicalize()?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|_| DataError::NotFound("Managed asset недоступен".to_string()))?;
+    if !canonical_path.starts_with(&managed_root) || !canonical_path.is_file() {
         return Err(DataError::NotFound("Managed asset недоступен".to_string()));
     }
-    Ok((path, mime_type))
+    Ok((canonical_path, mime_type))
 }
 
 pub fn resolve_attachment_blob_path(
