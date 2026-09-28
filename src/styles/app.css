@@ -1762,11 +1762,9 @@
   box-shadow: var(--shadow-pop);
   display: grid;
   gap: 12px;
-  left: 0;
   padding: 12px;
-  position: absolute;
-  top: calc(100% + 8px);
-  width: min(306px, calc(100vw - 36px));
+  overflow-y: auto;
+  position: fixed;
   z-index: 110;
 }
 

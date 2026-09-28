@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import type { CSSProperties, MouseEvent, RefObject } from "react";
 import { Icon } from "../../shared/Icon";
 import {
   fontFamilyOptions,
@@ -18,6 +18,8 @@ interface FontFormatPopoverProps {
   onCancel: () => void;
   onChange: (draft: FontFormatDraft) => void;
   onReset: () => void;
+  popoverRef?: RefObject<HTMLDivElement | null>;
+  style?: CSSProperties;
 }
 
 export function FontFormatPopover({
@@ -26,6 +28,8 @@ export function FontFormatPopover({
   onCancel,
   onChange,
   onReset,
+  popoverRef,
+  style,
 }: FontFormatPopoverProps) {
   const currentFontLabel = getFontFamilyLabel(draft.fontFamily);
   const currentSizeLabel = draft.fontSize || "по умолчанию";
@@ -35,7 +39,7 @@ export function FontFormatPopover({
   }
 
   return (
-    <div aria-label="Шрифт и размер текста" className="font-format-popover" role="dialog">
+    <div aria-label="Шрифт и размер текста" className="font-format-popover" ref={popoverRef} role="dialog" style={style}>
       <div className="font-popover-head">
         <div>
           <b>Шрифт и размер</b>

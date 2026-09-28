@@ -94,68 +94,70 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
 
   return (
     <PageShell activeSection="tags" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
-      <div className="tags-head">
-        <div>
-          <div className="page-title">Теги</div>
-          <div className="page-subtitle">Создавайте, редактируйте, объединяйте и удаляйте теги. Нажмите на тег, чтобы увидеть связанные заметки.</div>
+      <div className="tags-page-content">
+        <div className="tags-head">
+          <div>
+            <div className="page-title">Теги</div>
+            <div className="page-subtitle">Создавайте, редактируйте, объединяйте и удаляйте теги. Нажмите на тег, чтобы увидеть связанные заметки.</div>
+          </div>
+          <button className="primary-btn tags-new" onClick={openCreateDialog} ref={createButtonRef} type="button">
+            <Icon name="plus" />
+            Новый тег
+          </button>
         </div>
-        <button className="primary-btn tags-new" onClick={openCreateDialog} ref={createButtonRef} type="button">
-          <Icon name="plus" />
-          Новый тег
-        </button>
-      </div>
 
-      <label className="search tags-search">
-        <Icon name="search" />
-        <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск тегов…" type="search" value={query} />
-      </label>
+        <label className="search tags-search">
+          <Icon name="search" />
+          <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск тегов…" type="search" value={query} />
+        </label>
 
-      <div className="tags-table">
-        {filteredTags.map((tag) => (
-          <div className="tag-row" key={tag.id}>
-            <button className="tag-row-main" onClick={() => onOpenTag(tag.name)} type="button">
-              <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagDisplayColor(tag) }} />
-              <div>
-                <b>{tag.name}</b>
-                <small>{formatRussianCount(tag.count, NOTE_COUNT_FORMS)}</small>
-              </div>
-            </button>
-            <div className="tag-row-actions">
-              <button
-                aria-expanded={openTagMenuId === tag.id}
-                aria-haspopup="menu"
-                aria-label={`Действия с тегом «${tag.name}»`}
-                className="row-menu-trigger"
-                onClick={(event) => {
-                  tagMenuAnchorRef.current = event.currentTarget;
-                  setOpenTagMenuId((current) => current === tag.id ? "" : tag.id);
-                }}
-                type="button"
-              >
-                <Icon name="dots" />
+        <div className="tags-table">
+          {filteredTags.map((tag) => (
+            <div className="tag-row" key={tag.id}>
+              <button className="tag-row-main" onClick={() => onOpenTag(tag.name)} type="button">
+                <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagDisplayColor(tag) }} />
+                <div>
+                  <b>{tag.name}</b>
+                  <small>{formatRussianCount(tag.count, NOTE_COUNT_FORMS)}</small>
+                </div>
               </button>
-              <MenuPopover
-                anchorRef={tagMenuAnchorRef}
-                ariaLabel={`Действия с тегом «${tag.name}»`}
-                className="row-actions-menu"
-                isOpen={openTagMenuId === tag.id}
-                onClose={closeTagMenu}
-                preferredWidth={190}
-              >
-                <button onClick={() => openEditDialog(tag)} role="menuitem" type="button">Редактировать</button>
-                <button onClick={() => openMergeDialog(tag)} role="menuitem" type="button">Объединить</button>
-                <div className="nf-menu-separator" />
-                <button className="danger" onClick={() => { setOpenTagMenuId(""); onDeleteTag(tag.id); }} role="menuitem" type="button">Удалить</button>
-              </MenuPopover>
+              <div className="tag-row-actions">
+                <button
+                  aria-expanded={openTagMenuId === tag.id}
+                  aria-haspopup="menu"
+                  aria-label={`Действия с тегом «${tag.name}»`}
+                  className="row-menu-trigger"
+                  onClick={(event) => {
+                    tagMenuAnchorRef.current = event.currentTarget;
+                    setOpenTagMenuId((current) => current === tag.id ? "" : tag.id);
+                  }}
+                  type="button"
+                >
+                  <Icon name="dots" />
+                </button>
+                <MenuPopover
+                  anchorRef={tagMenuAnchorRef}
+                  ariaLabel={`Действия с тегом «${tag.name}»`}
+                  className="row-actions-menu"
+                  isOpen={openTagMenuId === tag.id}
+                  onClose={closeTagMenu}
+                  preferredWidth={190}
+                >
+                  <button onClick={() => openEditDialog(tag)} role="menuitem" type="button">Редактировать</button>
+                  <button onClick={() => openMergeDialog(tag)} role="menuitem" type="button">Объединить</button>
+                  <div className="nf-menu-separator" />
+                  <button className="danger" onClick={() => { setOpenTagMenuId(""); onDeleteTag(tag.id); }} role="menuitem" type="button">Удалить</button>
+                </MenuPopover>
+              </div>
             </div>
-          </div>
-        ))}
-        {filteredTags.length === 0 ? (
-          <div className="page-empty-state panel-empty-state">
-            <span className="page-empty-icon"><Icon name="tag" /></span>
-            <div><b>Теги не найдены</b><span>Измените запрос или создайте новый тег.</span></div>
-          </div>
-        ) : null}
+          ))}
+          {filteredTags.length === 0 ? (
+            <div className="page-empty-state panel-empty-state">
+              <span className="page-empty-icon"><Icon name="tag" /></span>
+              <div><b>Теги не найдены</b><span>Измените запрос или создайте новый тег.</span></div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {tagDialog?.kind === "create" ? (

@@ -54,6 +54,11 @@
   max-width: 820px;
 }
 
+.settings-content--models,
+.settings-content--data {
+  max-width: 920px;
+}
+
 .settings-info-list,
 .settings-language-list {
   display: grid;

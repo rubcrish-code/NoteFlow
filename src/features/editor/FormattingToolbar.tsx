@@ -1,5 +1,6 @@
 import { useEditorState, type Editor } from "@tiptap/react";
 import { Fragment, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { NoteAiActionId, NoteAiStatus } from "../../services/noteAiService";
 import { useAppZoomPercent } from "../../shared/AppZoomContext";
 import { Icon } from "../../shared/Icon";
@@ -52,7 +53,8 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
   const aiButtonRef = useRef<HTMLButtonElement>(null);
   const aiMenuRef = useRef<HTMLDivElement>(null);
   const aiActionWasPendingRef = useRef(false);
-  const fontMenuRef = useRef<HTMLSpanElement>(null);
+  const fontAnchorRef = useRef<HTMLButtonElement>(null);
+  const fontMenuRef = useRef<HTMLDivElement>(null);
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
   const toolbarWrapRef = useRef<HTMLDivElement>(null);
   const mouseCommandRef = useRef(false);
@@ -67,6 +69,13 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
     maxHeight: 560,
     popoverRef: aiMenuRef,
     preferredWidth: 348,
+  });
+  const fontMenuStyle = useFloatingPopoverPosition({
+    anchorRef: fontAnchorRef,
+    isOpen: isFontMenuOpen,
+    maxHeight: 560,
+    popoverRef: fontMenuRef,
+    preferredWidth: 306,
   });
   const toolbarState =
     useEditorState({
@@ -93,7 +102,10 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
       ) {
         setIsAiMenuOpen(false);
       }
-      if (target instanceof Node && isFontMenuOpen && fontMenuRef.current && !fontMenuRef.current.contains(target)) {
+      if (
+        target instanceof Node && isFontMenuOpen &&
+        !fontMenuRef.current?.contains(target) && !fontAnchorRef.current?.contains(target)
+      ) {
         setIsFontMenuOpen(false);
       }
     }
@@ -332,7 +344,7 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
           if (tool.id === "font") {
             return (
               <span className="toolbar-slot" key={tool.id}>
-                <span className="font-menu-anchor" data-toolbar-font-controls ref={fontMenuRef}>
+                <span className="font-menu-anchor" data-toolbar-font-controls>
                   <button
                     aria-expanded={isFontMenuOpen}
                     aria-label={tool.tip}
@@ -341,34 +353,13 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
                     data-toolbar-font-trigger
                     data-tooltip={tool.tip}
                     disabled={!editor}
-                    onClick={() => {
-                      if (mouseCommandRef.current) {
-                        mouseCommandRef.current = false;
-                        return;
-                      }
-                      toggleFontMenu();
-                    }}
-                    onMouseDown={(event) => {
-                      if (event.button !== 0) {
-                        return;
-                      }
-                      event.preventDefault();
-                      mouseCommandRef.current = true;
-                      toggleFontMenu();
-                    }}
+                    onClick={toggleFontMenu}
+                    onMouseDown={(event) => event.preventDefault()}
+                    ref={fontAnchorRef}
                     type="button"
                   >
                     <span className="lbl font-trigger-label">{tool.label}</span>
                   </button>
-                  {isFontMenuOpen ? (
-                    <FontFormatPopover
-                      draft={fontDraft}
-                      onApply={applyFontDraft}
-                      onCancel={() => setIsFontMenuOpen(false)}
-                      onChange={setFontDraft}
-                      onReset={resetFontFormat}
-                    />
-                  ) : null}
                 </span>
                 {separatorAfter ? <span aria-hidden="true" className="tb-sep" /> : null}
               </span>
@@ -422,7 +413,12 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
                 setIsOverflowMenuOpen((current) => !current);
               }}
               onMouseDown={(event) => event.preventDefault()}
-              ref={overflowButtonRef}
+              ref={(node) => {
+                overflowButtonRef.current = node;
+                if (overflowActions.some((action) => action.id === "font")) {
+                  fontAnchorRef.current = node;
+                }
+              }}
               type="button"
             >
               <Icon name="dots" />
@@ -463,6 +459,19 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
           </span>
         ) : null}
       </div>
+
+      {isFontMenuOpen ? createPortal(
+        <FontFormatPopover
+          draft={fontDraft}
+          onApply={applyFontDraft}
+          onCancel={() => setIsFontMenuOpen(false)}
+          onChange={setFontDraft}
+          onReset={resetFontFormat}
+          popoverRef={fontMenuRef}
+          style={{ ...fontMenuStyle, visibility: fontMenuStyle ? "visible" : "hidden" }}
+        />,
+        document.body,
+      ) : null}
 
       {isAiMenuOpen ? (
         <div className="editor-ai-menu" ref={aiMenuRef} role="menu" style={aiMenuStyle ?? { visibility: "hidden" }}>

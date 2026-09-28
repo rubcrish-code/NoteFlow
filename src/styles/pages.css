@@ -187,7 +187,8 @@
   width: 16px;
 }
 
-.projects-page-content {
+.projects-page-content,
+.tags-page-content {
   margin-inline: auto;
   max-width: 1080px;
   width: 100%;
@@ -792,10 +793,15 @@ details[open] > .row-menu-trigger {
 .page-empty-state .page-empty-icon {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border-subtle));
+  box-sizing: border-box;
+  display: grid;
+  flex: 0 0 38px;
+  padding: 0;
+  place-items: center;
 }
 
 .page-empty-state b,
-.page-empty-state span {
+.page-empty-state > div > span {
   display: block;
 }
 
