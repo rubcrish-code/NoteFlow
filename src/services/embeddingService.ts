@@ -4,7 +4,7 @@ export type EmbeddingProviderType = "ollama" | "openai" | "custom";
 export type EmbeddingLocality = "local" | "cloud";
 export type EmbeddingProfileStatus = "not_configured" | "success" | "error";
 export type EmbeddingIndexStatusCode = "not_configured" | "pending" | "indexing" | "current" | "partial" | "failed";
-export type SemanticMatchType = "exact" | "lexical" | "semantic" | "hybrid";
+export type SemanticMatchType = "exact" | "lexical" | "semantic" | "hybrid" | "metadata";
 
 export interface EmbeddingProfile {
   id: string;

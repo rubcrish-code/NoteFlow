@@ -201,6 +201,12 @@ function installBaseIpc(
       chatTitle = "Когда запуск?";
       return chat(chatTitle);
     }
+    if (command === "plan_rag_question") return {
+      needsHybridRetrieval: true,
+      searchQuery: "Когда запуск?",
+      projectId: null,
+      tagId: null,
+    };
     if (command === "hybrid_search") return behavior.hybridSearch();
     if (command === "run_rag_generation") return behavior.runGeneration();
     throw new Error(`Unexpected RAG test IPC: ${command}`);

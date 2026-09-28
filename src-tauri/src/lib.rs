@@ -2,6 +2,7 @@ mod assets;
 mod data;
 mod embedding;
 mod knowledge;
+mod knowledge_agent;
 mod llm;
 mod rag;
 mod revisions;
@@ -135,6 +136,7 @@ pub fn run() {
             data::hybrid_search,
             data::run_note_ai,
             data::run_rag_generation,
+            data::plan_rag_question,
             data::save_note_chat_message,
             data::save_rag_chat_message,
             data::toggle_note_pin,

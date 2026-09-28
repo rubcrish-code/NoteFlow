@@ -1,12 +1,13 @@
 use crate::{
     data::{DataError, DataResult},
     embedding::{SemanticSearchResultDto, SemanticSearchTagDto},
+    knowledge_agent::{self, KnowledgeNote, NoteOrder, QueryKind, QueryPlan, QueryPreview},
     llm::{
         self, ChatCompletionMessage, ChatCompletionRequest, HttpClient, LlmProviderRecord,
         SecretStorage,
     },
 };
-use chrono::{SecondsFormat, Utc};
+use chrono::{Local, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -238,11 +239,83 @@ struct ContextSource {
     snapshot: RagSourceSnapshot,
 }
 
+pub fn preview_global_query(
+    conn: &Connection,
+    chat_id: &str,
+    user_message_id: &str,
+) -> DataResult<QueryPreview> {
+    let stored = load_user_message_and_history(conn, chat_id, user_message_id)?;
+    let (plan, _) = plan_for_message(conn, chat_id, user_message_id, &stored)?;
+    Ok(plan.preview())
+}
+
+fn plan_for_message(
+    conn: &Connection,
+    chat_id: &str,
+    user_message_id: &str,
+    stored: &StoredUserMessage,
+) -> DataResult<(QueryPlan, Vec<String>)> {
+    let previous_ids = preceding_source_note_ids(conn, chat_id, user_message_id)?;
+    let previous_questions = stored
+        .history
+        .iter()
+        .rev()
+        .filter(|message| message.role == "user")
+        .take(3)
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let plan = knowledge_agent::plan_query(
+        conn,
+        &stored.question,
+        Some(&previous_questions),
+        previous_ids.first().map(String::as_str),
+        Local::now().date_naive(),
+    )?;
+    Ok((plan, previous_ids))
+}
+
+fn preceding_source_note_ids(
+    conn: &Connection,
+    chat_id: &str,
+    user_message_id: &str,
+) -> DataResult<Vec<String>> {
+    let source_json = conn
+        .query_row(
+            "SELECT m.sources_json FROM ai_messages m
+         WHERE m.chat_id = ?1 AND m.role = 'assistant'
+           AND m.rowid < (SELECT rowid FROM ai_messages WHERE id = ?2 AND chat_id = ?1)
+         ORDER BY m.rowid DESC LIMIT 1",
+            params![chat_id, user_message_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let sources = source_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<Vec<RagSourceSnapshot>>(json).ok())
+        .unwrap_or_default();
+    let mut ids = Vec::new();
+    for source in sources {
+        if !ids.contains(&source.note_id) {
+            ids.push(source.note_id);
+        }
+    }
+    Ok(ids)
+}
+
 #[derive(Clone, Debug)]
 struct ContextPackage {
     sources: Vec<ContextSource>,
     history: Vec<ConversationMessage>,
     max_output_tokens: i64,
+}
+
+struct StructuredPreparation {
+    direct_answer: Option<String>,
+    sources: Vec<ContextSource>,
+    history: Vec<ConversationMessage>,
+    max_output_tokens: i64,
+    matched_count: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -262,14 +335,91 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
     let total_started = Instant::now();
     let context_started = Instant::now();
     let stored = load_user_message_and_history(conn, &request.chat_id, &request.user_message_id)?;
-    let context = assemble_context(
-        conn,
-        &stored.question,
-        &stored.history,
-        &request.retrieved_sources,
-        provider.context_size,
-    )?;
+    let (plan, previous_ids) =
+        plan_for_message(conn, &request.chat_id, &request.user_message_id, &stored)?;
+    let use_hybrid = plan.preview().needs_hybrid_retrieval;
+    let structured = if use_hybrid {
+        None
+    } else {
+        Some(prepare_structured_context(
+            conn,
+            &plan,
+            &previous_ids,
+            &stored,
+            provider.context_size,
+        )?)
+    };
+    let context = if let Some(prepared) = &structured {
+        ContextPackage {
+            sources: prepared.sources.clone(),
+            history: prepared.history.clone(),
+            max_output_tokens: prepared.max_output_tokens,
+        }
+    } else {
+        let retrieved = if plan.kind == QueryKind::Content
+            && plan.filters.project_id.is_none()
+            && plan.filters.tag_id.is_none()
+            && plan.filters.date.start_utc.is_none()
+            && plan.filters.date.end_utc.is_none()
+        {
+            request.retrieved_sources.clone()
+        } else {
+            let mut matching = Vec::new();
+            for source in &request.retrieved_sources {
+                if knowledge_agent::note_matches_filters(conn, &source.note_id, &plan.filters)? {
+                    matching.push(source.clone());
+                }
+            }
+            matching
+        };
+        assemble_context(
+            conn,
+            &stored.question,
+            &stored.history,
+            &retrieved,
+            provider.context_size,
+        )?
+    };
     let context_ms = context_started.elapsed().as_millis();
+
+    if let Some(prepared) = &structured {
+        if let Some(answer) = &prepared.direct_answer {
+            let persistence_started = Instant::now();
+            let snapshots = prepared
+                .sources
+                .iter()
+                .map(|source| source.snapshot.clone())
+                .collect::<Vec<_>>();
+            let assistant_message = persist_assistant_message(
+                conn,
+                &request.chat_id,
+                &request.user_message_id,
+                answer,
+                &snapshots,
+            )?;
+            return Ok(RagGenerationResultDto {
+                assistant_message,
+                answer_status: if prepared.matched_count == 0 {
+                    "empty_retrieval"
+                } else {
+                    "grounded"
+                }
+                .to_string(),
+                retrieval_count: prepared.matched_count as usize,
+                context_source_count: snapshots.len(),
+                provider_name: "NoteFlow".to_string(),
+                model: "Локальные данные".to_string(),
+                is_local: true,
+                repaired_citations: false,
+                timings: RagGenerationTimingsDto {
+                    context_ms,
+                    provider_ms: 0,
+                    persistence_ms: persistence_started.elapsed().as_millis(),
+                    total_ms: total_started.elapsed().as_millis(),
+                },
+            });
+        }
+    }
 
     if context.sources.is_empty() {
         let persistence_started = Instant::now();
@@ -284,7 +434,11 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
         return Ok(RagGenerationResultDto {
             assistant_message,
             answer_status: "empty_retrieval".to_string(),
-            retrieval_count: request.retrieved_sources.len(),
+            retrieval_count: structured
+                .as_ref()
+                .map_or(request.retrieved_sources.len(), |value| {
+                    value.matched_count as usize
+                }),
             context_source_count: 0,
             provider_name: provider.name.clone(),
             model: provider.chat_model.clone(),
@@ -397,7 +551,12 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
             ("model", provider.chat_model.clone()),
             (
                 "retrievalCount",
-                request.retrieved_sources.len().to_string(),
+                structured
+                    .as_ref()
+                    .map_or(request.retrieved_sources.len(), |value| {
+                        value.matched_count as usize
+                    })
+                    .to_string(),
             ),
             ("contextCount", context.sources.len().to_string()),
             ("citationCount", cited_sources.len().to_string()),
@@ -412,7 +571,11 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
     Ok(RagGenerationResultDto {
         assistant_message,
         answer_status: answer_status.to_string(),
-        retrieval_count: request.retrieved_sources.len(),
+        retrieval_count: structured
+            .as_ref()
+            .map_or(request.retrieved_sources.len(), |value| {
+                value.matched_count as usize
+            }),
         context_source_count: context.sources.len(),
         provider_name: first_response.provider_name,
         model: first_response.model,
@@ -466,6 +629,363 @@ fn load_user_message_and_history(
         question: user_row.1,
         history,
     })
+}
+
+fn prepare_structured_context(
+    conn: &Connection,
+    plan: &QueryPlan,
+    previous_ids: &[String],
+    stored: &StoredUserMessage,
+    provider_context_size: i64,
+) -> DataResult<StructuredPreparation> {
+    let subject_note = if let Some(subject) = plan.subject_term.as_deref() {
+        Some(knowledge_agent::latest_note_about_subject(
+            conn,
+            subject,
+            &plan.filters,
+        )?)
+    } else {
+        None
+    };
+    let anchored_note = if plan.kind == QueryKind::ScopedContent {
+        plan.anchor_note_id
+            .as_deref()
+            .map(|id| knowledge_agent::get_note_metadata(conn, id))
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    let matched_count = if plan.kind == QueryKind::MissingScope {
+        0
+    } else if let Some(note) = &subject_note {
+        i64::from(note.is_some())
+    } else if anchored_note.is_some() {
+        1
+    } else {
+        knowledge_agent::count_notes(conn, &plan.filters)?
+    };
+    let frequency = if plan.kind == QueryKind::Frequency {
+        Some(knowledge_agent::frequent_terms(conn, &plan.filters)?)
+    } else {
+        None
+    };
+    let context_window = provider_context_size.clamp(2_048, 131_072) as usize;
+    let max_output_tokens = ((context_window / 5).clamp(512, 4_096)) as i64;
+    let mut notes = match plan.kind {
+        QueryKind::Count | QueryKind::Clarify | QueryKind::MissingScope => Vec::new(),
+        QueryKind::First => {
+            knowledge_agent::list_notes(conn, &plan.filters, NoteOrder::CreatedAsc, 1)?
+        }
+        QueryKind::Last | QueryKind::LastEdited => match &subject_note {
+            Some(note) => note.clone().into_iter().collect(),
+            None => knowledge_agent::list_notes(conn, &plan.filters, plan.order, 1)?,
+        },
+        QueryKind::Previous => {
+            let anchor_id = plan.anchor_note_id.clone().or_else(|| {
+                knowledge_agent::list_notes(conn, &plan.filters, NoteOrder::CreatedDesc, 1)
+                    .ok()
+                    .and_then(|items| items.first().map(|item| item.id.clone()))
+            });
+            if let Some(anchor) = anchor_id {
+                if let Some(note) = knowledge_agent::get_note_metadata(conn, &anchor)? {
+                    let mut filters = plan.filters.clone();
+                    filters.before_created = Some((note.created_at, note.id));
+                    knowledge_agent::list_notes(conn, &filters, NoteOrder::CreatedDesc, 1)?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        }
+        QueryKind::Compare => {
+            let mut pair = Vec::new();
+            if previous_ids.len() >= 2 {
+                for id in previous_ids.iter().take(2) {
+                    if let Some(note) = knowledge_agent::get_note_metadata(conn, id)? {
+                        pair.push(note);
+                    }
+                }
+            } else {
+                pair.extend(knowledge_agent::list_notes(
+                    conn,
+                    &plan.filters,
+                    NoteOrder::CreatedAsc,
+                    1,
+                )?);
+                if let Some(last) =
+                    knowledge_agent::list_notes(conn, &plan.filters, NoteOrder::CreatedDesc, 1)?
+                        .into_iter()
+                        .next()
+                {
+                    if !pair.iter().any(|note| note.id == last.id) {
+                        pair.push(last);
+                    }
+                }
+            }
+            pair
+        }
+        QueryKind::List => knowledge_agent::list_notes(
+            conn,
+            &plan.filters,
+            plan.order,
+            knowledge_agent::max_list_notes(),
+        )?,
+        QueryKind::Frequency => {
+            let mut examples = Vec::new();
+            if let Some(summary) = &frequency {
+                for term in &summary.terms {
+                    if examples
+                        .iter()
+                        .any(|note: &KnowledgeNote| note.id == term.example_note_id)
+                    {
+                        continue;
+                    }
+                    if let Some(note) =
+                        knowledge_agent::get_note_metadata(conn, &term.example_note_id)?
+                    {
+                        examples.push(note);
+                    }
+                }
+            }
+            examples
+        }
+        QueryKind::ScopedContent => {
+            if let Some(note) = anchored_note {
+                if knowledge_agent::note_matches_filters(conn, &note.id, &plan.filters)? {
+                    vec![note]
+                } else {
+                    Vec::new()
+                }
+            } else if let Some(note) = &subject_note {
+                note.clone().into_iter().collect()
+            } else {
+                let order = if stored.question.to_lowercase().contains("перв") {
+                    NoteOrder::CreatedAsc
+                } else {
+                    plan.order
+                };
+                let limit = if stored.question.to_lowercase().contains("последн") {
+                    1
+                } else {
+                    knowledge_agent::max_content_notes()
+                };
+                knowledge_agent::list_notes(conn, &plan.filters, order, limit)?
+            }
+        }
+        QueryKind::Content => Vec::new(),
+    };
+    notes.retain(|note| {
+        !note.archived || plan.filters.archive != knowledge_agent::ArchiveScope::Active
+    });
+    let source_char_budget = (context_window * 3 / 2)
+        .saturating_div(notes.len().max(1))
+        .clamp(320, MAX_SOURCE_CHARS);
+    let sources = metadata_sources(
+        conn,
+        &notes,
+        &stored.question,
+        matches!(plan.kind, QueryKind::Compare | QueryKind::ScopedContent),
+        source_char_budget,
+    )?;
+    let content_is_empty = if matches!(plan.kind, QueryKind::ScopedContent | QueryKind::Compare)
+        && !notes.is_empty()
+        && matched_count <= knowledge_agent::max_content_notes()
+    {
+        let mut empty = true;
+        for note in &notes {
+            if knowledge_agent::get_note_content(conn, &note.id)?
+                .is_some_and(|content| !content.trim().is_empty())
+            {
+                empty = false;
+                break;
+            }
+        }
+        empty
+    } else {
+        false
+    };
+    let direct_answer = match plan.kind {
+        QueryKind::Clarify => Some("Уточните, пожалуйста: последняя созданная или последняя изменённая заметка?".to_string()),
+        QueryKind::MissingScope => Some("Указанный проект или тег не найден. Проверьте название или задайте вопрос по всей базе.".to_string()),
+        QueryKind::Count => {
+            let scope = match (&plan.project_name, &plan.tag_name) {
+                (Some(project), Some(tag)) => format!("В проекте «{}» с тегом «{}»", safe_title(project), safe_title(tag)),
+                (Some(project), None) => format!("В проекте «{}»", safe_title(project)),
+                (None, Some(tag)) => format!("С тегом «{}»", safe_title(tag)),
+                _ => "В выбранной области базы".to_string(),
+            };
+            Some(format!("{scope}: {}.", note_count_label(matched_count)))
+        },
+        QueryKind::First | QueryKind::Last | QueryKind::LastEdited | QueryKind::Previous => {
+            let label = match plan.kind {
+                QueryKind::First => "Первая созданная заметка",
+                QueryKind::Last => "Последняя созданная заметка",
+                QueryKind::LastEdited => "Последняя изменённая заметка",
+                _ => "Заметка перед ней",
+            };
+            Some(if let Some(note) = notes.first() {
+                let date = if plan.kind == QueryKind::LastEdited { &note.updated_at } else { &note.created_at };
+                format!("{label} — «{}» ({}). [[S1]]", safe_title(&note.title), display_date(date))
+            } else { "Подходящих заметок не найдено.".to_string() })
+        }
+        QueryKind::List => {
+            if notes.is_empty() {
+                Some("Подходящих заметок не найдено.".to_string())
+            } else {
+                let mut answer = format!("Найдено {}.\n\n", note_count_label(matched_count));
+                for (index, note) in notes.iter().enumerate() {
+                    let date = if plan.order == NoteOrder::UpdatedDesc { &note.updated_at } else { &note.created_at };
+                    answer.push_str(&format!("{}. «{}» — {}. [[S{}]]\n", index + 1, safe_title(&note.title), display_date(date), index + 1));
+                }
+                if matched_count > notes.len() as i64 {
+                    answer.push_str("\nПоказаны первые 50 записей. Уточните вопрос, чтобы сузить список.");
+                }
+                Some(answer)
+            }
+        }
+        QueryKind::Frequency => Some(match frequency.as_ref() {
+            Some(summary) if !summary.complete => format!(
+                "В выбранном диапазоне {}. Для точного частотного анализа сузьте период или проект.", note_count_label(matched_count)
+            ),
+            Some(summary) if summary.inspected_notes == 0 => "За указанный период заметок не найдено.".to_string(),
+            Some(summary) if summary.terms.is_empty() => format!(
+                "В выбранном диапазоне {}, но повторяющихся значимых слов между заметками не обнаружено.", note_count_label(summary.inspected_notes as i64)
+            ),
+            Some(summary) => {
+                let mut answer = format!(
+                    "Проверено {}. Чаще всего в разных заметках повторяются слова:\n\n", note_count_label(summary.inspected_notes as i64)
+                );
+                for term in &summary.terms {
+                    let citation = notes.iter().position(|note| note.id == term.example_note_id)
+                        .map(|index| format!(" [[S{}]]", index + 1)).unwrap_or_default();
+                    answer.push_str(&format!("- «{}» — в {}.{}\n", safe_title(&term.term), note_count_label(term.note_count as i64), citation));
+                }
+                answer.push_str("\nЭто частотность слов, а не автоматическая классификация тем.");
+                answer
+            }
+            None => "Не удалось выполнить частотный анализ.".to_string(),
+        }),
+        QueryKind::ScopedContent if matched_count > knowledge_agent::max_content_notes()
+            && !stored.question.to_lowercase().contains("последн") => Some(format!(
+                "В выбранном диапазоне {}. Для достоверного ответа по содержанию уточните проект, тег или более короткий период.", note_count_label(matched_count)
+            )),
+        QueryKind::ScopedContent | QueryKind::Compare if notes.is_empty() => {
+            Some("Подходящих заметок не найдено.".to_string())
+        }
+        QueryKind::ScopedContent | QueryKind::Compare if content_is_empty => {
+            Some("У выбранных заметок нет текста для ответа по содержанию. [[S1]]".to_string())
+        }
+        QueryKind::Compare if notes.len() < 2 => {
+            Some("Для сравнения нужны две доступные заметки.".to_string())
+        }
+        _ => None,
+    };
+    let history_budget = context_window.saturating_sub(estimate_tokens(&stored.question) + 512);
+    Ok(StructuredPreparation {
+        direct_answer,
+        sources,
+        history: select_recent_history(&stored.history, history_budget),
+        max_output_tokens,
+        matched_count,
+    })
+}
+
+fn metadata_sources(
+    conn: &Connection,
+    notes: &[KnowledgeNote],
+    question: &str,
+    include_content: bool,
+    source_char_budget: usize,
+) -> DataResult<Vec<ContextSource>> {
+    let mut sources = Vec::new();
+    for note in notes {
+        let source_id = format!("S{}", sources.len() + 1);
+        let plain_text = if include_content {
+            knowledge_agent::get_note_content(conn, &note.id)?.unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let content = serde_json::to_string(&serde_json::json!({
+            "noteId": note.id,
+            "title": note.title,
+            "createdAt": note.created_at,
+            "updatedAt": note.updated_at,
+            "project": note.project,
+            "tags": note.tags,
+            "archived": note.archived,
+            "pinned": note.pinned,
+            "plainText": limit_chars(&plain_text, source_char_budget),
+        }))?;
+        let prompt = PromptSource {
+            id: source_id.clone(),
+            title: note.title.clone(),
+            content,
+        };
+        let snapshot = RagSourceSnapshot {
+            source_id: source_id.clone(),
+            citation_number: sources.len() + 1,
+            chunk_id: format!("note:{}", note.id),
+            note_id: note.id.clone(),
+            note_title: note.title.clone(),
+            heading_path: Vec::new(),
+            snippet: if include_content {
+                excerpt_for_question(&plain_text, question, 360)
+            } else {
+                format!(
+                    "Создана {} · изменена {}",
+                    display_date(&note.created_at),
+                    display_date(&note.updated_at)
+                )
+            },
+            project: note.project.clone(),
+            project_id: note.project_id.clone(),
+            tags: tags_for_note(conn, &note.id)?,
+            archived: note.archived,
+            favorite: note.pinned,
+            updated_at: note.updated_at.clone(),
+            semantic_score: None,
+            match_type: if include_content {
+                "lexical"
+            } else {
+                "metadata"
+            }
+            .to_string(),
+            neighboring_chunk_ids: Vec::new(),
+        };
+        sources.push(ContextSource { prompt, snapshot });
+    }
+    Ok(sources)
+}
+
+fn safe_title(title: &str) -> String {
+    title
+        .replace(['\r', '\n'], " ")
+        .replace(['[', ']', '*', '_', '`'], "")
+}
+
+fn note_count_label(count: i64) -> String {
+    let ending = if count % 100 / 10 == 1 {
+        "заметок"
+    } else {
+        match count % 10 {
+            1 => "заметка",
+            2..=4 => "заметки",
+            _ => "заметок",
+        }
+    };
+    format!("{count} {ending}")
+}
+
+fn display_date(value: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|date| {
+            date.with_timezone(&Local)
+                .format("%d.%m.%Y %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| value.chars().take(10).collect())
 }
 
 fn assemble_context(
@@ -707,7 +1227,19 @@ fn select_recent_history(
 fn grounded_user_prompt(question: &str, sources: &[ContextSource]) -> DataResult<String> {
     let source_payload = sources
         .iter()
-        .map(|source| source.prompt.clone())
+        .map(|source| {
+            serde_json::json!({
+                "id": source.prompt.id,
+                "title": source.prompt.title,
+                "content": source.prompt.content,
+                "metadata": {
+                    "project": source.snapshot.project,
+                    "tags": source.snapshot.tags.iter().map(|tag| &tag.name).collect::<Vec<_>>(),
+                    "archived": source.snapshot.archived,
+                    "updatedAt": source.snapshot.updated_at,
+                }
+            })
+        })
         .collect::<Vec<_>>();
     let serialized = serde_json::to_string_pretty(&source_payload)?;
     Ok(format!(
@@ -1033,7 +1565,9 @@ mod tests {
              CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL, custom_color TEXT, icon_key TEXT);
              CREATE TABLE notes (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL, project_id TEXT, archived_at TEXT,
-                deleted_at TEXT, is_favorite INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+                deleted_at TEXT, is_favorite INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+                created_at TEXT NOT NULL, is_pinned INTEGER NOT NULL DEFAULT 0,
+                plain_text TEXT NOT NULL DEFAULT ''
              );
              CREATE TABLE note_tags (note_id TEXT NOT NULL, tag_id TEXT NOT NULL);
              CREATE TABLE knowledge_chunks (
@@ -1049,7 +1583,8 @@ mod tests {
                 role TEXT NOT NULL, content TEXT NOT NULL, sources_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL
              );
-             INSERT INTO notes VALUES ('note-1', 'Проект Альфа', NULL, NULL, NULL, 0, '2026-01-01T00:00:00Z');
+             INSERT INTO notes (id,title,project_id,archived_at,deleted_at,is_favorite,updated_at,created_at,plain_text)
+               VALUES ('note-1', 'Проект Альфа', NULL, NULL, NULL, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'Проект Альфа запускается 12 октября.');
              INSERT INTO knowledge_chunks VALUES ('chunk-1', 'note-1', '[\"План\"]', 'Проект Альфа запускается 12 октября.');
              INSERT INTO ai_chats VALUES ('chat-1', 'rag', 'Альфа', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO ai_messages VALUES ('user-1', 'chat-1', 'user', 'Когда запускается проект Альфа?', '[]', '2026-01-01T00:00:01Z');",
@@ -1075,6 +1610,458 @@ mod tests {
             match_type: "hybrid".to_string(),
             neighboring_chunk_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn project_fact_questions_keep_global_hybrid_retrieval_and_content_citations() {
+        for (question, fact, answer) in [
+            (
+                "На каком сервере разворачивается проект Альфа?",
+                "Проект Альфа разворачивается на сервере Север-12.",
+                "Север-12",
+            ),
+            (
+                "Какой бюджет проекта Альфа?",
+                "Бюджет проекта Альфа — 4,7 млн рублей.",
+                "4,7 млн рублей",
+            ),
+            (
+                "Когда выполняется резервное копирование проекта Альфа?",
+                "Резервное копирование проекта Альфа выполняется каждый вторник в 03:40.",
+                "вторник в 03:40",
+            ),
+        ] {
+            for project_exists in [false, true] {
+                let mut conn = test_db();
+                if project_exists {
+                    conn.execute("INSERT INTO projects VALUES ('alpha','Альфа')", [])
+                        .expect("project entity");
+                }
+                conn.execute(
+                    "UPDATE notes SET title = 'Альфа инфраструктура', plain_text = ?1 WHERE id = 'note-1'",
+                    params![fact],
+                )
+                .expect("note content");
+                conn.execute(
+                    "UPDATE knowledge_chunks SET content_text = ?1 WHERE id = 'chunk-1'",
+                    params![fact],
+                )
+                .expect("indexed chunk");
+                conn.execute(
+                    "UPDATE ai_messages SET content = ?1 WHERE id = 'user-1'",
+                    params![question],
+                )
+                .expect("question");
+                let preview = preview_global_query(&conn, "chat-1", "user-1").expect("preview");
+                assert!(preview.needs_hybrid_retrieval, "{question}");
+                assert_eq!(preview.project_id, None, "{question}");
+                let http = MockHttp::new(vec![&format!("{answer} [[S1]]")]);
+                let result = generate_grounded_answer(
+                    &mut conn,
+                    &test_provider(),
+                    &TestSecrets,
+                    &http,
+                    RagGenerationRequest {
+                        chat_id: "chat-1".to_string(),
+                        user_message_id: "user-1".to_string(),
+                        retrieved_sources: vec![retrieved_source()],
+                    },
+                )
+                .expect("grounded fact answer");
+                assert_eq!(result.answer_status, "grounded", "{question}");
+                assert!(
+                    result.assistant_message.content.contains(answer),
+                    "{question}"
+                );
+                assert_eq!(result.assistant_message.sources[0].note_id, "note-1");
+                assert_eq!(result.assistant_message.sources[0].match_type, "hybrid");
+                assert_eq!(http.requests.lock().expect("requests").len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_project_membership_does_not_broaden_to_unlinked_notes() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "INSERT INTO projects VALUES ('alpha','Альфа');
+             UPDATE ai_messages SET content = 'Какой сервер указан в заметках проекта Альфа?' WHERE id = 'user-1';",
+        )
+        .expect("scope fixture");
+        let preview = preview_global_query(&conn, "chat-1", "user-1").expect("preview");
+        assert!(preview.needs_hybrid_retrieval);
+        assert_eq!(preview.project_id.as_deref(), Some("alpha"));
+        let http = MockHttp::new(Vec::new());
+        let result = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: vec![retrieved_source()],
+            },
+        )
+        .expect("strict scope");
+        assert_eq!(result.answer_status, "empty_retrieval");
+        assert!(result.assistant_message.sources.is_empty());
+        assert!(http.requests.lock().expect("requests").is_empty());
+
+        conn.execute_batch(
+            "UPDATE notes SET project_id = 'alpha', plain_text = 'Сервер проекта — Север-12.' WHERE id = 'note-1';
+             UPDATE knowledge_chunks SET content_text = 'Сервер проекта — Север-12.' WHERE id = 'chunk-1';
+             INSERT INTO ai_messages (id,chat_id,role,content,created_at)
+               VALUES ('user-2','chat-1','user','Какой сервер указан в заметках проекта Альфа?','2026-02-02T11:00:00Z');",
+        )
+        .expect("linked note");
+        let linked_http = MockHttp::new(vec!["Север-12. [[S1]]"]);
+        let linked = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &linked_http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-2".to_string(),
+                retrieved_sources: vec![retrieved_source()],
+            },
+        )
+        .expect("linked content answer");
+        assert_eq!(linked.answer_status, "grounded");
+        assert_eq!(linked.assistant_message.sources[0].note_id, "note-1");
+        assert_eq!(linked.assistant_message.sources[0].match_type, "hybrid");
+    }
+
+    #[test]
+    fn latest_textual_mention_and_followup_use_the_same_note_content() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE note_search_fts USING fts5(note_id UNINDEXED,title,plain_text,project_text, tokenize='unicode61');
+             INSERT INTO projects VALUES ('alpha','Альфа');
+             UPDATE notes SET title = 'Альфа инфраструктура', plain_text = 'Старый сервер Юг-1.' WHERE id = 'note-1';
+             INSERT INTO notes (id,title,updated_at,created_at,plain_text)
+               VALUES ('note-2','Чужая заметка','2026-03-01T10:00:00Z','2026-03-01T10:00:00Z','Другой проект'),
+                      ('note-3','Альфа запуск','2026-02-01T10:00:00Z','2026-02-01T10:00:00Z','Проект Альфа на сервере Север-12.');
+             INSERT INTO note_search_fts VALUES
+               ('note-1','Альфа инфраструктура','Старый сервер Юг-1.',''),
+               ('note-2','Чужая заметка','Другой проект',''),
+               ('note-3','Альфа запуск','Проект Альфа на сервере Север-12.','');
+             UPDATE ai_messages SET content = 'Какая последняя заметка про Альфа?' WHERE id = 'user-1';",
+        )
+        .expect("textual chronology fixture");
+        let first_http = MockHttp::new(Vec::new());
+        let latest = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &first_http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("latest mention");
+        assert_eq!(latest.assistant_message.sources[0].note_id, "note-3");
+        assert!(first_http.requests.lock().expect("requests").is_empty());
+        conn.execute(
+            "INSERT INTO ai_messages (id,chat_id,role,content,created_at) VALUES ('user-2','chat-1','user','А на каком сервере там разворачивается проект?','2026-03-02T11:00:00Z')",
+            [],
+        )
+        .expect("follow-up");
+        let followup_http = MockHttp::new(vec!["Проект на сервере Север-12. [[S1]]"]);
+        let followup = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &followup_http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-2".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("content follow-up");
+        assert_eq!(followup.assistant_message.sources[0].note_id, "note-3");
+        assert_eq!(followup.assistant_message.sources[0].match_type, "lexical");
+        assert!(followup.assistant_message.content.contains("Север-12"));
+        let request_body = followup_http.requests.lock().expect("requests")[0]
+            .body
+            .as_ref()
+            .expect("request body")
+            .to_string();
+        assert!(request_body.contains("Север-12"));
+        assert!(!request_body.contains("Юг-1"));
+    }
+
+    #[test]
+    fn latest_note_fact_reads_latest_content_without_semantic_chronology() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "INSERT INTO notes (id,title,updated_at,created_at,plain_text)
+               VALUES ('note-2','Последняя','2026-02-02T10:00:00Z','2026-02-02T10:00:00Z','Сервер Север-12.');
+             UPDATE ai_messages SET content = 'Какой сервер указан в последней заметке?' WHERE id = 'user-1';",
+        )
+        .expect("latest content fixture");
+        let preview = preview_global_query(&conn, "chat-1", "user-1").expect("preview");
+        assert!(!preview.needs_hybrid_retrieval);
+        let http = MockHttp::new(vec!["Указан сервер Север-12. [[S1]]"]);
+        let answer = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: vec![retrieved_source()],
+            },
+        )
+        .expect("latest note fact");
+        assert_eq!(answer.assistant_message.sources[0].note_id, "note-2");
+        assert_eq!(answer.assistant_message.sources[0].match_type, "lexical");
+        assert!(answer.assistant_message.content.contains("Север-12"));
+    }
+
+    #[test]
+    fn explicit_project_latest_followup_reads_anchored_note_not_scoped_hybrid() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "INSERT INTO projects VALUES ('alpha','Альфа');
+             UPDATE notes SET project_id = 'alpha', plain_text = 'Сервер Север-12.' WHERE id = 'note-1';
+             UPDATE ai_messages SET content = 'Какая последняя заметка проекта Альфа?' WHERE id = 'user-1';",
+        )
+        .expect("project follow-up fixture");
+        let latest_http = MockHttp::new(Vec::new());
+        generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &latest_http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("latest project note");
+        conn.execute(
+            "INSERT INTO ai_messages (id,chat_id,role,content,created_at) VALUES ('user-2','chat-1','user','А на каком сервере там разворачивается проект?','2026-02-02T11:00:00Z')",
+            [],
+        )
+        .expect("follow-up");
+        let preview = preview_global_query(&conn, "chat-1", "user-2").expect("preview");
+        assert!(!preview.needs_hybrid_retrieval);
+        let http = MockHttp::new(vec!["Север-12. [[S1]]"]);
+        let answer = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-2".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("anchored content answer");
+        assert_eq!(answer.assistant_message.sources[0].note_id, "note-1");
+        assert_eq!(answer.assistant_message.sources[0].match_type, "lexical");
+    }
+
+    #[test]
+    fn structured_latest_and_followup_previous_use_sqlite_order_without_http() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "INSERT INTO projects VALUES ('alpha', 'Альфа');
+             UPDATE notes SET project_id = 'alpha' WHERE id = 'note-1';
+             INSERT INTO notes (id,title,project_id,updated_at,created_at,plain_text)
+               VALUES ('note-2','Вторая','alpha','2026-02-02T10:00:00.000Z','2026-02-02T10:00:00.000Z','Новый факт');
+             UPDATE ai_messages SET content = 'Какая последняя заметка проекта Альфа?' WHERE id = 'user-1';",
+        ).expect("structured fixture");
+        let http = MockHttp::new(Vec::new());
+        let preview = preview_global_query(&conn, "chat-1", "user-1").expect("query preview");
+        assert!(!preview.needs_hybrid_retrieval);
+        let latest = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("latest note");
+        assert!(latest.assistant_message.content.contains("Вторая"));
+        assert_eq!(latest.assistant_message.sources[0].note_id, "note-2");
+        conn.execute(
+            "INSERT INTO ai_messages (id,chat_id,role,content,created_at) VALUES ('user-2','chat-1','user','А что было перед ней?','2026-02-02T11:00:00Z')",
+            [],
+        ).expect("follow-up message");
+        let previous = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-2".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("previous note");
+        assert_eq!(previous.assistant_message.sources[0].note_id, "note-1");
+        assert!(previous.assistant_message.content.contains("Проект Альфа"));
+        assert!(http.requests.lock().expect("requests").is_empty());
+
+        conn.execute(
+            "INSERT INTO ai_messages (id,chat_id,role,content,created_at) VALUES ('user-3','chat-1','user','Чем они отличаются?','2026-02-02T12:00:00Z')",
+            [],
+        ).expect("comparison follow-up");
+        let comparison_http = MockHttp::new(vec![
+            "Первая заметка о запуске, вторая о новом факте. [[S1]] [[S2]]",
+        ]);
+        let comparison = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &comparison_http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-3".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("comparison follow-up");
+        let source_ids = comparison
+            .assistant_message
+            .sources
+            .iter()
+            .map(|source| source.note_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(source_ids, vec!["note-1", "note-2"]);
+    }
+
+    #[test]
+    fn structured_count_and_missing_scope_are_grounded_without_provider_call() {
+        let mut conn = test_db();
+        conn.execute(
+            "UPDATE ai_messages SET content = 'Сколько у меня заметок?' WHERE id = 'user-1'",
+            [],
+        )
+        .expect("question");
+        let http = MockHttp::new(Vec::new());
+        let count = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("count");
+        assert!(count.assistant_message.content.contains("1 заметка"));
+        assert!(count.assistant_message.sources.is_empty());
+        conn.execute(
+            "INSERT INTO ai_messages (id,chat_id,role,content,created_at) VALUES ('user-2','chat-1','user','Какие заметки я создал 2024-01-04?','2026-02-02T11:00:00Z')",
+            [],
+        ).expect("missing question");
+        let missing = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-2".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("missing notes");
+        assert_eq!(missing.answer_status, "empty_retrieval");
+        assert!(missing.assistant_message.content.contains("не найдено"));
+        assert!(http.requests.lock().expect("requests").is_empty());
+    }
+
+    #[test]
+    fn mixed_last_note_reads_its_content_not_semantic_top_result() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "INSERT INTO notes (id,title,updated_at,created_at,plain_text)
+               VALUES ('note-2','Поздняя','2026-02-02T10:00:00.000Z','2026-02-02T10:00:00.000Z','Сервер работает на порту 9000');
+             UPDATE ai_messages SET content = 'Что я писал про сервер в последней заметке?' WHERE id = 'user-1';",
+        ).expect("mixed fixture");
+        let preview = preview_global_query(&conn, "chat-1", "user-1").expect("mixed preview");
+        assert!(!preview.needs_hybrid_retrieval);
+        let http = MockHttp::new(vec!["В последней заметке указан порт 9000. [[S1]]"]);
+        let result = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: vec![retrieved_source()],
+            },
+        )
+        .expect("mixed answer");
+        assert_eq!(result.assistant_message.sources[0].note_id, "note-2");
+        let requests = http.requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        let body = requests[0].body.as_ref().expect("request body").to_string();
+        assert!(body.contains("9000"));
+        assert!(!body.contains("12 октября"));
+    }
+
+    #[test]
+    fn compare_first_and_last_project_notes_passes_two_bounded_sources() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "INSERT INTO projects VALUES ('alpha', 'Альфа');
+             UPDATE notes SET project_id = 'alpha' WHERE id = 'note-1';
+             INSERT INTO notes (id,title,project_id,updated_at,created_at,plain_text)
+               VALUES ('note-2','Поздняя','alpha','2026-02-02T10:00:00.000Z','2026-02-02T10:00:00.000Z','Новый сервер');
+             INSERT INTO notes (id,title,updated_at,created_at,plain_text)
+               VALUES ('unrelated','Чужая','2026-03-02T10:00:00.000Z','2026-03-02T10:00:00.000Z','Чужой проект');
+             UPDATE ai_messages SET content = 'Сравни первую и последнюю заметку проекта Альфа.' WHERE id = 'user-1';",
+        ).expect("compare fixture");
+        let http = MockHttp::new(vec![
+            "Первая описывает запуск, вторая — новый сервер. [[S1]] [[S2]]",
+        ]);
+        let result = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".to_string(),
+                user_message_id: "user-1".to_string(),
+                retrieved_sources: Vec::new(),
+            },
+        )
+        .expect("comparison");
+        let ids = result
+            .assistant_message
+            .sources
+            .iter()
+            .map(|source| source.note_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["note-1", "note-2"]);
+        let requests = http.requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0]
+            .body
+            .as_ref()
+            .expect("request body")
+            .to_string()
+            .contains("Чужой проект"));
     }
 
     fn test_context_source(source_id: &str, note_id: &str, title: &str) -> ContextSource {

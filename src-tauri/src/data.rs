@@ -6342,6 +6342,28 @@ pub async fn run_rag_generation(
 }
 
 #[tauri::command]
+pub async fn plan_rag_question(
+    chat_id: String,
+    user_message_id: String,
+    state: State<'_, AppState>,
+) -> Result<crate::knowledge_agent::QueryPreview, rag::RagGenerationCommandError> {
+    let database_path = state
+        .with_store(|store| Ok(store.database_path()))
+        .map_err(rag::RagGenerationCommandError::from_data_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_background_connection(&database_path)?;
+        rag::preview_global_query(&conn, &chat_id, &user_message_id)
+    })
+    .await
+    .map_err(|_| {
+        rag::RagGenerationCommandError::from_data_error(DataError::State(
+            "Не удалось подготовить запрос по базе".to_string(),
+        ))
+    })?
+    .map_err(rag::RagGenerationCommandError::from_data_error)
+}
+
+#[tauri::command]
 pub async fn list_llm_models(
     provider_id: String,
     state: State<'_, AppState>,

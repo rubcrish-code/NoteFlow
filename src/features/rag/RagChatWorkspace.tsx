@@ -13,6 +13,7 @@ import { ChatMarkdown } from "../note-chat/ChatMarkdown";
 import { SettingsModalShell } from "../settings/ModelSettingsUi";
 import { ragAnswerForClipboard } from "./ragCitations";
 import { isRagGenerationCurrent, shouldApplyRagGenerationToVisibleChat } from "./ragGenerationGuards";
+import { retrieveForRagQuestion } from "./ragQueryRouting";
 import { isRagHistoryOverlayMode, resolveRagPanelVisibility, type RagLayoutMode } from "./ragResponsiveLayout";
 
 interface RagChatWorkspaceProps {
@@ -274,14 +275,6 @@ export function RagChatWorkspace({
   async function sendQuestion() {
     const question = draft.trim();
     if (!question || generationBusyRef.current) return;
-    if (!selectedProfile) {
-      onToast("Модель смыслового поиска не настроена.");
-      return;
-    }
-    if (!canRetrieve) {
-      onToast("Обновите базу для RAG перед поиском.");
-      return;
-    }
     if (!generatorStatus?.hasProvider || !generatorStatus.model) {
       onToast("Подключите модель ответа в разделе «Модели ИИ».");
       onOpenModelSettings();
@@ -304,7 +297,7 @@ export function RagChatWorkspace({
   }
 
   async function submitQuestion(question: string) {
-    if (generationBusyRef.current || !selectedProfile) return;
+    if (generationBusyRef.current) return;
     generationBusyRef.current = true;
     const requestId = ++generationRequestIdRef.current;
 
@@ -338,7 +331,10 @@ export function RagChatWorkspace({
         chat = renamed;
         setChats((current) => current.map((item) => item.id === renamed.id ? renamed : item));
       }
-      const results = await retrieveRagSources(selectedProfile.id, question);
+      const results = await retrieveForRagQuestion(
+        { chatId, userMessageId: userMessage.id, profileId: selectedProfile?.id ?? null, canRetrieve },
+        { plan: ragChatService.planRagQuestion, hybridSearch: retrieveRagSources },
+      );
       const request = { chatId, requestId };
       if (!isRagGenerationCurrent(request, generationRequestIdRef.current, deletedChatIdsRef.current)) return;
       setGeneration((current) => current.requestId === requestId
@@ -386,7 +382,6 @@ export function RagChatWorkspace({
       generation.phase !== "error"
       || !generation.retryable
       || !generation.userMessageId
-      || !selectedProfile
       || generationBusyRef.current
     ) return;
     const failed = generation;
@@ -394,7 +389,10 @@ export function RagChatWorkspace({
     generationBusyRef.current = true;
     setGeneration({ ...failed, phase: "retrieving", requestId, message: "" });
     try {
-      const results = await retrieveRagSources(selectedProfile.id, failed.question);
+      const results = await retrieveForRagQuestion(
+        { chatId: failed.chatId, userMessageId: failed.userMessageId, profileId: selectedProfile?.id ?? null, canRetrieve },
+        { plan: ragChatService.planRagQuestion, hybridSearch: retrieveRagSources },
+      );
       const request = { chatId: failed.chatId, requestId };
       if (!isRagGenerationCurrent(request, generationRequestIdRef.current, deletedChatIdsRef.current)) return;
       setGeneration((current) => current.requestId === requestId ? { ...current, phase: "generating" } : current);
@@ -686,13 +684,11 @@ export function RagChatWorkspace({
           <ChatComposer
             ariaLabel="Сообщение по всей базе заметок"
             className="rag-input"
-            disabled={!canRetrieve || !generatorStatus?.hasProvider || !generatorStatus.model}
+            disabled={!generatorStatus?.hasProvider || !generatorStatus.model}
             isSubmitting={generationBusy}
             onChange={setDraft}
             onSubmit={() => void sendQuestion()}
-            placeholder={!selectedProfile
-              ? "Настройте смысловой поиск"
-              : !generatorStatus?.hasProvider || !generatorStatus.model
+            placeholder={!generatorStatus?.hasProvider || !generatorStatus.model
                 ? "Сначала подключите модель ответа"
                 : "Спросить по всем заметкам…"}
             value={draft}
@@ -834,13 +830,15 @@ function latestSources(messages: RagChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === "assistant")?.sources ?? [];
 }
 
-async function retrieveRagSources(profileId: string, question: string) {
+async function retrieveRagSources(profileId: string, plan: ragChatService.RagQueryPlan) {
   try {
     return await embeddingService.hybridSearch({
       includeArchived: false,
       includeNeighbors: true,
       profileId,
-      query: question,
+      projectId: plan.projectId ?? undefined,
+      tagId: plan.tagId ?? undefined,
+      query: plan.searchQuery,
     });
   } catch {
     throw new RagGenerationError(
@@ -874,6 +872,7 @@ function matchLabel(matchType: SemanticSearchResult["matchType"]) {
   if (matchType === "exact") return "Точное совпадение";
   if (matchType === "lexical") return "По тексту";
   if (matchType === "hybrid") return "Текст и смысл";
+  if (matchType === "metadata") return "Данные заметки";
   return "По смыслу";
 }
 

@@ -45,6 +45,13 @@ export interface RagGenerationResult {
   timings: RagGenerationTimings;
 }
 
+export interface RagQueryPlan {
+  needsHybridRetrieval: boolean;
+  searchQuery: string;
+  projectId: string | null;
+  tagId: string | null;
+}
+
 export class RagGenerationError extends Error {
   readonly code: string;
   readonly retryable: boolean;
@@ -179,6 +186,10 @@ export async function runRagGeneration(
   } catch (error) {
     throw normalizeGenerationError(error);
   }
+}
+
+export function planRagQuestion(chatId: string, userMessageId: string): Promise<RagQueryPlan> {
+  return invoke<RagQueryPlan>("plan_rag_question", { chatId, userMessageId });
 }
 
 function normalizeAnswerStatus(value: string): RagAnswerStatus {
