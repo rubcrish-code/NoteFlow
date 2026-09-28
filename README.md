@@ -1,23 +1,131 @@
-# Tauri + React + Typescript
+# NoteFlow
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+NoteFlow — локальное desktop-приложение для заметок с Markdown-first редактором, подключением локальных и внешних LLM, смысловым поиском и RAG по базе заметок. Для обычной работы с заметками регистрация и интернет не нужны.
 
-## Recommended IDE Setup
+| Платформа | Состояние |
+| --- | --- |
+| Windows 10/11 x64 | Собран **1.0.0-rc.1** для закрытого тестирования. Установка и обновление на другом ПК ещё проходят проверку. |
+| macOS (Apple Silicon / Intel) | Код предусматривает сборку, но публичный подписанный и notarized релиз ещё не проверен и не выпускается. |
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+**Текущий выпуск: 1.0.0-rc.1, Release Candidate, не финальная v1.0.** Windows-артефакты подготовлены; GitHub Release появится после публикации владельцем проекта.
 
-## Rust tests
+## Возможности
 
-Run the deterministic Rust test suite from `src-tauri`:
+### Заметки и редактор
+
+- Markdown — основной текстовый формат; вставленный Markdown преобразуется в визуальный редактор. Доступен экспорт заметки в `.md`.
+- Заголовки, жирный и курсивный текст, подчёркивание, зачёркивание, код, блоки кода, списки, чек-листы, цитаты, разделители, выравнивание и ссылки.
+- Таблицы, выноски, сворачиваемые блоки, формулы и даты. Изображения можно выравнивать, менять их размер и обрезать; файлы добавляются как вложения.
+- Автосохранение, история версий, закрепление и архивирование заметок, режим фокуса.
+
+### Организация
+
+Проекты и теги помогают группировать заметки. Поиск по заголовку и содержимому работает через SQLite FTS5; архив доступен отдельно. Можно импортировать Markdown, экспортировать заметку или проект и создать внешнюю резервную копию.
+
+### ИИ и база знаний
+
+В **Настройки → Модели ИИ** настраиваются Ollama, LM Studio, OpenAI-compatible или пользовательский API. Модель генерации используется для действий ИИ в редакторе, чата по текущей заметке и чата по базе. Ответы по базе показывают источники, по которым можно перейти к заметке.
+
+Для смыслового поиска нужна **отдельная embedding-модель**. Вопрос проходит через полнотекстовый поиск и embeddings; результаты объединяются методом RRF, после чего модель чата формирует ответ с проверяемыми ссылками на источники. Global Knowledge Agent дополнительно использует данные заметок о датах, хронологии, проектах, тегах и количестве записей. Без настроенных моделей обычные заметки и FTS-поиск продолжают работать.
+
+## Установка на Windows
+
+Для закрытого RC рекомендуется **NSIS**: `NoteFlow_1.0.0-rc.1_x64-setup.exe`. MSI (`en-US` и `ru-RU`) — альтернативные артефакты; переход между MSI и NSIS пока не проверен, поэтому не считайте их взаимозаменяемыми.
+
+1. После публикации откройте [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases) и выберите `1.0.0-rc.1`.
+2. Скачайте NSIS setup и, при желании, сравните его SHA-256 с `SHA256SUMS.txt` (`Get-FileHash -Algorithm SHA256` в PowerShell).
+3. Запустите установщик, завершите установку и откройте NoteFlow.
+
+RC **не подписан Authenticode**, поэтому Windows SmartScreen может показать предупреждение. Не отключайте защиту Windows. Полный цикл clean install → upgrade → uninstall/reinstall ещё не подтверждён на отдельном ПК; для проверки используйте [короткий smoke-checklist](docs/release/rc-second-pc-smoke.md) и отдельный тестовый профиль, а не важные данные.
+
+## macOS
+
+Готовый публичный `.dmg` для этого RC **не выпускается**. Проект использует Tauri 2 и содержит реализацию хранилища ключей через macOS Keychain, но сборка, native-поведение, подпись и notarization на macOS ещё не прошли release validation.
+
+Для локальной сборки на Mac установите [Xcode Command Line Tools, Rust и Node.js LTS](https://v2.tauri.app/start/prerequisites/) с npm. Для desktop-сборки достаточно Command Line Tools; при необходимости выполните:
 
 ```bash
+xcode-select --install
+```
+
+Затем клонируйте репозиторий и используйте команды, определённые в `package.json`:
+
+```bash
+git clone https://github.com/rubcrish-code/NoteFlow.git
+cd NoteFlow
+rustup update stable
+npm ci
+npm run tauri dev
+```
+
+Локальную неподписанную DMG-сборку Tauri запускают на Mac так:
+
+```bash
+npm run tauri build -- --bundles dmg
+```
+
+CLI выведет фактический путь артефакта. Для этого репозитория результат на macOS пока не подтверждён реальной сборкой. Подписанный/notarized DMG потребует отдельного релизного процесса.
+
+Нативная сборка на Apple Silicon использует Rust target `aarch64-apple-darwin`, на Intel — `x86_64-apple-darwin`. Для сборки под **другую** архитектуру на macOS-хосте сначала добавьте соответствующий target, например на Apple Silicon для Intel:
+
+```bash
+rustup target add x86_64-apple-darwin
+npm run tauri build -- --bundles dmg --target x86_64-apple-darwin
+```
+
+На Intel для Apple Silicon используйте `aarch64-apple-darwin` в обеих командах. Кросс-сборка и universal binary в NoteFlow пока не проверены; не считайте их готовыми релизными артефактами.
+
+Неподписанное локальное приложение macOS может быть заблокировано Gatekeeper. Открывайте только собственную сборку из доверенного исходного кода; если система разрешает исключение, используйте **System Settings → Privacy & Security → Open Anyway** после первой попытки запуска. Не отключайте Gatekeeper глобально.
+
+## Модели ИИ и приватность
+
+В **Настройки → Модели ИИ** добавьте подключение, укажите адрес и модель, затем проверьте соединение. Для локального Ollama пример адреса — `http://127.0.0.1:11434`. Для внешнего OpenAI-compatible провайдера используйте выданные им URL и API key; не публикуйте ключ в репозитории. Модель чата и embedding-модель выполняют разные задачи и настраиваются отдельно.
+
+Заметки, метаданные и настройки хранятся локально в SQLite; изображения и вложения — в управляемом хранилище файлов. Приложение использует Tauri `app_data_dir`: на Windows это обычно `%APPDATA%\com.noteflow.desktop`, на macOS — `~/Library/Application Support/com.noteflow.desktop`. Точное расположение можно посмотреть в настройках. API-ключи не записываются в обычную SQLite-базу: на Windows используется Credential Manager, на macOS реализована интеграция с Keychain, **пока без production smoke**.
+
+Обычная работа с заметками не требует облака. При выборе внешнего AI-провайдера нужный контекст запроса передаётся этому провайдеру; перед использованием облачных функций приложение запрашивает соответствующее согласие. Доступность, политика хранения и безопасность внешнего сервиса зависят от выбранного провайдера.
+
+В **Настройки → Данные и экспорт** можно выбрать **Создать резервную копию** и место для внешнего ZIP-файла. Там же доступно восстановление с предварительным просмотром содержимого; оно заменяет данные текущего профиля, поэтому сначала сохраните его копию. API-ключи в backup **не входят** и после восстановления на другом компьютере настраиваются заново.
+
+## Интерфейс
+
+<!-- TODO (владелец проекта): добавить актуальные скриншоты NoteFlow после проверки установленного RC; не использовать старые макеты вместо снимков приложения. -->
+
+## Разработка и проверки
+
+Стек: Tauri 2, Rust, React, TypeScript, Vite, TipTap/ProseMirror, SQLite и FTS5. Для разработки на Windows дополнительно нужны [предпосылки Tauri для Windows](https://v2.tauri.app/start/prerequisites/) (MSVC Build Tools и WebView2). На macOS — предпосылки выше.
+
+```bash
+npm ci
+npm run tauri dev
+```
+
+Проверки frontend и production web-сборки:
+
+```bash
+npm run typecheck
+npm run test
+npm run build
+```
+
+Проверки Rust выполняются из `src-tauri`:
+
+```bash
+cd src-tauri
+cargo fmt --check
+cargo check
 cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-The FTS5 performance probe is intentionally excluded from the regular suite because wall-clock assertions are sensitive to concurrent CPU and disk load. Run it in isolation on an otherwise idle machine:
+Windows RC-сборка и отдельный FTS benchmark описаны в [release checklist](docs/release/windows-release-checklist.md). Команда `npm run tauri build` собирает desktop-приложение для текущей платформы; созданный пакет сам по себе не означает прохождение installer QA.
 
-```bash
-cargo test search::tests::search_performance_on_ten_thousand_notes -- --ignored --exact --nocapture --test-threads=1
-```
+## Статус и ограничения
 
-The probe reports database setup, search schema setup, fixture generation, indexing, and query time separately. Its existing limits remain 30 seconds for indexing 10,000 notes and 5 seconds for the query.
+- Windows `1.0.0-rc.1` — тестовый выпуск, установщики пока без цифровой подписи. Проверка установки, обновления и удаления на другом ПК ещё не завершена.
+- Публичного проверенного macOS-релиза нет; Windows 10 требует отдельного smoke, прежде чем считать поддержку подтверждённой.
+- Автоматического обновления нет. Ответы ИИ пока не стримятся; отдельный reranker в retrieval не используется.
+
+Дальнейшие шаги без обещания сроков: проверить Windows RC на отдельном ПК, подготовить подписанный Windows 1.0, затем собрать, проверить, подписать и notarize macOS-версию; позднее рассмотреть updater и улучшения retrieval/AI.
+
+Подробности текущего RC — в [release notes](docs/release/rc-1.0.0-rc.1-notes.md). Функциональные требования — в [product specification](docs/specifications/product-spec.md).
