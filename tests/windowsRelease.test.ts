@@ -15,7 +15,7 @@ const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")) as 
   productName: string;
   identifier: string;
   version: string;
-  bundle: { windows: { wix: { language: string[] }; nsis: { languages: string[] } } };
+  bundle: { windows: { wix: { version?: string; language: string[] }; nsis: { languages: string[] } } };
 };
 
 describe("Windows release configuration", () => {
@@ -27,6 +27,9 @@ describe("Windows release configuration", () => {
     assert.equal(config.identifier, "com.noteflow.desktop");
     assert.deepEqual(config.bundle.windows.wix.language, ["en-US", "ru-RU"]);
     assert.deepEqual(config.bundle.windows.nsis.languages, ["English", "Russian"]);
+    if (packageJson.version === "1.0.0-rc.1") {
+      assert.equal(config.bundle.windows.wix.version, "0.99.1");
+    }
   });
 
   it("stages the exact release artifacts and writes verifiable SHA-256 hashes", { skip: process.platform !== "win32" }, () => {

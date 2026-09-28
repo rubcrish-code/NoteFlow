@@ -9545,7 +9545,7 @@ mod tests {
         let manifest_text = manifest.to_string();
         assert_eq!(manifest["version"], 6);
         assert!(manifest["assetBlobs"].is_array());
-        assert_eq!(manifest["appVersion"], "0.9.0");
+        assert_eq!(manifest["appVersion"], env!("CARGO_PKG_VERSION"));
         assert_eq!(manifest["aiChats"].as_array().map(Vec::len), Some(2));
         assert_eq!(manifest["aiMessages"].as_array().map(Vec::len), Some(3));
         assert!(manifest_text.contains("Важно сохранить **Markdown**"));

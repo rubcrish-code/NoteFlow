@@ -1,5 +1,7 @@
 # NoteFlow Windows installer QA results (blank)
 
+**RC status: DEFERRED TO SECOND-PC RC SMOKE — NOT PASS.** This template describes the historical 0.8.0 -> 0.9.0 package matrix. For 1.0.0-rc.1, use `rc-second-pc-smoke.md` first; the complete VM matrix remains pending before final public v1.
+
 Tester: _not run_  
 Date: _not run_  
 VM snapshot IDs: _not run_  
