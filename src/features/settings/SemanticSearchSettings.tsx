@@ -154,12 +154,20 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   }, []);
 
   useEffect(() => {
-    if (!indexOperation) return;
-    const intervalId = window.setInterval(() => {
-      void refreshStatus(indexOperation.profileId);
-    }, 700);
-    return () => window.clearInterval(intervalId);
-  }, [indexOperation]);
+    let cancelled = false;
+    let timer: number;
+    async function poll() {
+      await Promise.all(profiles.map(async (profile) => {
+        try {
+          const status = await embeddingService.getEmbeddingIndexStatus(profile.id);
+          if (!cancelled) setStatuses((current) => ({ ...current, [profile.id]: status }));
+        } catch { /* Retain last known status while a profile remains editable. */ }
+      }));
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 3000);
+    }
+    timer = window.setTimeout(() => void poll(), 3000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [profiles]);
 
   function showMessage(text: string, error = false) {
     setMessage(text);
@@ -321,7 +329,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       if (operation === "rebuild") {
         setConfirmation({ type: "rebuild", profile: updated });
       } else {
-        void runIndexOperation(updated, operation);
+        showMessage("Облачная обработка разрешена. Новые и изменённые заметки будут обрабатываться автоматически.");
       }
     } catch (error) {
       showMessage(errorText(error, "Не удалось сохранить согласие"), true);
@@ -413,9 +421,9 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
                   <small>{providerLabel(profile.providerType)} · {profile.model}</small>
                 </div>
                 <ModelStatusBadge
-                  busy={Boolean(operation || testing)}
+                  busy={Boolean(operation || testing || status?.status === "indexing")}
                   label={operation ? "Обновляется" : testing ? "Проверяем" : indexStatusLabel(status?.status, profile.lastStatus)}
-                  tone={status?.status === "current" || profile.lastStatus === "success" ? "success" : status?.status === "failed" || profile.lastStatus === "error" ? "error" : status?.status === "partial" ? "warning" : "neutral"}
+                  tone={status?.status === "failed" ? "error" : status?.status === "partial" ? "warning" : status?.status === "current" ? "success" : profile.lastStatus === "error" ? "error" : "neutral"}
                 />
               </div>
               <div className="semantic-profile-metrics">
@@ -424,7 +432,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
                 <span><small>Осталось</small><b>{status?.pendingChunks ?? "—"}</b></span>
                 <span><small>Последняя проверка</small><b>{formatDate(status?.lastCheckedAt ?? profile.lastCheckedAt)}</b></span>
               </div>
-              {operation && status ? (
+              {(operation || status?.status === "indexing") && status ? (
                 <div className="semantic-progress" aria-label="Прогресс обновления">
                   <span style={{ width: `${progressPercent(status)}%` }} />
                 </div>
@@ -436,15 +444,11 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
                 <button className="secondary-btn compact" disabled={Boolean(operation)} onClick={() => openProfile(profile)} type="button">Изменить</button>
                 {operation ? (
                   <button className="secondary-btn compact" onClick={() => void cancelIndexing(profile.id)} type="button">Остановить</button>
-                ) : (
-                  <button className="primary-btn compact" disabled={profile.lastStatus !== "success"} onClick={() => requestIndexOperation(profile, "update")} type="button">
-                    Обновить смысловой поиск (RAG)
-                  </button>
-                )}
+                ) : profile.locality === "cloud" && !profile.hasCloudConsent ? <button className="primary-btn compact" onClick={() => setConsentRequest({ profile, operation: "update" })} type="button">Разрешить облачную обработку</button> : null}
                 <details className="semantic-more-actions model-card-more">
                   <summary aria-label={`Дополнительные действия: ${profile.name}`} className="row-menu-trigger"><Icon name="dots" /></summary>
                   <div className="semantic-more-menu">
-                    <button disabled={Boolean(operation)} onClick={() => requestIndexOperation(profile, "rebuild")} type="button">Пересоздать смысловой поиск (RAG)</button>
+                    <button disabled={Boolean(operation)} onClick={() => requestIndexOperation(profile, "rebuild")} type="button">Восстановить индекс поиска</button>
                     <button className="danger" disabled={Boolean(operation)} onClick={() => setConfirmation({ type: "delete", profile })} type="button">Удалить модель</button>
                   </div>
                 </details>
@@ -588,8 +592,8 @@ function indexStatusLabel(status: EmbeddingIndexStatus["status"] | undefined, pr
   if (status === "partial") return "Частично готов";
   if (status === "failed") return "Требует внимания";
   if (status === "indexing") return "Обновляется";
-  if (status === "pending") return "Нужно обновить";
-  if (providerStatus === "success") return "Готов к обновлению";
+  if (status === "pending") return "Ожидает обработки";
+  if (providerStatus === "success") return "Ожидает обработки";
   if (providerStatus === "error") return "Ошибка подключения";
   return "Не проверено";
 }

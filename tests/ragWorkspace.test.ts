@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import { act, createElement as h } from "react";
 import type { Root } from "react-dom/client";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import type { RagLayoutMode } from "../src/features/rag/ragResponsiveLayout";
 
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost", pretendToBeVisual: true });
 const globals = new Map<string, PropertyDescriptor | undefined>();
@@ -58,6 +59,84 @@ after(() => {
 });
 
 describe("RAG workspace generation flow", () => {
+  it("preserves the composer, answer, sources and scope while changing responsive modes", async () => {
+    const commands: string[] = [];
+    installBaseIpc(commands, { hybridSearch: () => [semanticSource], runGeneration: () => generationResult("Ответ сохранён. [[S1]]") });
+    await renderWorkspace(() => {});
+    await until(() => !composer().disabled);
+    await setComposerValue("Первый вопрос");
+    await click("Отправить");
+    await until(() => Boolean(container.querySelector(".rag-citation")));
+    await setComposerValue("Неотправленный черновик");
+    const input = composer();
+    const citation = container.querySelector(".rag-citation");
+    const initialCommands = commands.length;
+    for (const mode of ["compact", "narrow", "wide"] as const) {
+      await renderWorkspace(() => {}, mode);
+      assert.equal(composer(), input);
+      assert.equal(composer().value, "Неотправленный черновик");
+      assert.equal(container.querySelector(".rag-citation"), citation);
+      assert.equal(button("Область поиска: Вся база")?.getAttribute("aria-expanded"), "false");
+    }
+    assert.equal(commands.length, initialCommands);
+    assert.match(container.querySelector(".rag-source-list")?.textContent ?? "", /Проект Альфа/);
+  });
+
+  it("shows only one drawer at a time and restores both docked preferences", async () => {
+    installBaseIpc([], { hybridSearch: () => [], runGeneration: () => generationResult("Ответ") });
+    await renderWorkspace(() => {});
+    await until(() => !composer().disabled);
+    await renderWorkspace(() => {}, "compact");
+    assert.ok(container.querySelector(".rag-sources-panel.rag-panel-overlay"));
+    assert.equal(container.querySelector(".rag-conversations"), null);
+    await click("Показать историю чатов");
+    assert.ok(container.querySelector(".rag-conversations.rag-panel-overlay"));
+    assert.equal(container.querySelector(".rag-sources-panel"), null);
+    await click("Источники ответа");
+    assert.ok(container.querySelector(".rag-sources-panel.rag-panel-overlay"));
+    assert.equal(container.querySelector(".rag-conversations"), null);
+    await renderWorkspace(() => {}, "wide");
+    assert.ok(container.querySelector(".rag-conversations:not(.rag-panel-overlay)"));
+    assert.ok(container.querySelector(".rag-sources-panel:not(.rag-panel-overlay)"));
+  });
+
+  it("blocks an empty explicit scope without saving or retrieving and recovers to standalone-only", async () => {
+    const commands: string[] = [];
+    installBaseIpc(commands, { hybridSearch: () => [semanticSource], runGeneration: () => generationResult("Standalone answer. [[S1]]") });
+    await renderWorkspace(() => {});
+    await until(() => !composer().disabled);
+    await click("Область поиска: Вся база");
+    const standalone = document.querySelector<HTMLInputElement>('.rag-project-popover input[type="checkbox"]');
+    assert.ok(standalone);
+    await act(async () => standalone.click());
+    await until(() => composer().disabled);
+    assert.match(document.body.textContent ?? "", /Выберите хотя бы один проект или заметки вне проектов/);
+    assert.equal(container.querySelector<HTMLButtonElement>(".chat-composer-send")?.disabled, true);
+    assert.equal(commands.includes("save_rag_chat_message"), false);
+    assert.equal(commands.includes("hybrid_search"), false);
+    await act(async () => standalone.click());
+    await until(() => !composer().disabled);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await setComposerValue("Standalone question");
+    await click("Отправить");
+    await until(() => container.textContent?.includes("Standalone answer") ?? false);
+    assert.equal(commands.filter((c) => c === "save_rag_chat_message").length, 1);
+  });
+
+  it("uses a recovered current index despite a stale connection-test error", async () => {
+    let retrieved = false;
+    installBaseIpc([], {
+      connectionStatus: "error",
+      hybridSearch: () => { retrieved = true; return [semanticSource]; },
+      runGeneration: () => generationResult("Recovered answer. [[S1]]"),
+    });
+    await renderWorkspace(() => {});
+    await until(() => !composer().disabled);
+    await setComposerValue("Recovered query");
+    await click("Отправить");
+    await until(() => container.textContent?.includes("Recovered answer") ?? false);
+    assert.equal(retrieved, true);
+  });
   it("copies user text and a clean assistant answer from icon-only actions", async () => {
     const copied: string[] = [];
     Object.defineProperty(navigator, "clipboard", {
@@ -80,7 +159,7 @@ describe("RAG workspace generation flow", () => {
     assert.equal(userCopy.textContent?.trim(), "");
     assert.equal(assistantCopy.textContent?.trim(), "");
     assert.equal(userCopy.getAttribute("aria-label"), "Скопировать сообщение");
-    assert.equal(assistantCopy.getAttribute("title"), "Скопировать");
+    assert.equal(assistantCopy.getAttribute("data-tooltip"), "Скопировать");
     await act(async () => userCopy.click());
     await act(async () => assistantCopy.click());
     assert.deepEqual(copied, ["Вопрос **в Markdown**", "Ответ **готов**. [1]"]);
@@ -175,6 +254,36 @@ describe("RAG workspace generation flow", () => {
     assert.equal(commands.filter((command) => command === "save_rag_chat_message").length, 1);
     assert.equal(commands.filter((command) => command === "hybrid_search").length, 2);
   });
+
+  it("persists the chosen projects and retries the original request scope after switching to all", async () => {
+    const scopes: unknown[] = [];
+    let attempts = 0;
+    installBaseIpc([], {
+      projects: [{ id: "a", title: "ALPHA", color: "blue", notes: 1, tasks: 0, description: "" }, { id: "b", title: "BETA", color: "blue", notes: 1, tasks: 0, description: "" }],
+      onRetrieve: (scope) => scopes.push(scope),
+      hybridSearch: () => [semanticSource],
+      runGeneration: () => {
+        if (++attempts === 1) throw { code: "provider_timeout", message: "Модель не ответила вовремя.", retryable: true };
+        return generationResult("Ответ ALPHA. [[S1]]");
+      },
+    });
+    await renderWorkspace(() => {});
+    await until(() => !composer().disabled);
+    await click("Область поиска: Вся база");
+    const check = document.querySelectorAll<HTMLInputElement>('.rag-project-options input')[2]!;
+    await act(async () => check.click());
+    await until(() => (container.querySelector('.rag-project-trigger')?.textContent ?? "").includes("1 проект + вне проектов"));
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await setComposerValue("Где сервер?");
+    await click("Отправить");
+    await until(() => Boolean(button("Повторить")));
+    await click("Область поиска: 1 проект + вне проектов");
+    await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>('.rag-project-popover button')).find((item) => item.textContent?.includes("Вся база"))!.click());
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await click("Повторить");
+    await until(() => (container.textContent ?? "").includes("Ответ ALPHA"));
+    assert.deepEqual(scopes, [{ projectIds: ["a"], includeStandalone: true }, { projectIds: ["a"], includeStandalone: true }]);
+  });
 });
 
 function installBaseIpc(
@@ -182,42 +291,58 @@ function installBaseIpc(
   behavior: {
     hybridSearch: () => unknown[] | Promise<unknown[]>;
     runGeneration: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+    projects?: unknown[];
+    onRetrieve?: (scope: unknown) => void;
+    connectionStatus?: "success" | "error";
   },
 ) {
   let chatTitle = "Новый чат";
   let savedMessageCount = 0;
+  let projectIds: string[] | null = null;
+  let includeStandalone = false;
+  const requestScopes = new Map<string, { projectIds: string[] | null; includeStandalone: boolean }>();
   mockIPC((command, args) => {
     commands.push(command);
-    if (command === "list_rag_chats") return [chat(chatTitle)];
+    if (command === "list_rag_chats") return [{ ...chat(chatTitle), projectIds, includeStandalone }];
     if (command === "list_rag_chat_messages") return [];
-    if (command === "list_embedding_profiles") return [embeddingProfile];
+    if (command === "list_projects") return behavior.projects ?? [];
+    if (command === "set_rag_chat_projects") {
+      projectIds = (args as { projectIds: string[] | null }).projectIds;
+      includeStandalone = (args as { includeStandalone: boolean }).includeStandalone;
+      return { ...chat(chatTitle), projectIds, includeStandalone };
+    }
+    if (command === "list_embedding_profiles") return [{ ...embeddingProfile, lastStatus: behavior.connectionStatus ?? embeddingProfile.lastStatus }];
     if (command === "get_embedding_index_status") return embeddingIndexStatus;
     if (command === "get_note_ai_status") return noteAiStatus;
     if (command === "save_rag_chat_message") {
       const request = (args as { request: { content: string } }).request;
-      return { ...userMessage, content: request.content, id: `user-${++savedMessageCount}` };
+      const id = `user-${++savedMessageCount}`;
+      requestScopes.set(id, { projectIds: projectIds?.slice() ?? null, includeStandalone });
+      return { ...userMessage, content: request.content, id, projectIds, includeStandalone };
     }
     if (command === "rename_rag_chat") {
       chatTitle = "Когда запуск?";
-      return chat(chatTitle);
+      return { ...chat(chatTitle), projectIds, includeStandalone };
     }
     if (command === "plan_rag_question") return {
       needsHybridRetrieval: true,
       searchQuery: "Когда запуск?",
       projectId: null,
+      projectIds: requestScopes.get((args as { userMessageId: string }).userMessageId)?.projectIds ?? null,
+      includeStandalone: requestScopes.get((args as { userMessageId: string }).userMessageId)?.includeStandalone ?? false,
       tagId: null,
     };
-    if (command === "hybrid_search") return behavior.hybridSearch();
+    if (command === "hybrid_search") { const request = (args as { request: { projectIds: unknown; includeStandalone: boolean } }).request; behavior.onRetrieve?.({ projectIds: request.projectIds, includeStandalone: request.includeStandalone }); return behavior.hybridSearch(); }
     if (command === "run_rag_generation") return behavior.runGeneration();
     throw new Error(`Unexpected RAG test IPC: ${command}`);
   });
 }
 
-async function renderWorkspace(onOpenResult: (source: typeof semanticSource) => void) {
+async function renderWorkspace(onOpenResult: (source: typeof semanticSource) => void, layoutMode: RagLayoutMode = "wide") {
   await act(async () => root.render(h(RagChatWorkspace, {
     conversationWidth: 260,
     dataReloadGeneration: 0,
-    layoutMode: "wide",
+    layoutMode,
     onConversationReset() {},
     onConversationResize() {},
     onOpenModelSettings() {},

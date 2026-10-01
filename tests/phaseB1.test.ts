@@ -102,6 +102,9 @@ describe("first-run dialog", () => {
       open: true, onClose: () => {}, onCreate: async () => { created += 1; },
     })));
     assert.match(document.body.textContent ?? "", /хранятся на этом устройстве/);
+    for (let step = 0; step < 5; step += 1) {
+      await act(async () => Array.from(document.querySelectorAll("button")).find((button) => button.textContent === "Далее")!.click());
+    }
     assert.match(document.body.textContent ?? "", /Создать первую заметку/);
     await act(async () => document.querySelector<HTMLFormElement>("#first-run-form")!.requestSubmit());
     assert.equal(created, 0);

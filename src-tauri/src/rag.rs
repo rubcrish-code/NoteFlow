@@ -206,6 +206,8 @@ struct ConversationMessage {
 struct StoredUserMessage {
     question: String,
     history: Vec<ConversationMessage>,
+    project_ids: Option<Vec<String>>,
+    include_standalone: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -265,13 +267,20 @@ fn plan_for_message(
         .map(|message| message.content.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    let plan = knowledge_agent::plan_query(
+    let mut plan = knowledge_agent::plan_query(
         conn,
         &stored.question,
         Some(&previous_questions),
         previous_ids.first().map(String::as_str),
         Local::now().date_naive(),
     )?;
+    plan.filters.project_ids = stored.project_ids.clone();
+    plan.filters.include_standalone = stored.include_standalone;
+    if let Some(anchor) = plan.anchor_note_id.as_deref() {
+        if !knowledge_agent::note_matches_filters(conn, anchor, &plan.filters)? {
+            plan.anchor_note_id = None;
+        }
+    }
     Ok((plan, previous_ids))
 }
 
@@ -358,6 +367,7 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
     } else {
         let retrieved = if plan.kind == QueryKind::Content
             && plan.filters.project_id.is_none()
+            && plan.filters.project_ids.is_none()
             && plan.filters.tag_id.is_none()
             && plan.filters.date.start_utc.is_none()
             && plan.filters.date.end_utc.is_none()
@@ -597,12 +607,19 @@ fn load_user_message_and_history(
 ) -> DataResult<StoredUserMessage> {
     let user_row = conn
         .query_row(
-            "SELECT m.rowid, m.content
+            "SELECT m.rowid, m.content, m.project_scope_json, m.include_standalone
              FROM ai_messages m
              INNER JOIN ai_chats c ON c.id = m.chat_id
              WHERE c.id = ?1 AND c.scope = 'rag' AND m.id = ?2 AND m.role = 'user'",
             params![chat_id, user_message_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
         )
         .optional()?
         .ok_or_else(|| DataError::NotFound("Исходный вопрос RAG-чата не найден".to_string()))?;
@@ -628,6 +645,8 @@ fn load_user_message_and_history(
     Ok(StoredUserMessage {
         question: user_row.1,
         history,
+        project_ids: crate::project_scope::decode(user_row.2)?,
+        include_standalone: user_row.3,
     })
 }
 
@@ -672,7 +691,7 @@ fn prepare_structured_context(
     };
     let context_window = provider_context_size.clamp(2_048, 131_072) as usize;
     let max_output_tokens = ((context_window / 5).clamp(512, 4_096)) as i64;
-    let mut notes = match plan.kind {
+    let notes = match plan.kind {
         QueryKind::Count | QueryKind::Clarify | QueryKind::MissingScope => Vec::new(),
         QueryKind::First => {
             knowledge_agent::list_notes(conn, &plan.filters, NoteOrder::CreatedAsc, 1)?
@@ -776,9 +795,13 @@ fn prepare_structured_context(
         }
         QueryKind::Content => Vec::new(),
     };
-    notes.retain(|note| {
-        !note.archived || plan.filters.archive != knowledge_agent::ArchiveScope::Active
-    });
+    let mut scoped_notes = Vec::new();
+    for note in notes {
+        if knowledge_agent::note_matches_filters(conn, &note.id, &plan.filters)? {
+            scoped_notes.push(note);
+        }
+    }
+    let notes = scoped_notes;
     let source_char_budget = (context_window * 3 / 2)
         .saturating_div(notes.len().max(1))
         .clamp(320, MAX_SOURCE_CHARS);
@@ -1409,9 +1432,10 @@ fn persist_assistant_message(
         ));
     }
     transaction.execute(
-        "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at)
-         VALUES (?1, ?2, 'assistant', ?3, ?4, ?5)",
-        params![message_id, chat_id, content, sources_json, now],
+        "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at, project_scope_json, include_standalone)
+         SELECT ?1, ?2, 'assistant', ?3, ?4, ?5, project_scope_json, include_standalone
+         FROM ai_messages WHERE id = ?6 AND chat_id = ?2 AND role = 'user'",
+        params![message_id, chat_id, content, sources_json, now, user_message_id],
     )?;
     transaction.execute(
         "UPDATE ai_chats SET updated_at = ?1 WHERE id = ?2 AND scope = 'rag'",
@@ -1561,7 +1585,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
-             CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL);
+             CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, archived_at TEXT);
              CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL, custom_color TEXT, icon_key TEXT);
              CREATE TABLE notes (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL, project_id TEXT, archived_at TEXT,
@@ -1590,6 +1614,7 @@ mod tests {
              INSERT INTO ai_messages VALUES ('user-1', 'chat-1', 'user', 'Когда запускается проект Альфа?', '[]', '2026-01-01T00:00:01Z');",
         )
         .unwrap();
+        conn.execute_batch("ALTER TABLE ai_chats ADD COLUMN project_scope_json TEXT; ALTER TABLE ai_messages ADD COLUMN project_scope_json TEXT; ALTER TABLE ai_chats ADD COLUMN include_standalone INTEGER NOT NULL DEFAULT 0; ALTER TABLE ai_messages ADD COLUMN include_standalone INTEGER NOT NULL DEFAULT 0;").expect("scope schema");
         conn
     }
 
@@ -1634,8 +1659,11 @@ mod tests {
             for project_exists in [false, true] {
                 let mut conn = test_db();
                 if project_exists {
-                    conn.execute("INSERT INTO projects VALUES ('alpha','Альфа')", [])
-                        .expect("project entity");
+                    conn.execute(
+                        "INSERT INTO projects (id,title) VALUES ('alpha','Альфа')",
+                        [],
+                    )
+                    .expect("project entity");
                 }
                 conn.execute(
                     "UPDATE notes SET title = 'Альфа инфраструктура', plain_text = ?1 WHERE id = 'note-1'",
@@ -1681,10 +1709,109 @@ mod tests {
     }
 
     #[test]
+    fn retry_uses_original_message_scope_and_rejects_out_of_scope_sources() {
+        let mut conn = test_db();
+        conn.execute_batch(
+            "INSERT INTO projects(id,title) VALUES('alpha','ALPHA'),('beta','BETA');
+            UPDATE notes SET project_id='alpha' WHERE id='note-1';
+            UPDATE ai_messages SET project_scope_json='[\"beta\"]' WHERE id='user-1';
+            UPDATE ai_chats SET project_scope_json=NULL WHERE id='chat-1';",
+        )
+        .expect("snapshot");
+        let preview = preview_global_query(&conn, "chat-1", "user-1").expect("retry plan");
+        assert_eq!(preview.project_ids, Some(vec!["beta".into()]));
+        let http = MockHttp::new(Vec::new());
+        let result = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".into(),
+                user_message_id: "user-1".into(),
+                retrieved_sources: vec![retrieved_source()],
+            },
+        )
+        .expect("no leakage");
+        assert!(result.assistant_message.sources.is_empty());
+        assert!(http.requests.lock().expect("requests").is_empty());
+    }
+
+    #[test]
+    fn mixed_original_scope_accepts_standalone_and_revalidates_untrusted_sources() {
+        let mut conn = test_db();
+        conn.execute_batch("INSERT INTO projects(id,title) VALUES('alpha','ALPHA'),('beta','BETA');
+            INSERT INTO notes(id,title,project_id,created_at,updated_at,plain_text) VALUES('beta-note','Excluded BETA','beta','2026-10-01','2026-10-01','BETA private fact');
+            INSERT INTO knowledge_chunks VALUES('beta-chunk','beta-note','[]','BETA private fact');
+            UPDATE ai_messages SET project_scope_json='[\"alpha\"]',include_standalone=1 WHERE id='user-1';
+            UPDATE ai_chats SET project_scope_json='[\"beta\"]',include_standalone=0 WHERE id='chat-1';").expect("historical scope");
+        let preview = preview_global_query(&conn, "chat-1", "user-1").expect("original request");
+        assert_eq!(preview.project_ids, Some(vec!["alpha".into()]));
+        assert!(preview.include_standalone);
+        let mut forbidden = retrieved_source();
+        forbidden.note_id = "beta-note".into();
+        forbidden.chunk_id = "beta-chunk".into();
+        // Deliberately spoof relation metadata: authority is the current SQLite note.
+        forbidden.project_id = None;
+        let http = MockHttp::new(vec!["Проект запускается 12 октября. [[S1]]"]);
+        let result = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".into(),
+                user_message_id: "user-1".into(),
+                retrieved_sources: vec![retrieved_source(), forbidden],
+            },
+        )
+        .expect("grounded answer");
+        assert_eq!(result.assistant_message.sources.len(), 1);
+        assert_eq!(result.assistant_message.sources[0].note_id, "note-1");
+        let (scope, standalone): (String, bool) = conn
+            .query_row(
+                "SELECT project_scope_json,include_standalone FROM ai_messages WHERE id=?1",
+                params![result.assistant_message.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("assistant snapshot");
+        assert_eq!(scope, "[\"alpha\"]");
+        assert!(standalone);
+        let requests = http.requests.lock().expect("provider requests");
+        assert!(!serde_json::to_string(&requests[0].body)
+            .expect("prompt")
+            .contains("BETA private fact"));
+    }
+
+    #[test]
+    fn metadata_latest_obeys_ui_scope_even_when_global_note_is_newer() {
+        let mut conn = test_db();
+        conn.execute_batch("INSERT INTO projects(id,title) VALUES('alpha','ALPHA'),('beta','BETA');
+            UPDATE notes SET project_id='alpha' WHERE id='note-1';
+            INSERT INTO notes(id,title,project_id,created_at,updated_at) VALUES('beta-note','Global newest','beta','2026-10-01','2026-10-01');
+            UPDATE ai_messages SET content='Какая последняя заметка?',project_scope_json='[\"alpha\"]' WHERE id='user-1';").expect("scoped metadata");
+        let http = MockHttp::new(Vec::new());
+        let result = generate_grounded_answer(
+            &mut conn,
+            &test_provider(),
+            &TestSecrets,
+            &http,
+            RagGenerationRequest {
+                chat_id: "chat-1".into(),
+                user_message_id: "user-1".into(),
+                retrieved_sources: vec![],
+            },
+        )
+        .expect("latest");
+        assert_eq!(result.assistant_message.sources[0].note_id, "note-1");
+        assert!(!result.assistant_message.content.contains("Global newest"));
+    }
+
+    #[test]
     fn explicit_project_membership_does_not_broaden_to_unlinked_notes() {
         let mut conn = test_db();
         conn.execute_batch(
-            "INSERT INTO projects VALUES ('alpha','Альфа');
+            "INSERT INTO projects (id,title) VALUES ('alpha','Альфа');
              UPDATE ai_messages SET content = 'Какой сервер указан в заметках проекта Альфа?' WHERE id = 'user-1';",
         )
         .expect("scope fixture");
@@ -1738,7 +1865,7 @@ mod tests {
         let mut conn = test_db();
         conn.execute_batch(
             "CREATE VIRTUAL TABLE note_search_fts USING fts5(note_id UNINDEXED,title,plain_text,project_text, tokenize='unicode61');
-             INSERT INTO projects VALUES ('alpha','Альфа');
+             INSERT INTO projects (id,title) VALUES ('alpha','Альфа');
              UPDATE notes SET title = 'Альфа инфраструктура', plain_text = 'Старый сервер Юг-1.' WHERE id = 'note-1';
              INSERT INTO notes (id,title,updated_at,created_at,plain_text)
                VALUES ('note-2','Чужая заметка','2026-03-01T10:00:00Z','2026-03-01T10:00:00Z','Другой проект'),
@@ -1828,7 +1955,7 @@ mod tests {
     fn explicit_project_latest_followup_reads_anchored_note_not_scoped_hybrid() {
         let mut conn = test_db();
         conn.execute_batch(
-            "INSERT INTO projects VALUES ('alpha','Альфа');
+            "INSERT INTO projects (id,title) VALUES ('alpha','Альфа');
              UPDATE notes SET project_id = 'alpha', plain_text = 'Сервер Север-12.' WHERE id = 'note-1';
              UPDATE ai_messages SET content = 'Какая последняя заметка проекта Альфа?' WHERE id = 'user-1';",
         )
@@ -1874,7 +2001,7 @@ mod tests {
     fn structured_latest_and_followup_previous_use_sqlite_order_without_http() {
         let mut conn = test_db();
         conn.execute_batch(
-            "INSERT INTO projects VALUES ('alpha', 'Альфа');
+            "INSERT INTO projects (id,title) VALUES ('alpha', 'Альфа');
              UPDATE notes SET project_id = 'alpha' WHERE id = 'note-1';
              INSERT INTO notes (id,title,project_id,updated_at,created_at,plain_text)
                VALUES ('note-2','Вторая','alpha','2026-02-02T10:00:00.000Z','2026-02-02T10:00:00.000Z','Новый факт');
@@ -2024,7 +2151,7 @@ mod tests {
     fn compare_first_and_last_project_notes_passes_two_bounded_sources() {
         let mut conn = test_db();
         conn.execute_batch(
-            "INSERT INTO projects VALUES ('alpha', 'Альфа');
+            "INSERT INTO projects (id,title) VALUES ('alpha', 'Альфа');
              UPDATE notes SET project_id = 'alpha' WHERE id = 'note-1';
              INSERT INTO notes (id,title,project_id,updated_at,created_at,plain_text)
                VALUES ('note-2','Поздняя','alpha','2026-02-02T10:00:00.000Z','2026-02-02T10:00:00.000Z','Новый сервер');

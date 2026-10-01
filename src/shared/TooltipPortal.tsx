@@ -12,6 +12,7 @@ interface TooltipPosition {
 }
 
 const TOOLTIP_ID = "noteflow-tooltip";
+export const TOOLTIP_DELAY_MS = 350;
 let suppressedPointerTooltip: string | null = null;
 
 function findTooltipTarget(target: EventTarget | null) {
@@ -31,6 +32,8 @@ export function TooltipPortal() {
 
   useEffect(() => {
     let triggerObserver: MutationObserver | null = null;
+    let showTimer: number | undefined;
+    let pendingTrigger: HTMLElement | null = null;
 
     function restoreCurrentAnchor() {
       triggerObserver?.disconnect();
@@ -47,15 +50,28 @@ export function TooltipPortal() {
     }
 
     function hideTooltip(event?: MouseEvent | FocusEvent | Event) {
-      if (event instanceof MouseEvent && event.type === "mouseout" && anchorElementRef.current) {
+      const trigger = anchorElementRef.current ?? pendingTrigger;
+      if (event instanceof MouseEvent && event.type === "mouseout" && trigger) {
         const relatedTarget = event.relatedTarget;
-        if (relatedTarget instanceof Node && anchorElementRef.current.contains(relatedTarget)) {
+        if (relatedTarget instanceof Node && trigger.contains(relatedTarget)) {
           return;
         }
       }
-
+      window.clearTimeout(showTimer);
+      pendingTrigger = null;
       restoreCurrentAnchor();
       setAnchor(null);
+    }
+
+    function scheduleTooltip(target: EventTarget | null) {
+      const trigger = findTooltipTarget(target);
+      if (!trigger || trigger === pendingTrigger || trigger === anchorElementRef.current) return;
+      hideTooltip();
+      pendingTrigger = trigger;
+      showTimer = window.setTimeout(() => {
+        pendingTrigger = null;
+        if (trigger.isConnected && trigger.dataset.tooltip) showTooltip(trigger);
+      }, TOOLTIP_DELAY_MS);
     }
 
     function showTooltip(target: EventTarget | null) {
@@ -98,12 +114,12 @@ export function TooltipPortal() {
 
     function handleMouseOver(event: MouseEvent) {
       if (findTooltipTarget(event.target)?.dataset.tooltip === suppressedPointerTooltip) return;
-      showTooltip(event.target);
+      scheduleTooltip(event.target);
     }
 
     function handleFocusIn(event: FocusEvent) {
       if (findTooltipTarget(event.target)?.dataset.tooltip === suppressedPointerTooltip) return;
-      showTooltip(event.target);
+      scheduleTooltip(event.target);
     }
 
     function handleMouseOut(event: MouseEvent) {
@@ -153,6 +169,7 @@ export function TooltipPortal() {
       window.removeEventListener("resize", hideTooltip);
       window.removeEventListener("scroll", hideTooltip, true);
       restoreCurrentAnchor();
+      window.clearTimeout(showTimer);
     };
   }, []);
 

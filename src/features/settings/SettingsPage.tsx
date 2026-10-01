@@ -1410,7 +1410,7 @@ interface DataSettingsProps {
 const knowledgeStatusLabels: Record<KnowledgeIndexStatusCode, string> = {
   current: "Актуальна",
   failed: "Требует внимания",
-  needs_update: "Требует обновления",
+  needs_update: "Ожидает обработки",
   pending: "Обновляется",
 };
 
@@ -1504,7 +1504,8 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
 
   useEffect(() => {
     let isActive = true;
-    void knowledgeService.getKnowledgeIndexStatus().then(
+    let timer: number;
+    function poll() { void knowledgeService.getKnowledgeIndexStatus().then(
       (status) => {
         if (isActive) {
           setKnowledgeStatus(status);
@@ -1518,9 +1519,11 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
           setKnowledgeHasError(true);
         }
       },
-    );
+    ).finally(() => { if (isActive) timer = window.setTimeout(poll, 3000); }); }
+    poll();
     return () => {
       isActive = false;
+      window.clearTimeout(timer);
     };
   }, []);
 
@@ -1566,7 +1569,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
         <div className="settings-section-head knowledge-index-head">
           <div>
             <b>База знаний</b>
-            <span>Смысловые фрагменты заметок для будущего поиска и ответов</span>
+            <span>NoteFlow делит длинные заметки на небольшие части, чтобы точнее находить нужную информацию при ИИ-поиске.</span>
           </div>
           <span className={`status-pill ${visibleKnowledgeStatus === "current" ? "ok" : visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
             {knowledgeOperation ? <span aria-hidden="true" className="button-spinner" /> : null}
@@ -1575,27 +1578,15 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
         </div>
         <div className="knowledge-index-metrics">
           <div><span>Заметки</span><b>{knowledgeStatus?.indexedNotes ?? 0} из {knowledgeStatus?.totalNotes ?? 0}</b></div>
-          <div><span>Фрагменты</span><b>{knowledgeStatus?.chunkCount ?? 0}</b></div>
+          <div><span>Фрагменты заметок для ИИ-поиска</span><b>{knowledgeStatus?.chunkCount ?? 0}</b></div>
           <div><span>Последняя проверка</span><b>{formatKnowledgeCheckedAt(knowledgeStatus?.lastCheckedAt)}</b></div>
         </div>
         <div aria-live="polite" className={`knowledge-index-message ${knowledgeHasError || visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
           {knowledgeMessage || "Новые и изменённые заметки добавляются автоматически"}
         </div>
         <div className="knowledge-index-actions">
-          <div className="knowledge-primary-action">
-            <button
-              className="export-action primary"
-              disabled={knowledgeOperation !== null}
-              onClick={() => void updateKnowledgeIndex("reconcile")}
-              type="button"
-            >
-              {knowledgeOperation === "reconcile" ? <span aria-hidden="true" className="button-spinner" /> : <Icon name="redo" />}
-              {knowledgeOperation === "reconcile" ? "Проверяем…" : knowledgeHasError ? "Повторить" : "Обновить базу знаний"}
-            </button>
-            <span>Добавляет новые и изменённые заметки. Обычно занимает несколько секунд.</span>
-          </div>
           <details className="knowledge-index-more" ref={knowledgeMoreRef}>
-            <summary>Дополнительные действия</summary>
+            <summary>Восстановление индекса</summary>
             <div className="knowledge-repair-action">
               <b>Исправление проблем</b>
               <span>Удаляет служебные данные базы знаний и создаёт их заново. Ваши заметки не изменятся.</span>

@@ -15,7 +15,11 @@ import { SettingsModalShell } from "../settings/ModelSettingsUi";
 import { ragAnswerForClipboard } from "./ragCitations";
 import { isRagGenerationCurrent, shouldApplyRagGenerationToVisibleChat } from "./ragGenerationGuards";
 import { retrieveForRagQuestion } from "./ragQueryRouting";
-import { isRagHistoryOverlayMode, resolveRagPanelVisibility, type RagLayoutMode } from "./ragResponsiveLayout";
+import { listProjects } from "../../services/dataService";
+import type { ProjectCard } from "../../app/types";
+import { ProjectScopeSelector } from "./ProjectScopeSelector";
+import { isRagHistoryOverlayMode, resolveRagPanelVisibility, transitionRagOverlays, type RagLayoutMode } from "./ragResponsiveLayout";
+import { useRagOverlayBounds } from "./useRagOverlayBounds";
 
 interface RagChatWorkspaceProps {
   conversationWidth: number;
@@ -85,12 +89,15 @@ export function RagChatWorkspace({
   const [generatorStatus, setGeneratorStatus] = useState<NoteAiStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [isUpdatingIndex, setIsUpdatingIndex] = useState(false);
+  const [projects, setProjects] = useState<ProjectCard[]>([]);
+  const [scopeBusy, setScopeBusy] = useState(false);
+  const scopeBusyRef = useRef(false);
   const [generation, setGeneration] = useState<GenerationState>(idleGeneration);
   const [activeSources, setActiveSources] = useState<RagMessageSource[]>([]);
   const [preferredHistoryCollapsed, setPreferredHistoryCollapsed] = useState(false);
   const [historyOverlayOpen, setHistoryOverlayOpen] = useState(false);
   const [sourcesOverlayOpen, setSourcesOverlayOpen] = useState(false);
+  const previousLayoutModeRef = useRef(layoutMode);
   const [openChatMenuId, setOpenChatMenuId] = useState("");
   const [pendingDialog, setPendingDialog] = useState<PendingDialog>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -104,6 +111,9 @@ export function RagChatWorkspace({
   const activeChatIdRef = useRef("");
   const deletedChatIdsRef = useRef(new Set<string>());
   const messagesRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const overlayBounds = useRagOverlayBounds(headerRef, composerRef);
   const chatMenuAnchorRef = useRef<HTMLButtonElement>(null);
   const closeChatMenu = useCallback(() => setOpenChatMenuId(""), []);
 
@@ -121,9 +131,17 @@ export function RagChatWorkspace({
   const { historyIsOverlay, historyVisible, sourcesIsOverlay, sourcesVisible } = panelVisibility;
 
   useEffect(() => {
-    setHistoryOverlayOpen(false);
-    setSourcesOverlayOpen(false);
-  }, [layoutMode]);
+    if (previousLayoutModeRef.current === layoutMode) return;
+    const next = transitionRagOverlays(previousLayoutModeRef.current, layoutMode, {
+      historyOverlayOpen,
+      sourcesOverlayOpen,
+      preferredHistoryCollapsed,
+      preferredSourcesCollapsed,
+    });
+    previousLayoutModeRef.current = layoutMode;
+    setHistoryOverlayOpen(next.historyOverlayOpen);
+    setSourcesOverlayOpen(next.sourcesOverlayOpen);
+  }, [layoutMode, historyOverlayOpen, sourcesOverlayOpen, preferredHistoryCollapsed, preferredSourcesCollapsed]);
 
   function openHistory() {
     if (isRagHistoryOverlayMode(layoutMode)) {
@@ -164,13 +182,13 @@ export function RagChatWorkspace({
   const selectedIndexStatus = selectedProfile ? indexStatuses[selectedProfile.id] : undefined;
   const canRetrieve = Boolean(
     selectedProfile
-    && selectedProfile.lastStatus === "success"
+    && (selectedProfile.locality === "local" || selectedProfile.hasCloudConsent)
     && (selectedIndexStatus?.status === "current" || (selectedIndexStatus?.indexedChunks ?? 0) > 0),
   );
   const generationBusy = generation.phase === "retrieving" || generation.phase === "generating";
   const visibleGeneration = generation.chatId === activeChatId ? generation : idleGeneration;
 
-  const refreshModelStatuses = useCallback(async () => {
+  const refreshModelStatuses = useCallback(async (isCurrent: () => boolean = () => true) => {
     const [embeddingProfiles, aiStatus] = await Promise.all([
       embeddingService.listEmbeddingProfiles(),
       getNoteAiStatus().catch(() => null),
@@ -184,6 +202,7 @@ export function RagChatWorkspace({
         // The model remains visible even when its derived index status is unavailable.
       }
     }));
+    if (!isCurrent()) return;
     setProfiles(enabledProfiles);
     setIndexStatuses(statuses);
     setGeneratorStatus(aiStatus);
@@ -208,7 +227,7 @@ export function RagChatWorkspace({
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([refreshChats(), refreshModelStatuses()])
+    void Promise.all([refreshChats(), refreshModelStatuses(() => !cancelled), listProjects().then((items) => { if (!cancelled) setProjects(items); })])
       .catch((error) => {
         if (!cancelled) onToastRef.current(`Не удалось загрузить ИИ-чат по базе: ${errorText(error)}`);
       })
@@ -222,6 +241,38 @@ export function RagChatWorkspace({
       generationBusyRef.current = false;
     };
   }, [dataReloadGeneration, refreshChats, refreshModelStatuses]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number;
+    async function poll() {
+      try { await refreshModelStatuses(() => !cancelled); } catch { /* Keep the last known model status. */ }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 3000);
+    }
+    timer = window.setTimeout(() => void poll(), 3000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [refreshModelStatuses]);
+
+  async function changeProjectScope(projectIds: string[] | null, includeStandalone: boolean) {
+    if (scopeBusyRef.current) return;
+    scopeBusyRef.current = true;
+    setScopeBusy(true);
+    try {
+      let chat = activeChat;
+      if (!chat) {
+        const created = await ragChatService.createRagChat("Новый чат");
+        chat = created;
+        setChats((current) => [created, ...current]);
+        activeChatIdRef.current = created.id;
+        setActiveChatId(created.id);
+      }
+      const updated = await ragChatService.setRagChatProjects(chat.id, projectIds, includeStandalone);
+      setChats((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } finally {
+      scopeBusyRef.current = false;
+      setScopeBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!activeChatId) {
@@ -275,7 +326,11 @@ export function RagChatWorkspace({
 
   async function sendQuestion() {
     const question = draft.trim();
-    if (!question || generationBusyRef.current) return;
+    if (!question || generationBusyRef.current || scopeBusyRef.current) return;
+    if (activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone) {
+      onToast("Выберите хотя бы один проект или заметки вне проектов.");
+      return;
+    }
     if (!generatorStatus?.hasProvider || !generatorStatus.model) {
       onToast("Подключите модель ответа в разделе «Модели ИИ».");
       onOpenModelSettings();
@@ -298,7 +353,7 @@ export function RagChatWorkspace({
   }
 
   async function submitQuestion(question: string) {
-    if (generationBusyRef.current) return;
+    if (generationBusyRef.current || scopeBusyRef.current) return;
     generationBusyRef.current = true;
     const requestId = ++generationRequestIdRef.current;
 
@@ -442,25 +497,6 @@ export function RagChatWorkspace({
     }
   }
 
-  async function updateIndex() {
-    if (!selectedProfile) return;
-    if (selectedProfile.locality === "cloud" && !selectedProfile.hasCloudConsent) {
-      onToast("Подтвердите облачную обработку в разделе «Модели ИИ».");
-      onOpenModelSettings();
-      return;
-    }
-    setIsUpdatingIndex(true);
-    try {
-      await embeddingService.updateEmbeddingIndex(selectedProfile.id);
-      await refreshModelStatuses();
-      onToast("База для RAG обновлена.");
-    } catch (error) {
-      onToast(`Не удалось обновить базу для RAG: ${errorText(error)}`);
-    } finally {
-      setIsUpdatingIndex(false);
-    }
-  }
-
   async function confirmRename() {
     if (pendingDialog?.kind !== "rename" || !renameDraft.trim()) return;
     try {
@@ -511,6 +547,8 @@ export function RagChatWorkspace({
   const pageStyle = {
     "--ragcw": `${conversationWidth}px`,
     "--ragsw": `${sourcesWidth}px`,
+    "--rag-overlay-top": `${overlayBounds.top}px`,
+    "--rag-overlay-bottom": `${overlayBounds.bottom}px`,
   } as CSSProperties;
 
   return (
@@ -524,7 +562,7 @@ export function RagChatWorkspace({
             </button>
             <div className="rag-conversation-head">
               <span>Недавние чаты</span>
-              <button aria-label="Скрыть историю чатов" className="icon-close-btn" onClick={closeHistory} title="Скрыть историю" type="button">
+              <button aria-label="Скрыть историю чатов" className="icon-close-btn" data-tooltip="Скрыть историю" onClick={closeHistory} type="button">
                 <Icon name={historyIsOverlay ? "x" : "back"} />
               </button>
             </div>
@@ -542,6 +580,7 @@ export function RagChatWorkspace({
                     aria-expanded={openChatMenuId === chat.id}
                     aria-haspopup="menu"
                     aria-label={`Действия: ${chat.title}`}
+                    data-tooltip="Действия с чатом"
                     className="rag-history-menu-button"
                     onClick={(event) => {
                       chatMenuAnchorRef.current = event.currentTarget;
@@ -579,25 +618,26 @@ export function RagChatWorkspace({
       ) : null}
 
       <main className="rag-main-chat">
-        <header className="rag-chat-header">
+        <header className="rag-chat-header" ref={headerRef}>
           <div className="rag-chat-top">
             <div className="rag-chat-title">
               {!historyVisible ? (
-                <button aria-label="Показать историю чатов" className="icon-close-btn" onClick={openHistory} title="Показать историю" type="button">
+                <button aria-label="Показать историю чатов" className="icon-close-btn" data-tooltip="Показать историю" onClick={openHistory} type="button">
                   <Icon name="forward" />
                 </button>
               ) : null}
               <div>
                 <b>{activeChat?.title ?? "Новый чат"}</b>
-                <span>По всей базе заметок</span>
+                <span>{activeChat?.projectIds ? activeChat.includeStandalone ? activeChat.projectIds.length ? "По проектам и заметкам вне проектов" : "По заметкам вне проектов" : activeChat.projectIds.length ? "По выбранным проектам" : "Выберите область поиска" : "По всей базе заметок"}</span>
               </div>
             </div>
             <div className="rag-top-actions">
+              <ProjectScopeSelector busy={scopeBusy} includeStandalone={activeChat?.includeStandalone ?? false} onChange={changeProjectScope} projects={projects} selectedIds={activeChat?.projectIds ?? null} />
               <button aria-label="Настроить модели" className="icon-close-btn" data-tooltip="Настроить модели" onClick={onOpenModelSettings} type="button">
                 <Icon name="gear" />
               </button>
               {!sourcesVisible ? (
-                <button className="secondary-btn compact" onClick={openSources} type="button">
+                <button aria-label="Источники ответа" className="secondary-btn compact" data-tooltip="Источники ответа" onClick={openSources} type="button">
                   <Icon name="doc" /> Источники
                 </button>
               ) : null}
@@ -607,10 +647,8 @@ export function RagChatWorkspace({
             generatorStatus={generatorStatus}
             indexStatus={selectedIndexStatus}
             isLoading={isLoading}
-            isUpdatingIndex={isUpdatingIndex}
             onOpenSettings={onOpenModelSettings}
             onProfileChange={setSelectedProfileId}
-            onUpdateIndex={() => void updateIndex()}
             profiles={profiles}
             selectedProfile={selectedProfile}
             selectedProfileId={selectedProfileId}
@@ -641,7 +679,7 @@ export function RagChatWorkspace({
                         onOpenResult(source);
                       }}
                     />
-                    <button aria-label="Скопировать сообщение" className="note-chat-copy chat-copy-icon" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Скопировано" : "Скопировать"} type="button">
+                    <button aria-label={copiedMessageId === message.id ? "Скопировано" : "Скопировать сообщение"} className="note-chat-copy chat-copy-icon" data-tooltip={copiedMessageId === message.id ? "Скопировано" : "Скопировать"} onClick={() => void copyMessage(message)} type="button">
                       <Icon name={copiedMessageId === message.id ? "check" : "copy"} />
                     </button>
                     {message.sources.length > 0 ? (
@@ -656,7 +694,7 @@ export function RagChatWorkspace({
                 ) : (
                   <>
                     <span className="plain-chat-text">{message.content}</span>
-                    <button aria-label="Скопировать сообщение" className="note-chat-copy chat-copy-icon" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Скопировано" : "Скопировать"} type="button">
+                    <button aria-label={copiedMessageId === message.id ? "Скопировано" : "Скопировать сообщение"} className="note-chat-copy chat-copy-icon" data-tooltip={copiedMessageId === message.id ? "Скопировано" : "Скопировать"} onClick={() => void copyMessage(message)} type="button">
                       <Icon name={copiedMessageId === message.id ? "check" : "copy"} />
                     </button>
                   </>
@@ -680,18 +718,19 @@ export function RagChatWorkspace({
           </div>
         </div>
 
-        <div className="rag-input-wrap">
+        <div className="rag-input-wrap" ref={composerRef}>
           <div className="rag-stage-note">Ответ будет основан только на найденных заметках и снабжён проверяемыми ссылками.</div>
           <ChatComposer
             ariaLabel="Сообщение по всей базе заметок"
             className="rag-input"
-            disabled={!generatorStatus?.hasProvider || !generatorStatus.model}
+            disabled={scopeBusy || (activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone) || !generatorStatus?.hasProvider || !generatorStatus.model}
             isSubmitting={generationBusy}
             onChange={setDraft}
             onSubmit={() => void sendQuestion()}
             placeholder={!generatorStatus?.hasProvider || !generatorStatus.model
                 ? "Сначала подключите модель ответа"
-                : "Спросить по всем заметкам…"}
+                : activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone ? "Выберите область поиска"
+                : activeChat?.projectIds ? "Спросить по выбранной области…" : "Спросить по всем заметкам…"}
             value={draft}
           />
         </div>
@@ -703,7 +742,7 @@ export function RagChatWorkspace({
           <aside aria-label="Источники ответа" className={`rag-sources-panel ${sourcesIsOverlay ? "rag-panel-overlay" : ""}`}>
             <div className="rag-sources-panel-head">
               <span className="rag-sources-panel-title"><b>Источники</b><span>{activeSources.length > 0 ? formatRussianCount(activeSources.length, FRAGMENT_COUNT_FORMS) : "Пока нет результатов"}</span></span>
-              <button aria-label="Скрыть источники" className="rag-sources-close" onClick={closeSources} type="button"><Icon name="x" /></button>
+              <button aria-label="Скрыть источники" className="rag-sources-close" data-tooltip="Скрыть источники" onClick={closeSources} type="button"><Icon name="x" /></button>
             </div>
             <div className="rag-source-list">
               {activeSources.map((source) => (
@@ -775,10 +814,8 @@ interface ModelStatusBarProps {
   generatorStatus: NoteAiStatus | null;
   indexStatus?: EmbeddingIndexStatus;
   isLoading: boolean;
-  isUpdatingIndex: boolean;
   onOpenSettings: () => void;
   onProfileChange: (profileId: string) => void;
-  onUpdateIndex: () => void;
   profiles: EmbeddingProfile[];
   selectedProfile: EmbeddingProfile | null;
   selectedProfileId: string;
@@ -788,10 +825,8 @@ function ModelStatusBar({
   generatorStatus,
   indexStatus,
   isLoading,
-  isUpdatingIndex,
   onOpenSettings,
   onProfileChange,
-  onUpdateIndex,
   profiles,
   selectedProfile,
   selectedProfileId,
@@ -816,13 +851,9 @@ function ModelStatusBar({
         <span aria-hidden="true" className="rag-summary-separator">·</span>
         <span className={`rag-index-label ${needsUpdate ? "warning" : ""}`}>{indexStatusLabel(indexStatus)}</span>
       </div>
-      {selectedProfile ? (
-        <div className="rag-index-compact">
-          {needsUpdate ? <button className="ghost-btn compact" disabled={isUpdatingIndex || selectedProfile.lastStatus !== "success"} onClick={onUpdateIndex} type="button">{isUpdatingIndex ? "Обновляем…" : "Обновить"}</button> : null}
-        </div>
-      ) : (
+      {!selectedProfile ? (
         <button className="ghost-btn compact rag-setup-action" onClick={onOpenSettings} type="button">Настроить</button>
-      )}
+      ) : selectedProfile.locality === "cloud" && !selectedProfile.hasCloudConsent ? <button className="ghost-btn compact" onClick={onOpenSettings} type="button">Разрешить обработку</button> : null}
     </section>
   );
 }
@@ -838,6 +869,8 @@ async function retrieveRagSources(profileId: string, plan: ragChatService.RagQue
       includeNeighbors: true,
       profileId,
       projectId: plan.projectId ?? undefined,
+      projectIds: plan.projectIds ?? null,
+      includeStandalone: plan.includeStandalone ?? false,
       tagId: plan.tagId ?? undefined,
       query: plan.searchQuery,
     });
@@ -863,9 +896,9 @@ function indexStatusLabel(status?: EmbeddingIndexStatus) {
   if (!status) return "Статус индекса недоступен";
   if (status.status === "current") return "База актуальна";
   if (status.status === "indexing") return "База обновляется";
-  if (status.status === "partial") return "База обновлена частично";
+  if (status.status === "partial") return "Ожидает повторной обработки";
   if (status.status === "failed") return "Ошибка обновления";
-  return "База требует обновления";
+  return `Ожидает обработки${status.pendingChunks ? `: ${status.pendingChunks}` : ""}`;
 }
 
 function matchLabel(matchType: SemanticSearchResult["matchType"]) {

@@ -1,18 +1,39 @@
 import { useRef, useState, type FormEvent } from "react";
 import { ModalShell } from "../../shared/ModalShell";
+import { Icon, type IconName } from "../../shared/Icon";
 import { LOCAL_PROFILE_NAME_MAX_LENGTH, normalizeLocalProfileName, validateLocalProfileName } from "../../shared/localProfile";
 
 interface FirstRunModalProps {
-  onClose: () => void;
+  onClose: () => void | Promise<void>;
   onCreate: (name: string) => Promise<void>;
   open: boolean;
 }
+
+const steps: { title: string; text: string; icon: IconName }[] = [
+  { title: "Добро пожаловать в NoteFlow", text: "Заметки, проекты и ИИ — в одном приложении. Заметки хранятся на этом устройстве. Регистрация и интернет не нужны.", icon: "logo" },
+  { title: "Заметки", text: "Создавайте заметки, форматируйте текст, добавляйте изображения и файлы.", icon: "doc" },
+  { title: "Организация", text: "Объединяйте заметки в проекты и используйте теги.", icon: "folder" },
+  { title: "ИИ по заметке", text: "ИИ может работать с содержимым текущей заметки: отвечать на вопросы и помогать с текстом.", icon: "bulb" },
+  { title: "ИИ-чат по базе", text: "Задавайте вопросы по всей базе заметок или только по выбранным проектам. Ответы ссылаются на ваши заметки.", icon: "chat" },
+  { title: "Ваши данные — ваш выбор", text: "Вы сами выбираете ИИ-модель: локальную или внешнюю. Перед облачной обработкой NoteFlow запросит ваше согласие.", icon: "gear" },
+];
 
 export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState(0);
+  const nextButtonRef = useRef<HTMLButtonElement>(null);
+  const lastStep = step === steps.length - 1;
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  async function skip() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try { await onClose(); } catch { setError("Не удалось завершить знакомство. Попробуйте ещё раз."); }
+    finally { setBusy(false); }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -36,26 +57,33 @@ export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
     <ModalShell
       backdropClassName="modal-backdrop"
       className="first-run-dialog"
-      closeDisabled={busy}
-      description="Заметки хранятся на этом устройстве. Регистрация и интернет не нужны."
+      closeButtonClassName="onboarding-close"
+      closeDisabled
+      description={steps[step].text}
       dismissOnBackdrop={false}
       footer={(
         <div className="new-note-actions">
-          <button className="secondary-btn" disabled={busy} onClick={onClose} type="button">Позже</button>
-          <button className="primary-btn" disabled={busy} form="first-run-form" type="submit">
+          <button className="ghost-btn" disabled={busy} onClick={() => void skip()} type="button">Пропустить</button>
+          {step > 0 ? <button className="secondary-btn" disabled={busy} onClick={() => setStep((current) => current - 1)} type="button">Назад</button> : null}
+          <button className="primary-btn" disabled={busy} form={lastStep ? "first-run-form" : undefined} onClick={lastStep ? undefined : (event) => { event.preventDefault(); setStep((current) => current + 1); }} ref={nextButtonRef} type={lastStep ? "submit" : "button"}>
             {busy ? <span aria-hidden="true" className="button-spinner" /> : null}
-            {busy ? "Создаём…" : "Создать первую заметку"}
+            {busy ? "Сохраняем…" : lastStep ? "Создать первую заметку" : "Далее"}
           </button>
         </div>
       )}
-      initialFocusRef={nameInputRef}
-      onClose={onClose}
+      initialFocusRef={nextButtonRef}
+      onClose={() => void skip()}
+      onEscapeKeyDown={() => { void skip(); return true; }}
       open={open}
       size="compact"
-      title="Добро пожаловать в NoteFlow"
+      title={steps[step].title}
       titleId="first-run-title"
     >
-      <form className="new-note-form" id="first-run-form" onSubmit={(event) => void submit(event)}>
+      <div className="onboarding-progress" aria-label={`Шаг ${step + 1} из ${steps.length}`}>
+        <span className="onboarding-step-icon" aria-hidden="true"><Icon name={steps[step].icon} /></span>
+        <span className="onboarding-dots" aria-hidden="true">{steps.map((_, index) => <i className={index === step ? "active" : ""} key={index} />)}</span>
+      </div>
+      {lastStep ? <form className="new-note-form" id="first-run-form" onSubmit={(event) => void submit(event)}>
         <label>
           Как к вам обращаться?
           <input
@@ -69,8 +97,8 @@ export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
           />
         </label>
         <p className="first-run-note">ИИ-модели можно подключить позже в Настройках.</p>
-        {error ? <div className="field-error" role="alert">{error}</div> : null}
-      </form>
+      </form> : null}
+      {error ? <div className="field-error" role="alert">{error}</div> : null}
     </ModalShell>
   );
 }

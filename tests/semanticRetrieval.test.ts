@@ -155,12 +155,12 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   });
 
   it("keeps index maintenance compact and routes cloud consent to settings", () => {
-    assert.match(workspaceSource, /rag-index-compact/);
-    assert.match(workspaceSource, /isUpdatingIndex \? "Обновляем…" : "Обновить"/);
+    assert.doesNotMatch(workspaceSource, /updateEmbeddingIndex|onUpdateIndex/);
+    assert.match(workspaceSource, /Ожидает обработки/);
     assert.match(workspaceSource, /hasCloudConsent/);
-    assert.match(workspaceSource, /onOpenModelSettings\(\)/);
+    assert.match(workspaceSource, /onClick=\{onOpenSettings\}/);
     assert.match(semanticSettingsSource, /acceptEmbeddingCloudConsent/);
-    assert.match(semanticSettingsSource, /Пересоздать смысловой поиск \(RAG\)/);
+    assert.match(semanticSettingsSource, /Восстановить индекс поиска/);
   });
 
   it("uses the shared ai_chats and ai_messages tables with scope rag", () => {

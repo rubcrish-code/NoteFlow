@@ -418,6 +418,10 @@ export async function completeFirstRun(profileName: string): Promise<FirstRunCom
   return { note: mapNote(result.note), localProfileName: result.settings.localProfileName };
 }
 
+export async function dismissFirstRun(): Promise<void> {
+  await invoke("dismiss_first_run");
+}
+
 export async function listNotes(query: string, includeArchived = false) {
   const notes = await invoke<NoteDto[]>("list_notes", {
     includeArchived,

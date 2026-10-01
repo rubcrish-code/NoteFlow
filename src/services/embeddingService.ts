@@ -116,6 +116,8 @@ export interface SemanticSearchInput {
   query: string;
   profileId: string;
   projectId?: string;
+  projectIds?: string[] | null;
+  includeStandalone?: boolean;
   tagId?: string;
   includeArchived?: boolean;
   favoritesOnly?: boolean;

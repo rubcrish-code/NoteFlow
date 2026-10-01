@@ -199,7 +199,7 @@ describe("P1.3 final UX polish", () => {
     assert.match(tooltipSource, /new MutationObserver/);
     assert.match(tooltipSource, /dataset\.tooltip !== text/);
     assert.match(tooltipSource, /event\.key === "Escape"/);
-    assert.doesNotMatch(tooltipSource, /setTimeout/);
+    assert.match(tooltipSource, /clearTimeout\(showTimer\)/);
   });
 
   it("keeps About version tied to the Tauri runtime and avoids duplicate zoom values", () => {

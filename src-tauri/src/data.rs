@@ -470,6 +470,9 @@ pub struct RagChatDto {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    pub project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_standalone: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -481,6 +484,9 @@ pub struct RagChatMessageDto {
     pub content: String,
     pub sources: Value,
     pub created_at: String,
+    pub project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_standalone: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -750,6 +756,10 @@ struct AiChatBackup {
     title: String,
     created_at: String,
     updated_at: String,
+    #[serde(default)]
+    project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    include_standalone: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -760,6 +770,10 @@ struct AiMessageBackup {
     content: String,
     sources_json: Value,
     created_at: String,
+    #[serde(default)]
+    project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    include_standalone: bool,
 }
 
 #[derive(Debug)]
@@ -928,14 +942,14 @@ struct SettingBackup {
 
 pub struct AppState {
     store: Arc<Mutex<DataStore>>,
-    embedding_operations: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    embedding_operations: crate::auto_knowledge::Operations,
 }
 
 impl AppState {
     fn new(store: DataStore) -> Self {
         Self {
             store: Arc::new(Mutex::new(store)),
-            embedding_operations: Mutex::new(HashMap::new()),
+            embedding_operations: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1010,9 +1024,13 @@ pub fn init_state(app: &mut App) -> Result<AppState, String> {
         .unwrap_or(platform_data_dir);
     #[cfg(not(debug_assertions))]
     let data_dir = platform_data_dir;
-    DataStore::open(data_dir)
-        .map(AppState::new)
-        .map_err(|_| "Не удалось открыть хранилище данных".to_string())
+    let store =
+        DataStore::open(data_dir).map_err(|_| "Не удалось открыть хранилище данных".to_string())?;
+    let database_path = store.database_path();
+    let state = AppState::new(store);
+    crate::auto_knowledge::start(database_path, state.embedding_operations.clone())
+        .map_err(|_| "Не удалось запустить фоновое обновление базы знаний".to_string())?;
+    Ok(state)
 }
 
 pub struct DataStore {
@@ -1114,16 +1132,25 @@ impl DataStore {
     fn first_run_required(&self) -> DataResult<bool> {
         if self.get_setting(FIRST_RUN_COMPLETED_KEY)?.is_some()
             || self.get_setting("seed.demo.v1")?.is_some()
+            || self.get_ui_settings()?.local_profile_name != default_ui_local_profile_name()
         {
             return Ok(false);
         }
         let existing_data: i64 = self.conn.query_row(
             "SELECT (SELECT COUNT(*) FROM notes) + (SELECT COUNT(*) FROM projects)
-                    + (SELECT COUNT(*) FROM tags)",
+                    + (SELECT COUNT(*) FROM tags) + (SELECT COUNT(*) FROM ai_chats)
+                    + (SELECT COUNT(*) FROM llm_providers) + (SELECT COUNT(*) FROM embedding_profiles)",
             [],
             |row| row.get(0),
         )?;
         Ok(existing_data == 0)
+    }
+
+    fn dismiss_first_run(&mut self) -> DataResult<()> {
+        let transaction = self.conn.transaction()?;
+        set_setting_tx(&transaction, FIRST_RUN_COMPLETED_KEY, json!(true))?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn complete_first_run(
@@ -1377,17 +1404,29 @@ impl DataStore {
 
     fn list_rag_chats(&self) -> DataResult<Vec<RagChatDto>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, title, created_at, updated_at
+            "SELECT id, title, created_at, updated_at, project_scope_json, include_standalone
              FROM ai_chats
              WHERE scope = 'rag'
              ORDER BY updated_at DESC, id DESC",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(RagChatDto {
+                include_standalone: row.get(5)?,
                 id: row.get(0)?,
                 title: row.get(1)?,
                 created_at: row.get(2)?,
                 updated_at: row.get(3)?,
+                project_ids: row
+                    .get::<_, Option<String>>(4)?
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1407,6 +1446,8 @@ impl DataStore {
             title,
             created_at: now.clone(),
             updated_at: now,
+            project_ids: None,
+            include_standalone: false,
         })
     }
 
@@ -1422,17 +1463,65 @@ impl DataStore {
         if changed == 0 {
             return Err(DataError::NotFound("RAG-чат не найден".to_string()));
         }
-        let created_at = self.conn.query_row(
-            "SELECT created_at FROM ai_chats WHERE id = ?1 AND scope = 'rag'",
+        let (created_at, project_scope_json, include_standalone) = self.conn.query_row(
+            "SELECT created_at, project_scope_json, include_standalone FROM ai_chats WHERE id = ?1 AND scope = 'rag'",
             params![chat_id],
-            |row| row.get(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, bool>(2)?)),
         )?;
         Ok(RagChatDto {
             id: chat_id,
             title,
             created_at,
             updated_at: now,
+            project_ids: crate::project_scope::decode(project_scope_json)?,
+            include_standalone,
         })
+    }
+
+    fn set_rag_chat_projects(
+        &mut self,
+        chat_id: &str,
+        project_ids: Option<Vec<String>>,
+        include_standalone: bool,
+    ) -> DataResult<RagChatDto> {
+        let transaction = self.conn.transaction()?;
+        if let Some(ids) = &project_ids {
+            if ids.len() > 1_000 {
+                return Err(DataError::InvalidInput("Слишком много проектов".into()));
+            }
+            let mut seen = HashSet::new();
+            for id in ids {
+                if !seen.insert(id) {
+                    return Err(DataError::InvalidInput("Повторяющийся проект".into()));
+                }
+                let active: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1 AND archived_at IS NULL)",
+                    params![id],
+                    |row| row.get(0),
+                )?;
+                if !active {
+                    return Err(DataError::InvalidInput(
+                        "Выбранный проект недоступен".into(),
+                    ));
+                }
+            }
+        }
+        let changed = transaction.execute(
+            "UPDATE ai_chats SET project_scope_json = ?1, include_standalone = ?3 WHERE id = ?2 AND scope = 'rag'",
+            params![
+                crate::project_scope::encode_ids(project_ids.as_deref()),
+                chat_id,
+                include_standalone && project_ids.is_some()
+            ],
+        )?;
+        if changed == 0 {
+            return Err(DataError::NotFound("Чат не найден".into()));
+        }
+        transaction.commit()?;
+        self.list_rag_chats()?
+            .into_iter()
+            .find(|chat| chat.id == chat_id)
+            .ok_or_else(|| DataError::NotFound("Чат не найден".into()))
     }
 
     fn delete_rag_chat(&mut self, chat_id: &str) -> DataResult<()> {
@@ -1450,7 +1539,7 @@ impl DataStore {
     fn list_rag_chat_messages(&self, chat_id: &str) -> DataResult<Vec<RagChatMessageDto>> {
         let chat_id = normalize_required_text(chat_id, "chat_id")?;
         let mut statement = self.conn.prepare(
-            "SELECT m.id, m.chat_id, m.role, m.content, m.sources_json, m.created_at
+            "SELECT m.id, m.chat_id, m.role, m.content, m.sources_json, m.created_at, m.project_scope_json, m.include_standalone
              FROM ai_messages m
              INNER JOIN ai_chats c ON c.id = m.chat_id
              WHERE c.scope = 'rag' AND c.id = ?1
@@ -1459,12 +1548,24 @@ impl DataStore {
         let rows = statement.query_map(params![chat_id], |row| {
             let sources_json: String = row.get(4)?;
             Ok(RagChatMessageDto {
+                include_standalone: row.get(7)?,
                 id: row.get(0)?,
                 chat_id: row.get(1)?,
                 role: row.get(2)?,
                 content: row.get(3)?,
                 sources: serde_json::from_str(&sources_json).unwrap_or_else(|_| json!([])),
                 created_at: row.get(5)?,
+                project_ids: row
+                    .get::<_, Option<String>>(6)?
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1496,10 +1597,16 @@ impl DataStore {
         if !chat_exists {
             return Err(DataError::NotFound("RAG-чат не найден".to_string()));
         }
+        let (project_scope_json, include_standalone): (Option<String>, bool) = transaction
+            .query_row(
+                "SELECT project_scope_json, include_standalone FROM ai_chats WHERE id = ?1",
+                params![chat_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
         transaction.execute(
-            "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, chat_id, role, content, request.sources.to_string(), now],
+            "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at, project_scope_json, include_standalone)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, chat_id, role, content, request.sources.to_string(), now, project_scope_json, include_standalone],
         )?;
         transaction.execute(
             "UPDATE ai_chats SET updated_at = ?1 WHERE id = ?2 AND scope = 'rag'",
@@ -1513,6 +1620,8 @@ impl DataStore {
             content,
             sources: request.sources,
             created_at: now,
+            project_ids: crate::project_scope::decode(project_scope_json)?,
+            include_standalone,
         })
     }
 
@@ -3683,29 +3792,33 @@ impl DataStore {
         embedding::import_profile_backups(&transaction, &backup_data.embedding_profiles)?;
         for chat in restored_chats {
             transaction.execute(
-                "INSERT INTO ai_chats (id, scope, note_id, title, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO ai_chats (id, scope, note_id, title, created_at, updated_at, project_scope_json, include_standalone)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     chat.id,
                     chat.scope,
                     chat.note_id,
                     chat.title,
                     chat.created_at,
-                    chat.updated_at
+                    chat.updated_at,
+                    crate::project_scope::encode_ids(chat.project_ids.as_deref()),
+                    chat.include_standalone
                 ],
             )?;
         }
         for message in restored_messages {
             transaction.execute(
-                "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at, project_scope_json, include_standalone)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     message.id,
                     message.chat_id,
                     message.role,
                     message.content,
                     message.sources_json.to_string(),
-                    message.created_at
+                    message.created_at,
+                    crate::project_scope::encode_ids(message.project_ids.as_deref()),
+                    message.include_standalone
                 ],
             )?;
         }
@@ -3811,18 +3924,30 @@ impl DataStore {
 
     fn collect_ai_chats_backup(&self) -> DataResult<Vec<AiChatBackup>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, scope, note_id, title, created_at, updated_at
+            "SELECT id, scope, note_id, title, created_at, updated_at, project_scope_json, include_standalone
              FROM ai_chats
              ORDER BY created_at, id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(AiChatBackup {
+                include_standalone: row.get(7)?,
                 id: row.get(0)?,
                 scope: row.get(1)?,
                 note_id: row.get(2)?,
                 title: row.get(3)?,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                project_ids: row
+                    .get::<_, Option<String>>(6)?
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -3830,19 +3955,31 @@ impl DataStore {
 
     fn collect_ai_messages_backup(&self) -> DataResult<Vec<AiMessageBackup>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, chat_id, role, content, sources_json, created_at
+            "SELECT id, chat_id, role, content, sources_json, created_at, project_scope_json, include_standalone
              FROM ai_messages
              ORDER BY created_at, rowid",
         )?;
         let rows = statement.query_map([], |row| {
             let sources_json: String = row.get(4)?;
             Ok(AiMessageBackup {
+                include_standalone: row.get(7)?,
                 id: row.get(0)?,
                 chat_id: row.get(1)?,
                 role: row.get(2)?,
                 content: row.get(3)?,
                 sources_json: serde_json::from_str(&sources_json).unwrap_or_else(|_| json!([])),
                 created_at: row.get(5)?,
+                project_ids: row
+                    .get::<_, Option<String>>(6)?
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -4595,6 +4732,33 @@ fn migrations() -> Vec<Migration> {
                 WHERE archived_at IS NULL AND deleted_at IS NULL
                   AND project_id IN (SELECT id FROM projects WHERE archived_at IS NOT NULL);
             ",
+        },
+        Migration {
+            version: 16,
+            name: "rag_project_scope",
+            sql: "ALTER TABLE ai_chats ADD COLUMN project_scope_json TEXT;
+                  ALTER TABLE ai_messages ADD COLUMN project_scope_json TEXT;",
+        },
+        Migration {
+            version: 17,
+            name: "automatic_knowledge_sync",
+            sql: crate::auto_knowledge::MIGRATION_SQL,
+        },
+        Migration {
+            version: 18,
+            name: "relevant_automatic_sync_changes",
+            sql: crate::auto_knowledge::UPDATE_TRIGGER_SQL,
+        },
+        Migration {
+            version: 19,
+            name: "live_rag_project_scope",
+            sql: crate::project_scope::MIGRATION_SQL,
+        },
+        Migration {
+            version: 20,
+            name: "rag_standalone_scope",
+            sql: "ALTER TABLE ai_chats ADD COLUMN include_standalone INTEGER NOT NULL DEFAULT 0 CHECK(include_standalone IN (0,1));
+                  ALTER TABLE ai_messages ADD COLUMN include_standalone INTEGER NOT NULL DEFAULT 0 CHECK(include_standalone IN (0,1));",
         },
     ]
 }
@@ -5363,6 +5527,7 @@ fn validate_backup_data(data: &mut BackupData) -> DataResult<()> {
     let chat_ids = unique_backup_ids(data.ai_chats.iter().map(|item| item.id.as_str()))?;
     unique_backup_ids(data.ai_messages.iter().map(|item| item.id.as_str()))?;
     for chat in &data.ai_chats {
+        crate::project_scope::decode(chat.project_ids.as_ref().map(|ids| json!(ids).to_string()))?;
         match chat.scope.as_str() {
             "note"
                 if chat
@@ -5378,6 +5543,12 @@ fn validate_backup_data(data: &mut BackupData) -> DataResult<()> {
         }
     }
     for message in &mut data.ai_messages {
+        crate::project_scope::decode(
+            message
+                .project_ids
+                .as_ref()
+                .map(|ids| json!(ids).to_string()),
+        )?;
         if !chat_ids.contains(&message.chat_id)
             || !matches!(message.role.as_str(), "user" | "assistant")
         {
@@ -6298,7 +6469,7 @@ fn backup_command_error(error: DataError) -> PublicCommandError {
     }
 }
 
-fn open_background_connection(database_path: &Path) -> DataResult<Connection> {
+pub(crate) fn open_background_connection(database_path: &Path) -> DataResult<Connection> {
     let conn = Connection::open(database_path)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -6538,6 +6709,20 @@ pub fn save_note_chat_message(
 pub fn list_rag_chats(state: State<'_, AppState>) -> Result<Vec<RagChatDto>, PublicCommandError> {
     state
         .with_store(|store| store.list_rag_chats())
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn set_rag_chat_projects(
+    chat_id: String,
+    project_ids: Option<Vec<String>>,
+    include_standalone: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<RagChatDto, PublicCommandError> {
+    state
+        .with_store(|store| {
+            store.set_rag_chat_projects(&chat_id, project_ids, include_standalone.unwrap_or(false))
+        })
         .map_err(command_error)
 }
 
@@ -7339,6 +7524,13 @@ pub fn complete_first_run(
 ) -> Result<FirstRunCompletionDto, PublicCommandError> {
     state
         .with_store(|store| store.complete_first_run(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn dismiss_first_run(state: State<'_, AppState>) -> Result<(), PublicCommandError> {
+    state
+        .with_store(|store| store.dismiss_first_run())
         .map_err(command_error)
 }
 
@@ -8365,6 +8557,477 @@ mod tests {
         assert_eq!(
             reopened.get_note(&note_id).expect("first note").title,
             "Первая заметка"
+        );
+    }
+
+    #[test]
+    fn skipped_introduction_persists_and_existing_profile_never_repeats_it() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open");
+        assert!(store.first_run_required().expect("fresh"));
+        store.dismiss_first_run().expect("skip");
+        assert!(store.list_notes(None, false).expect("notes").is_empty());
+        drop(store);
+        assert!(!DataStore::open(dir)
+            .expect("reopen")
+            .first_run_required()
+            .expect("once"));
+        let mut existing = temp_store();
+        let mut settings = existing.get_ui_settings().expect("settings");
+        settings.local_profile_name = "Existing user".into();
+        existing.update_ui_settings(settings).expect("profile");
+        assert!(!existing.first_run_required().expect("existing"));
+    }
+
+    #[test]
+    #[ignore = "explicit isolated Phase B native QA fixture; never runs on a user profile"]
+    fn seed_phase_b_native_qa_fixture() {
+        let dir = PathBuf::from(
+            std::env::var_os("NOTEFLOW_PHASE_B_QA_DIR").expect("explicit QA directory"),
+        );
+        assert!(
+            dir.starts_with(std::env::temp_dir())
+                && dir
+                    .file_name()
+                    .expect("name")
+                    .to_string_lossy()
+                    .starts_with("noteflow-phase-b-")
+        );
+        let mut store = DataStore::open(dir).expect("isolated store");
+        assert_eq!(
+            store.get_ui_settings().expect("profile").local_profile_name,
+            "QA Phase B"
+        );
+        assert!(store.list_rag_chats().expect("fresh chats").is_empty());
+        assert!(store
+            .list_projects(true)
+            .expect("fresh projects")
+            .is_empty());
+        for (title, text) in [
+            ("ALPHA", "alpha server is Berlin"),
+            ("BETA", "beta server is Munich"),
+        ] {
+            store
+                .create_project(CreateProjectRequest {
+                    title: title.into(),
+                    description: "QA only".into(),
+                })
+                .expect("project");
+            let imported = store.import_markdown(ImportMarkdownRequest { notes:vec![ImportMarkdownNoteInput {
+                title:format!("{title} Server"),content_json:json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":text}]}]}),
+                content_markdown:text.into(),plain_text:text.into(),content_html:format!("<p>{text}</p>"),content_sidecars:vec![]
+            }] }).expect("note");
+            store
+                .move_note_to_project(MoveNoteRequest {
+                    note_id: imported.notes[0].id.clone(),
+                    project_title: title.into(),
+                })
+                .expect("assignment");
+        }
+        let secrets = llm::MemorySecretStorage::default();
+        let mut request = llm_provider_request(None, "Phase B QA local", None);
+        request.base_url = "http://127.0.0.1:19999/v1".into();
+        request.chat_model = "qa-chat".into();
+        let chat = store
+            .save_llm_provider(&secrets, request)
+            .expect("local model");
+        store
+            .conn
+            .execute(
+                "UPDATE llm_providers SET last_status='success' WHERE id=?1",
+                params![chat.id],
+            )
+            .expect("verified QA model");
+        let request = serde_json::from_value(json!({"name":"Phase B QA embeddings","providerType":"openai","baseUrl":"http://127.0.0.1:19999/v1","model":"qa-embedding","embeddingsEndpoint":"/embeddings","batchSize":8,"timeoutSeconds":5,"locality":"local","enabled":true,"deleteApiKey":false})).expect("embedding request");
+        let profile =
+            embedding::save_profile(&mut store.conn, &secrets, request).expect("embedding profile");
+        store
+            .conn
+            .execute(
+                "UPDATE embedding_profiles SET last_status='success',dimensions=3 WHERE id=?1",
+                params![profile.id],
+            )
+            .expect("QA embedding check");
+    }
+
+    #[test]
+    fn rag_project_scope_and_original_request_snapshot_survive_reopen_and_backup() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "ALPHA".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let chat = store
+            .create_rag_chat(CreateRagChatRequest {
+                title: Some("Scope".into()),
+            })
+            .expect("chat");
+        assert!(chat.project_ids.is_none());
+        let ids = Some(vec![project.id.clone()]);
+        store
+            .set_rag_chat_projects(&chat.id, ids.clone(), true)
+            .expect("scope");
+        let message = store
+            .save_rag_chat_message(SaveRagChatMessageRequest {
+                chat_id: chat.id.clone(),
+                role: "user".into(),
+                content: "Где сервер? 😊".into(),
+                sources: json!([]),
+            })
+            .expect("message");
+        store
+            .set_rag_chat_projects(&chat.id, None, false)
+            .expect("all now");
+        assert_eq!(message.project_ids, ids);
+        assert!(message.include_standalone);
+        assert!(store
+            .set_rag_chat_projects(&chat.id, Some(vec!["missing".into()]), false)
+            .is_err());
+        drop(store);
+        let reopened = DataStore::open(dir).expect("reopen");
+        assert!(reopened.list_rag_chats().expect("chat")[0]
+            .project_ids
+            .is_none());
+        assert_eq!(
+            reopened
+                .list_rag_chat_messages(&chat.id)
+                .expect("retry snapshot")[0]
+                .project_ids,
+            ids
+        );
+        let data = reopened.collect_backup_data().expect("backup");
+        assert_eq!(data.ai_messages[0].project_ids, ids);
+        assert!(data.ai_messages[0].include_standalone);
+        let mut reopened = reopened;
+        reopened
+            .set_rag_chat_projects(&chat.id, ids.clone(), true)
+            .expect("mixed scope restored");
+        let backup = reopened.create_backup().expect("archive");
+        let bytes = fs::read(reopened.base_dir.join(&backup.relative_path)).expect("archive bytes");
+        let mut target = temp_store();
+        target
+            .import_backup(ImportBackupRequest {
+                file_name: "scope.zip".into(),
+                bytes,
+            })
+            .expect("import mixed scope");
+        assert_eq!(
+            target.list_rag_chats().expect("restored chat")[0].project_ids,
+            ids
+        );
+        assert!(target.list_rag_chats().expect("restored chat")[0].include_standalone);
+        assert!(
+            target
+                .list_rag_chat_messages(&chat.id)
+                .expect("restored snapshot")[0]
+                .include_standalone
+        );
+    }
+
+    #[test]
+    fn standalone_migration_preserves_legacy_explicit_scope_without_expanding_it() {
+        let mut conn = Connection::open_in_memory().expect("fixture");
+        conn.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TEXT NOT NULL);").expect("migration table");
+        for migration in migrations().into_iter().filter(|m| m.version < 20) {
+            conn.execute_batch(migration.sql).expect("legacy migration");
+            conn.execute(
+                "INSERT INTO schema_migrations VALUES(?1,?2,'now')",
+                params![migration.version, migration.name],
+            )
+            .expect("version");
+        }
+        conn.execute_batch("INSERT INTO ai_chats(id,scope,title,created_at,updated_at,project_scope_json) VALUES('legacy','rag','Legacy','now','now','[\"a\",\"b\"]'),('all','rag','ALL','now','now',NULL);
+            INSERT INTO ai_messages(id,chat_id,role,content,created_at,project_scope_json) VALUES('request','legacy','user','Question','now','[\"a\",\"b\"]');").expect("legacy chats");
+        DataStore::run_migrations(&mut conn).expect("migration 20");
+        let (ids, standalone): (String, bool) = conn
+            .query_row(
+                "SELECT project_scope_json,include_standalone FROM ai_chats WHERE id='legacy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("explicit");
+        assert_eq!(ids, "[\"a\",\"b\"]");
+        assert!(!standalone);
+        assert!(!conn
+            .query_row(
+                "SELECT include_standalone FROM ai_messages WHERE id='request'",
+                [],
+                |r| r.get::<_, bool>(0)
+            )
+            .expect("snapshot"));
+        assert!(conn
+            .query_row(
+                "SELECT project_scope_json FROM ai_chats WHERE id='all'",
+                [],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .expect("ALL")
+            .is_none());
+    }
+
+    #[test]
+    fn live_scope_reconciles_archive_delete_without_changing_retry_snapshots() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open");
+        let projects = ["A", "B", "C"].map(|title| {
+            store
+                .create_project(CreateProjectRequest {
+                    title: title.into(),
+                    description: String::new(),
+                })
+                .expect("project")
+        });
+        let chat = store
+            .create_rag_chat(CreateRagChatRequest { title: None })
+            .expect("chat");
+        let all = store
+            .create_rag_chat(CreateRagChatRequest { title: None })
+            .expect("all chat");
+        let original = Some(projects.iter().map(|p| p.id.clone()).collect::<Vec<_>>());
+        store
+            .set_rag_chat_projects(&chat.id, original.clone(), true)
+            .expect("explicit union");
+        store
+            .save_rag_chat_message(SaveRagChatMessageRequest {
+                chat_id: chat.id.clone(),
+                role: "user".into(),
+                content: "Original scope".into(),
+                sources: json!([]),
+            })
+            .expect("snapshot");
+        store.archive_project(&projects[1].id).expect("archive B");
+        let live = |store: &DataStore| {
+            store
+                .list_rag_chats()
+                .expect("chats")
+                .into_iter()
+                .find(|c| c.id == chat.id)
+                .expect("chat")
+                .project_ids
+        };
+        assert_eq!(
+            live(&store),
+            Some(vec![projects[0].id.clone(), projects[2].id.clone()])
+        );
+        store
+            .delete_archive_item(&projects[1].id, "Проект")
+            .expect("delete B");
+        for project in [&projects[0], &projects[2]] {
+            store.archive_project(&project.id).expect("archive");
+            store
+                .delete_archive_item(&project.id, "Проект")
+                .expect("delete");
+        }
+        assert_eq!(
+            live(&store),
+            Some(vec![]),
+            "project IDs remain explicit when the last project disappears"
+        );
+        assert!(
+            store
+                .list_rag_chats()
+                .expect("chats")
+                .iter()
+                .find(|c| c.id == chat.id)
+                .expect("mixed")
+                .include_standalone
+        );
+        assert!(store
+            .list_rag_chats()
+            .expect("all")
+            .iter()
+            .find(|c| c.id == all.id)
+            .expect("all chat")
+            .project_ids
+            .is_none());
+        assert_eq!(
+            store.list_rag_chat_messages(&chat.id).expect("snapshot")[0].project_ids,
+            original
+        );
+        assert!(store.list_rag_chat_messages(&chat.id).expect("snapshot")[0].include_standalone);
+        drop(store);
+        let mut store = DataStore::open(dir).expect("reopen");
+        assert_eq!(live(&store), Some(vec![]));
+        assert!(
+            store
+                .list_rag_chats()
+                .expect("chats")
+                .iter()
+                .find(|c| c.id == chat.id)
+                .expect("mixed survives restart")
+                .include_standalone
+        );
+        store
+            .set_rag_chat_projects(&chat.id, Some(vec![]), false)
+            .expect("empty explicit persists");
+        assert_eq!(live(&store), Some(vec![]));
+    }
+
+    struct AutosaveEmbeddingHttp {
+        fail: std::cell::Cell<bool>,
+        inputs: std::cell::RefCell<Vec<String>>,
+    }
+    impl llm::HttpClient for AutosaveEmbeddingHttp {
+        fn send(&self, request: llm::HttpRequest) -> DataResult<llm::HttpResponse> {
+            let body = request.body.expect("embedding body");
+            let input = &body["input"];
+            let inputs = if let Some(items) = input.as_array() {
+                items
+                    .iter()
+                    .map(|item| item.as_str().expect("text").to_string())
+                    .collect::<Vec<_>>()
+            } else {
+                vec![input.as_str().expect("query").to_string()]
+            };
+            self.inputs.borrow_mut().extend(inputs.iter().cloned());
+            Ok(llm::HttpResponse { status:if self.fail.get() {401} else {200}, body:json!({"data":(0..inputs.len()).map(|index|json!({"index":index,"embedding":[1.0,0.5]})).collect::<Vec<_>>()}).to_string() })
+        }
+    }
+
+    #[test]
+    fn real_atomic_autosave_queue_recovery_restart_and_retrieval_use_final_content() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "AUTO INDEX TEST".into(),
+                note_date: "2026-10-01".into(),
+            })
+            .expect("note");
+        let secrets = llm::MemorySecretStorage::default();
+        let request=serde_json::from_value(json!({"name":"QA","providerType":"openai","baseUrl":"http://127.0.0.1:19999/v1","model":"qa","embeddingsEndpoint":"/embeddings","batchSize":8,"timeoutSeconds":5,"locality":"local","enabled":true,"deleteApiKey":false})).expect("profile request");
+        let profile = embedding::save_profile(&mut store.conn, &secrets, request).expect("profile");
+        let http = AutosaveEmbeddingHttp {
+            fail: std::cell::Cell::new(false),
+            inputs: std::cell::RefCell::new(vec![]),
+        };
+        let operations = Arc::new(Mutex::new(HashMap::new()));
+        let save = |store: &mut DataStore, text: &str| {
+            let current = store.get_note(&note.id).expect("current");
+            store.update_note_content(persistence_request(&note.id,current.content_version,text,json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":text}]}]}),vec![])).expect("real autosave")
+        };
+        let process = |store: &mut DataStore| {
+            assert!(crate::auto_knowledge::drain_local_queue(&mut store.conn).expect("queue"));
+            crate::auto_knowledge::update_profiles(&mut store.conn, &operations, &secrets, &http)
+                .expect("worker")
+        };
+        save(&mut store, "AUTOSAVE_TOKEN_OLD");
+        assert!(process(&mut store));
+        let old_hash = knowledge::get_chunks_by_note_id(&store.conn, &note.id).expect("old chunks")
+            [0]
+        .content_hash
+        .clone();
+        save(&mut store, "AUTOSAVE_TOKEN_NEW");
+        assert_eq!(
+            crate::auto_knowledge::queued_note_count(&store.conn).expect("durable queue"),
+            1
+        );
+        assert_ne!(
+            embedding::get_index_status(&mut store.conn, &profile.id)
+                .expect("status")
+                .status,
+            "current"
+        );
+        assert!(process(&mut store));
+        let chunks = knowledge::get_chunks_by_note_id(&store.conn, &note.id).expect("new chunks");
+        assert_ne!(chunks[0].content_hash, old_hash);
+        assert_eq!(chunks[0].content_text, "AUTOSAVE_TOKEN_NEW");
+        let query = serde_json::from_value(
+            json!({"query":"AUTOSAVE_TOKEN_NEW","profileId":profile.id,"limit":5}),
+        )
+        .expect("query");
+        let record = embedding::get_profile(&store.conn, &profile.id).expect("profile record");
+        let results = embedding::semantic_search(&store.conn, &record, &secrets, &http, &query)
+            .expect("RAG retrieval");
+        assert!(results
+            .iter()
+            .any(|result| result.snippet.contains("AUTOSAVE_TOKEN_NEW")));
+        assert!(!results
+            .iter()
+            .any(|result| result.snippet.contains("AUTOSAVE_TOKEN_OLD")));
+        let calls = http.inputs.borrow().len();
+        for text in ["VERSION_1", "VERSION_2", "VERSION_3", "VERSION_FINAL"] {
+            save(&mut store, text);
+        }
+        assert!(process(&mut store));
+        assert_eq!(&http.inputs.borrow()[calls..], &["VERSION_FINAL"]);
+        let generation: i64 = store
+            .conn
+            .query_row("SELECT generation FROM knowledge_auto_sync", [], |row| {
+                row.get(0)
+            })
+            .expect("generation");
+        save(&mut store, "VERSION_FINAL");
+        assert_eq!(
+            crate::auto_knowledge::queued_note_count(&store.conn).expect("UI-only cache save"),
+            0
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT generation FROM knowledge_auto_sync", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .expect("generation"),
+            generation
+        );
+        store
+            .rename_note(RenameNoteRequest {
+                note_id: note.id.clone(),
+                title: "RENAMED TOKEN".into(),
+            })
+            .expect("title autosave");
+        assert_eq!(
+            crate::auto_knowledge::queued_note_count(&store.conn).expect("title queue"),
+            1
+        );
+        assert!(process(&mut store));
+        save(&mut store, "PROVIDER_RECOVERY_FINAL");
+        http.fail.set(true);
+        assert!(!process(&mut store));
+        assert_eq!(
+            store
+                .get_note(&note.id)
+                .expect("saved independently")
+                .content_markdown,
+            "PROVIDER_RECOVERY_FINAL"
+        );
+        store
+            .conn
+            .execute(
+                "UPDATE embedding_profiles SET last_status='error' WHERE id=?1",
+                params![profile.id],
+            )
+            .expect("failed connection check");
+        drop(store);
+        let mut store = DataStore::open(dir).expect("restart with failed vector job");
+        http.fail.set(false);
+        assert!(
+            process(&mut store),
+            "recover without manual refresh after reopen"
+        );
+        assert_eq!(
+            embedding::get_index_status(&mut store.conn, &profile.id)
+                .expect("recovered")
+                .status,
+            "current"
+        );
+        save(&mut store, "RESTART_BEFORE_QUEUE_DRAIN");
+        let path = store.base_dir.clone();
+        drop(store);
+        let mut store = DataStore::open(path).expect("reopen durable local queue");
+        assert_eq!(
+            crate::auto_knowledge::queued_note_count(&store.conn).expect("pending across restart"),
+            1
+        );
+        assert!(process(&mut store));
+        assert_eq!(
+            http.inputs.borrow().last().expect("latest embedding"),
+            "RESTART_BEFORE_QUEUE_DRAIN"
         );
     }
 

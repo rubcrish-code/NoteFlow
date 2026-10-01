@@ -890,3 +890,12 @@ details[open] > .row-menu-trigger {
 .archive-delete-name { display: grid; gap: var(--space-2); }
 .archive-delete-name b { user-select: text; }
 .archive-delete-name input { width: 100%; }
+
+.onboarding-progress { align-items: center; display: flex; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
+.onboarding-step-icon { align-items: center; background: var(--asoft); border-radius: var(--radius-control); color: var(--accent); display: inline-flex; height: 48px; justify-content: center; width: 48px; }
+.onboarding-step-icon svg { height: 24px; width: 24px; }
+.onboarding-dots { display: flex; gap: var(--space-2); }
+.onboarding-dots i { background: var(--border-strong); border-radius: 50%; height: 6px; width: 6px; }
+.onboarding-dots i.active { background: var(--accent); }
+.first-run-dialog .new-note-actions { flex-wrap: wrap; }
+.onboarding-close { display: none; }

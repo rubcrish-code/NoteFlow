@@ -77,7 +77,7 @@ describe("unified model settings UI", () => {
 
   it("groups semantic index maintenance and delete in one predictable disclosure menu", () => {
     const additionalActions = semanticSource.match(/<details className="semantic-more-actions model-card-more">[\s\S]*?<\/details>/)?.[0] ?? "";
-    assert.match(additionalActions, /Пересоздать смысловой поиск \(RAG\)/);
+    assert.match(additionalActions, /Восстановить индекс поиска/);
     assert.match(additionalActions, /Удалить модель/);
     assert.doesNotMatch(additionalActions, /Изменить|Проверить подключение/);
   });

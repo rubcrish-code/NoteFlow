@@ -1,9 +1,11 @@
 mod assets;
+mod auto_knowledge;
 mod data;
 mod embedding;
 mod knowledge;
 mod knowledge_agent;
 mod llm;
+mod project_scope;
 mod provider_url;
 mod rag;
 mod revisions;
@@ -83,6 +85,7 @@ pub fn run() {
             data::create_note,
             data::create_project,
             data::complete_first_run,
+            data::dismiss_first_run,
             data::create_rag_chat,
             data::create_tag,
             data::delete_archive_item,
@@ -139,6 +142,7 @@ pub fn run() {
             data::remove_note_from_project,
             data::rename_note,
             data::rename_rag_chat,
+            data::set_rag_chat_projects,
             data::rename_tag,
             data::restore_archive_item,
             data::restore_note,

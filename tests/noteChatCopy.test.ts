@@ -52,7 +52,7 @@ describe("note chat assistant copy action", () => {
     assert.doesNotMatch(userBranch, />Скопировать</);
 
     assert.match(noteChatSource, /message\.status === undefined \? \([\s\S]*note-chat-message-meta[\s\S]*note-chat-copy/);
-    assert.match(noteChatSource, /title=\{copyTitle\(copyFeedback, message\.id\)\}/);
+    assert.match(noteChatSource, /data-tooltip=\{copyTitle\(copyFeedback, message\.id\)\}/);
     assert.match(noteChatSource, /aria-label="Скопировать сообщение"/);
   });
 

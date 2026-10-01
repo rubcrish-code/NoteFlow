@@ -50,6 +50,8 @@ pub struct DateRange {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteFilters {
     pub project_id: Option<String>,
+    pub project_ids: Option<Vec<String>>,
+    pub include_standalone: bool,
     pub tag_id: Option<String>,
     pub archive: ArchiveScope,
     pub date: DateRange,
@@ -75,6 +77,8 @@ pub struct QueryPreview {
     pub needs_hybrid_retrieval: bool,
     pub search_query: String,
     pub project_id: Option<String>,
+    pub project_ids: Option<Vec<String>>,
+    pub include_standalone: bool,
     pub tag_id: Option<String>,
 }
 
@@ -120,6 +124,8 @@ impl QueryPlan {
             needs_hybrid_retrieval: self.kind == QueryKind::Content || scoped_hybrid,
             search_query: self.search_query.clone(),
             project_id: self.filters.project_id.clone(),
+            project_ids: self.filters.project_ids.clone(),
+            include_standalone: self.filters.include_standalone,
             tag_id: self.filters.tag_id.clone(),
         }
     }
@@ -138,7 +144,11 @@ pub fn note_matches_filters(
         .query_row(
             &sql,
             params![
-                filters.project_id,
+                crate::project_scope::sql_value(
+                    filters.project_ids.as_deref(),
+                    filters.project_id.as_deref(),
+                    filters.include_standalone
+                ),
                 filters.tag_id,
                 archive_code(filters.archive),
                 filters.date.start_utc,
@@ -308,6 +318,8 @@ pub fn plan_query(
         kind,
         filters: NoteFilters {
             project_id: project.as_ref().map(|(id, _)| id.clone()),
+            project_ids: None,
+            include_standalone: false,
             tag_id: tag.as_ref().map(|(id, _)| id.clone()),
             archive,
             date,
@@ -398,7 +410,11 @@ pub fn count_notes(conn: &Connection, filters: &NoteFilters) -> DataResult<i64> 
     Ok(conn.query_row(
         &sql,
         params![
-            filters.project_id,
+            crate::project_scope::sql_value(
+                filters.project_ids.as_deref(),
+                filters.project_id.as_deref(),
+                filters.include_standalone
+            ),
             filters.tag_id,
             archive_code(filters.archive),
             filters.date.start_utc,
@@ -431,7 +447,11 @@ pub fn list_notes(
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(
         params![
-            filters.project_id,
+            crate::project_scope::sql_value(
+                filters.project_ids.as_deref(),
+                filters.project_id.as_deref(),
+                filters.include_standalone
+            ),
             filters.tag_id,
             archive_code(filters.archive),
             filters.date.start_utc,
@@ -514,7 +534,11 @@ pub fn latest_note_about_subject(
         .query_row(
             &sql,
             params![
-                filters.project_id,
+                crate::project_scope::sql_value(
+                    filters.project_ids.as_deref(),
+                    filters.project_id.as_deref(),
+                    filters.include_standalone
+                ),
                 filters.tag_id,
                 archive_code(filters.archive),
                 filters.date.start_utc,
@@ -541,7 +565,11 @@ pub fn frequent_terms(conn: &Connection, filters: &NoteFilters) -> DataResult<Fr
     let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(
         params![
-            filters.project_id,
+            crate::project_scope::sql_value(
+                filters.project_ids.as_deref(),
+                filters.project_id.as_deref(),
+                filters.include_standalone
+            ),
             filters.tag_id,
             archive_code(filters.archive),
             filters.date.start_utc,
@@ -679,9 +707,10 @@ fn filter_sql(filters: &NoteFilters) -> String {
     };
     format!(
         "n.deleted_at IS NULL
-         AND (?1 IS NULL OR n.project_id = ?1)
+         AND (?1 IS NULL OR n.project_id IN (SELECT value FROM json_each(?1, '$.projectIds'))
+              OR (n.project_id IS NULL AND n.archived_at IS NULL AND json_extract(?1, '$.includeStandalone') = 1))
          AND (?2 IS NULL OR EXISTS (SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?2))
-         AND (?3 = 2 OR (?3 = 0 AND n.archived_at IS NULL) OR (?3 = 1 AND n.archived_at IS NOT NULL))
+         AND (?3 = 2 OR (?3 = 0 AND n.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM projects ap WHERE ap.id = n.project_id AND ap.archived_at IS NOT NULL)) OR (?3 = 1 AND n.archived_at IS NOT NULL))
          AND (?4 IS NULL OR n.{date_column} >= ?4)
          AND (?5 IS NULL OR n.{date_column} < ?5)
          AND (?6 IS NULL OR (n.created_at < ?6 OR (n.created_at = ?6 AND n.id < ?7)))"
@@ -911,7 +940,7 @@ mod tests {
     fn fixture() -> Connection {
         let conn = Connection::open_in_memory().expect("memory database");
         conn.execute_batch(
-            "CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL);
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, archived_at TEXT);
              CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT NOT NULL);
              CREATE TABLE notes (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -920,7 +949,7 @@ mod tests {
                 plain_text TEXT NOT NULL DEFAULT ''
              );
              CREATE TABLE note_tags (note_id TEXT NOT NULL, tag_id TEXT NOT NULL);
-             INSERT INTO projects VALUES ('alpha', 'Альфа'), ('beta', 'Бета');
+             INSERT INTO projects (id, title) VALUES ('alpha', 'Альфа'), ('beta', 'Бета');
              INSERT INTO tags VALUES ('work', 'Работа');
              INSERT INTO notes VALUES
                ('a', 'Первая', '2026-08-01T10:00:00.000Z', '2026-09-27T12:00:00.000Z', 'alpha', NULL, NULL, 1, 'OAuth и сервер'),
@@ -969,6 +998,110 @@ mod tests {
         assert_eq!(count.kind, QueryKind::Count);
         assert_eq!(count_notes(&conn, &count.filters).expect("count"), 3);
         assert!(!count.preview().needs_hybrid_retrieval);
+    }
+
+    #[test]
+    fn explicit_multi_project_scope_limits_counts_latest_and_subject_queries() {
+        let conn = fixture();
+        conn.execute("INSERT INTO notes VALUES ('standalone','Standalone','2026-10-01','2026-10-01',NULL,NULL,NULL,0,'сервер Hamburg')", []).expect("standalone");
+        conn.execute("UPDATE notes SET created_at='2026-09-30' WHERE id='b'", [])
+            .expect("newest global");
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE note_search_fts USING fts5(note_id UNINDEXED,plain_text);
+            INSERT INTO note_search_fts SELECT id,plain_text FROM notes;",
+        )
+        .expect("FTS fixture");
+        let mut query = plan(&conn, "Какая последняя заметка?");
+        assert_eq!(
+            list_notes(&conn, &query.filters, query.order, 1).expect("global")[0].id,
+            "standalone"
+        );
+        query.filters.project_ids = Some(vec!["alpha".into()]);
+        assert_eq!(
+            list_notes(&conn, &query.filters, query.order, 1).expect("alpha")[0].id,
+            "c"
+        );
+        assert_eq!(count_notes(&conn, &query.filters).expect("alpha count"), 2);
+        assert_eq!(
+            latest_note_about_subject(&conn, "сервер", &query.filters)
+                .expect("subject")
+                .expect("match")
+                .id,
+            "c"
+        );
+        query.filters.project_ids = Some(vec!["alpha".into(), "beta".into()]);
+        assert_eq!(count_notes(&conn, &query.filters).expect("union"), 3);
+        query.filters.project_id = Some("missing".into());
+        assert_eq!(count_notes(&conn, &query.filters).expect("disjoint"), 0);
+    }
+
+    #[test]
+    fn standalone_and_mixed_metadata_scope_share_chronology_counts_and_date_filters() {
+        let conn = fixture();
+        conn.execute_batch("DELETE FROM note_tags; DELETE FROM notes;
+            INSERT INTO notes VALUES
+            ('s1','S1','2026-10-01T10:00:00.000Z','2026-10-05T10:00:00.000Z',NULL,NULL,NULL,0,'standalone alpha token'),
+            ('s2','S2','2026-10-02T10:00:00.000Z','2026-10-02T10:00:00.000Z',NULL,NULL,NULL,0,'standalone beta token'),
+            ('a1','A1','2026-10-03T10:00:00.000Z','2026-10-03T10:00:00.000Z','alpha',NULL,NULL,0,'project A token'),
+            ('b1','B1','2026-10-04T10:00:00.000Z','2026-10-04T10:00:00.000Z','beta',NULL,NULL,0,'project B token'),
+            ('archived','Archived','2026-10-06T10:00:00.000Z','2026-10-06T10:00:00.000Z',NULL,'2026-10-06',NULL,0,'token'),
+            ('deleted','Deleted','2026-10-07T10:00:00.000Z','2026-10-07T10:00:00.000Z',NULL,NULL,'2026-10-07',0,'token');").expect("scope fixture");
+        for (ids, standalone, expected, first, last, edited) in [
+            (None, false, 4, "s1", "b1", "s1"),
+            (Some(vec![]), true, 2, "s1", "s2", "s1"),
+            (Some(vec!["alpha".into()]), false, 1, "a1", "a1", "a1"),
+            (Some(vec!["alpha".into()]), true, 3, "s1", "a1", "s1"),
+        ] {
+            let mut filters = plan(&conn, "Сколько заметок?").filters;
+            filters.project_ids = ids;
+            filters.include_standalone = standalone;
+            assert_eq!(count_notes(&conn, &filters).expect("count"), expected);
+            for (order, id) in [
+                (NoteOrder::CreatedAsc, first),
+                (NoteOrder::CreatedDesc, last),
+                (NoteOrder::UpdatedDesc, edited),
+            ] {
+                assert_eq!(
+                    list_notes(&conn, &filters, order, 1).expect("chronology")[0].id,
+                    id
+                );
+            }
+            for id in ["archived", "deleted"] {
+                assert!(!note_matches_filters(&conn, id, &filters).expect("source guard"));
+            }
+            filters.date.start_utc = Some("2026-10-02T00:00:00.000Z".into());
+            filters.date.end_utc = Some("2026-10-04T00:00:00.000Z".into());
+            assert_eq!(
+                count_notes(&conn, &filters).expect("date range"),
+                if expected > 2 { 2 } else { 1 }
+            );
+        }
+        let mut filters = plan(&conn, "Сколько заметок?").filters;
+        filters.project_ids = Some(vec![]);
+        assert_eq!(count_notes(&conn, &filters).expect("empty"), 0);
+        filters.include_standalone = true;
+        filters.archive = ArchiveScope::All;
+        assert_eq!(
+            count_notes(&conn, &filters).expect("standalone is active"),
+            2
+        );
+        filters.project_id = Some("alpha".into());
+        assert_eq!(
+            count_notes(&conn, &filters).expect("inferred intersection"),
+            0
+        );
+    }
+
+    #[test]
+    fn archived_project_is_not_active_knowledge_even_if_note_archive_flag_is_missing() {
+        let conn = fixture();
+        conn.execute(
+            "UPDATE projects SET archived_at='2026-09-30' WHERE id='alpha'",
+            [],
+        )
+        .expect("archive");
+        let query = plan(&conn, "Сколько заметок?");
+        assert_eq!(count_notes(&conn, &query.filters).expect("count"), 1);
     }
 
     #[test]

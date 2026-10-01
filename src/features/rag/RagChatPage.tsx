@@ -2,6 +2,7 @@ import { useRef } from "react";
 import type { AppSection } from "../../app/types";
 import type { SemanticSearchResult } from "../../services/embeddingService";
 import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysicalElementWidth";
+import { useAppZoomPercent } from "../../shared/AppZoomContext";
 import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 import { getRagLayoutMode } from "./ragResponsiveLayout";
 import { RagChatWorkspace } from "./RagChatWorkspace";
@@ -42,11 +43,12 @@ export function RagChatPage({
   sidebar,
 }: RagChatPageProps) {
   const shellRef = useRef<HTMLDivElement>(null);
+  const zoomPercent = useAppZoomPercent();
   const layoutMode = getRagLayoutMode(useObservedPhysicalElementWidth(shellRef), {
     conversationWidth: ragConversationWidth,
     sourcesWidth: ragSourcesWidth,
     sourcesCollapsed: ragSourcesCollapsed,
-  });
+  }, zoomPercent);
 
   return (
     <PageShell

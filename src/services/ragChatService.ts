@@ -8,6 +8,8 @@ export interface RagChat {
   title: string;
   createdAt: string;
   updatedAt: string;
+  projectIds?: string[] | null;
+  includeStandalone?: boolean;
 }
 
 export interface RagChatMessage {
@@ -17,6 +19,8 @@ export interface RagChatMessage {
   content: string;
   sources: RagMessageSource[];
   createdAt: string;
+  projectIds?: string[] | null;
+  includeStandalone?: boolean;
 }
 
 export interface RagMessageSource extends SemanticSearchResult {
@@ -49,6 +53,8 @@ export interface RagQueryPlan {
   needsHybridRetrieval: boolean;
   searchQuery: string;
   projectId: string | null;
+  projectIds?: string[] | null;
+  includeStandalone?: boolean;
   tagId: string | null;
 }
 
@@ -69,6 +75,8 @@ interface RagChatDto {
   title: string;
   createdAt: string;
   updatedAt: string;
+  projectIds?: string[] | null;
+  includeStandalone?: boolean;
 }
 
 interface RagChatMessageDto {
@@ -78,6 +86,8 @@ interface RagChatMessageDto {
   content: string;
   sources: unknown;
   createdAt: string;
+  projectIds?: string[] | null;
+  includeStandalone?: boolean;
 }
 
 interface RagGenerationResultDto {
@@ -129,6 +139,8 @@ export function mapRagChatMessage(dto: RagChatMessageDto): RagChatMessage {
     content: dto.content,
     sources: Array.isArray(dto.sources) ? dto.sources.filter(isSemanticSource).map(mapSource) : [],
     createdAt: dto.createdAt,
+    projectIds: dto.projectIds ?? null,
+    includeStandalone: dto.includeStandalone ?? false,
   };
 }
 
@@ -142,6 +154,10 @@ export async function createRagChat(title = "Новый чат") {
 
 export async function renameRagChat(chatId: string, title: string) {
   return mapChat(await invoke<RagChatDto>("rename_rag_chat", { request: { chatId, title } }));
+}
+
+export async function setRagChatProjects(chatId: string, projectIds: string[] | null, includeStandalone = false) {
+  return mapChat(await invoke<RagChatDto>("set_rag_chat_projects", { chatId, projectIds, includeStandalone }));
 }
 
 export async function deleteRagChat(chatId: string) {

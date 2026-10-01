@@ -140,7 +140,7 @@ describe("P1.4 lazy loading behavior", () => {
         note = { ...note, ...request, contentVersion: note.contentVersion + 1 };
         return note;
       }
-      if (["list_llm_providers", "list_embedding_profiles", "list_note_chat_messages"].includes(command)) return [];
+      if (["list_llm_providers", "list_embedding_profiles", "list_note_chat_messages", "list_projects"].includes(command)) return [];
       if (command === "list_rag_chats") return [{ id: "rag-one", title: "Saved conversation", createdAt: note.createdAt, updatedAt: note.updatedAt }];
       if (command === "list_rag_chat_messages") return [{ id: "message-one", chatId: "rag-one", role: "user", content: "Saved RAG history", sources: [], createdAt: note.createdAt }];
       if (command === "get_note_ai_status") return { available: false, privacyAccepted: false, reason: "no_provider" };

@@ -73,7 +73,7 @@ export function ChatComposer({
         className="chat-composer-send"
         disabled={!state.canSubmit}
         onClick={onSubmit}
-        title={state.submitLabel}
+        data-tooltip={disabled ? "Сначала подключите модель" : state.submitLabel}
         type="button"
       >
         {isSubmitting ? <span className="button-spinner" /> : <Icon name="send" />}

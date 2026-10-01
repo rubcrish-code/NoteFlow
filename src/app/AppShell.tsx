@@ -112,7 +112,6 @@ export function AppShell() {
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isSettingsLoading, setIsSettingsLoading] = useState(true);
   const [firstRunRequired, setFirstRunRequired] = useState(false);
-  const [firstRunDismissed, setFirstRunDismissed] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [editorSelectionText, setEditorSelectionText] = useState("");
   const [isFocusMode, setIsFocusMode] = useState(false);
@@ -1126,14 +1125,14 @@ export function AppShell() {
   const sharedFooter = (
     <SharedOverlays
       isNewNoteModalOpen={isNewNoteModalOpen}
-      isFirstRunOpen={firstRunRequired && !firstRunDismissed && !isDataLoading && !isSettingsLoading}
+      isFirstRunOpen={firstRunRequired && !isDataLoading && !isSettingsLoading}
       isProfileNameModalOpen={isProfileNameModalOpen}
       localProfileName={uiSettings.localProfileName}
       onCloseNewNote={() => setIsNewNoteModalOpen(false)}
       onCloseProfileName={() => setIsProfileNameModalOpen(false)}
       onCreateNote={createNote}
       onCompleteFirstRun={completeFirstRun}
-      onDismissFirstRun={() => setFirstRunDismissed(true)}
+      onDismissFirstRun={async () => { await dataService.dismissFirstRun(); setFirstRunRequired(false); }}
       onSaveProfileName={(localProfileName) => {
         updateUiSettings({ localProfileName });
         setIsProfileNameModalOpen(false);
@@ -1467,7 +1466,7 @@ interface SharedOverlaysProps {
   onCloseProfileName: () => void;
   onCreateNote: (title: string, noteDate: string) => void;
   onCompleteFirstRun: (name: string) => Promise<void>;
-  onDismissFirstRun: () => void;
+  onDismissFirstRun: () => Promise<void>;
   onSaveProfileName: (name: string) => void;
 }
 

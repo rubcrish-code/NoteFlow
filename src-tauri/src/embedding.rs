@@ -263,6 +263,10 @@ pub struct SemanticSearchRequest {
     pub query: String,
     pub profile_id: String,
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_standalone: bool,
     pub tag_id: Option<String>,
     #[serde(default)]
     pub include_archived: bool,
@@ -338,9 +342,11 @@ pub struct EmbeddingProfileBackup {
 
 #[derive(Clone, Debug)]
 struct PendingChunk {
+    note_id: String,
     id: String,
     content_hash: String,
     content_text: String,
+    content_version: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -751,9 +757,15 @@ pub fn update_index<S: SecretStorage, H: HttpClient>(
             .collect::<Vec<_>>();
         match embed_texts_with_retry(profile, storage, http, &inputs) {
             Ok(vectors) => {
+                if cancel.load(Ordering::SeqCst) {
+                    break;
+                }
                 let now = now_iso();
                 let transaction = conn.transaction()?;
                 for (chunk, vector) in batch.iter().zip(vectors.iter()) {
+                    if !chunk_is_current(&transaction, chunk, profile)? {
+                        continue;
+                    }
                     let vector_norm = vector_norm(vector)?;
                     let vector_blob = serialize_vector(vector)?;
                     transaction.execute(
@@ -783,15 +795,18 @@ pub fn update_index<S: SecretStorage, H: HttpClient>(
                         "DELETE FROM embedding_chunk_failures WHERE chunk_id = ?1 AND profile_id = ?2",
                         params![chunk.id, profile.id],
                     )?;
+                    indexed_chunks += 1;
                 }
                 transaction.commit()?;
-                indexed_chunks += batch.len() as i64;
             }
             Err(error) => {
                 failed_chunks += batch.len() as i64;
                 let now = now_iso();
                 let transaction = conn.transaction()?;
                 for chunk in batch {
+                    if !chunk_is_current(&transaction, chunk, profile)? {
+                        continue;
+                    }
                     transaction.execute(
                         "INSERT INTO embedding_chunk_failures (
                             chunk_id, profile_id, chunk_content_hash, error_code, updated_at
@@ -1344,8 +1359,9 @@ fn pending_chunks(
     profile: &EmbeddingProfileRecord,
 ) -> DataResult<Vec<PendingChunk>> {
     let mut statement = conn.prepare(
-        "SELECT k.id, k.content_hash, k.content_text
+        "SELECT k.id, k.content_hash, k.content_text, n.content_version, k.note_id
          FROM knowledge_chunks k
+         JOIN notes n ON n.id = k.note_id
          LEFT JOIN knowledge_chunk_embeddings e
            ON e.chunk_id = k.id AND e.profile_id = ?1
          LEFT JOIN embedding_chunk_failures f
@@ -1364,10 +1380,52 @@ fn pending_chunks(
                 id: row.get(0)?,
                 content_hash: row.get(1)?,
                 content_text: row.get(2)?,
+                content_version: row.get(3)?,
+                note_id: row.get(4)?,
             })
         },
     )?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let chunks = rows.collect::<Result<Vec<_>, _>>()?;
+    let mut current_notes = HashMap::new();
+    let mut current = Vec::new();
+    for chunk in chunks {
+        let is_current = match current_notes.get(&chunk.note_id) {
+            Some(value) => *value,
+            None => {
+                let value = !knowledge::note_needs_sync(conn, &chunk.note_id)?;
+                current_notes.insert(chunk.note_id.clone(), value);
+                value
+            }
+        };
+        if is_current {
+            current.push(chunk);
+        }
+    }
+    Ok(current)
+}
+
+fn chunk_is_current(
+    conn: &Connection,
+    chunk: &PendingChunk,
+    profile: &EmbeddingProfileRecord,
+) -> DataResult<bool> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(
+        SELECT 1 FROM knowledge_chunks k JOIN notes n ON n.id = k.note_id
+        JOIN embedding_profiles p ON p.id = ?4
+        WHERE k.id = ?1 AND k.content_hash = ?2 AND n.content_version = ?3
+          AND n.deleted_at IS NULL AND p.updated_at = ?5 AND p.enabled = 1
+    )",
+        params![
+            chunk.id,
+            chunk.content_hash,
+            chunk.content_version,
+            profile.id,
+            profile.updated_at
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(exists && !knowledge::note_needs_sync(conn, &chunk.note_id)?)
 }
 
 fn semantic_candidates(
@@ -1389,8 +1447,9 @@ fn semantic_candidates(
            AND e.chunk_content_hash = k.content_hash
            AND e.pipeline_version = ?2
            AND n.deleted_at IS NULL
-           AND (?3 OR n.archived_at IS NULL)
-           AND (?4 IS NULL OR n.project_id = ?4)
+           AND (?3 OR (n.archived_at IS NULL AND p.archived_at IS NULL))
+           AND (?4 IS NULL OR n.project_id IN (SELECT value FROM json_each(?4, '$.projectIds'))
+                OR (n.project_id IS NULL AND n.archived_at IS NULL AND json_extract(?4, '$.includeStandalone') = 1))
            AND (NOT ?5 OR n.is_favorite = 1)
            AND (?6 IS NULL OR EXISTS (
                SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?6
@@ -1401,7 +1460,11 @@ fn semantic_candidates(
             profile.id,
             EMBEDDING_PIPELINE_VERSION,
             request.include_archived,
-            request.project_id,
+            crate::project_scope::sql_value(
+                request.project_ids.as_deref(),
+                request.project_id.as_deref(),
+                request.include_standalone
+            ),
             request.favorites_only,
             request.tag_id,
         ],
@@ -1424,6 +1487,7 @@ fn semantic_candidates(
         },
     )?;
     let mut candidates = Vec::new();
+    let mut current_notes = HashMap::new();
     for row in rows {
         let (
             chunk_id,
@@ -1440,6 +1504,17 @@ fn semantic_candidates(
             dimensions,
             stored_norm,
         ) = row?;
+        let is_current = match current_notes.get(&note_id) {
+            Some(value) => *value,
+            None => {
+                let value = !knowledge::note_needs_sync(conn, &note_id)?;
+                current_notes.insert(note_id.clone(), value);
+                value
+            }
+        };
+        if !is_current {
+            continue;
+        }
         if dimensions <= 0 || stored_norm <= 0.0 || dimensions as usize != query_vector.len() {
             continue;
         }
@@ -1490,8 +1565,9 @@ fn lexical_candidates(
          LEFT JOIN projects p ON p.id = n.project_id
          WHERE knowledge_chunks_fts MATCH ?1
            AND n.deleted_at IS NULL
-           AND (?2 OR n.archived_at IS NULL)
-           AND (?3 IS NULL OR n.project_id = ?3)
+           AND (?2 OR (n.archived_at IS NULL AND p.archived_at IS NULL))
+           AND (?3 IS NULL OR n.project_id IN (SELECT value FROM json_each(?3, '$.projectIds'))
+                OR (n.project_id IS NULL AND n.archived_at IS NULL AND json_extract(?3, '$.includeStandalone') = 1))
            AND (NOT ?4 OR n.is_favorite = 1)
            AND (?5 IS NULL OR EXISTS (
                SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?5
@@ -1503,7 +1579,11 @@ fn lexical_candidates(
         params![
             fts_query,
             request.include_archived,
-            request.project_id,
+            crate::project_scope::sql_value(
+                request.project_ids.as_deref(),
+                request.project_id.as_deref(),
+                request.include_standalone
+            ),
             request.favorites_only,
             request.tag_id,
             request.candidate_limit.clamp(10, 500),
@@ -1541,8 +1621,9 @@ fn exact_title_candidates(
          LEFT JOIN projects p ON p.id = n.project_id
          WHERE k.chunk_order = 0
            AND n.deleted_at IS NULL
-           AND (?1 OR n.archived_at IS NULL)
-           AND (?2 IS NULL OR n.project_id = ?2)
+           AND (?1 OR (n.archived_at IS NULL AND p.archived_at IS NULL))
+           AND (?2 IS NULL OR n.project_id IN (SELECT value FROM json_each(?2, '$.projectIds'))
+                OR (n.project_id IS NULL AND n.archived_at IS NULL AND json_extract(?2, '$.includeStandalone') = 1))
            AND (NOT ?3 OR n.is_favorite = 1)
            AND (?4 IS NULL OR EXISTS (
                SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?4
@@ -1552,7 +1633,11 @@ fn exact_title_candidates(
     let rows = statement.query_map(
         params![
             request.include_archived,
-            request.project_id,
+            crate::project_scope::sql_value(
+                request.project_ids.as_deref(),
+                request.project_id.as_deref(),
+                request.include_standalone
+            ),
             request.favorites_only,
             request.tag_id,
         ],
@@ -1745,16 +1830,19 @@ fn refresh_index_state(
         |row| row.get(0),
     )?;
     let pending_chunks = (total_chunks - indexed_chunks).max(0);
+    let queued_notes = crate::auto_knowledge::queued_note_count(conn)?;
     let existing_status = index_state_from_db(conn, profile_id)
         .ok()
         .map(|state| state.status);
     let status = if !profile.enabled {
         "not_configured"
     } else if existing_status.as_deref() == Some("indexing")
-        && pending_chunks > 0
+        && (pending_chunks > 0 || queued_notes > 0)
         && error_code.is_none()
     {
         "indexing"
+    } else if queued_notes > 0 {
+        "pending"
     } else if total_chunks == 0 || pending_chunks == 0 {
         "current"
     } else if failed_chunks > 0 && indexed_chunks > 0 {
@@ -2155,9 +2243,9 @@ mod tests {
             "CREATE TABLE notes (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL, content_markdown TEXT NOT NULL DEFAULT '',
                 plain_text TEXT NOT NULL DEFAULT '', project_id TEXT, is_favorite INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL, archived_at TEXT, deleted_at TEXT
+                updated_at TEXT NOT NULL, archived_at TEXT, deleted_at TEXT, content_version INTEGER NOT NULL DEFAULT 0
              );
-             CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL);
+             CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, archived_at TEXT);
              CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT NOT NULL, custom_color TEXT, icon_key TEXT);
              CREATE TABLE note_tags (note_id TEXT NOT NULL, tag_id TEXT NOT NULL, PRIMARY KEY(note_id, tag_id));
              CREATE TABLE note_content_sidecars (
@@ -2189,6 +2277,33 @@ mod tests {
             api_key: None,
             delete_api_key: false,
             enabled: true,
+        }
+    }
+
+    // Hand-built batching fixtures need the source identity normally written by
+    // the chunker; otherwise they correctly look stale to the production guard.
+    fn stamp_fixture_states(conn: &Connection) {
+        let notes = conn
+            .prepare("SELECT id, content_markdown, plain_text FROM notes")
+            .expect("notes")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("note rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("notes");
+        for (id, markdown, plain) in notes {
+            let source = if markdown.trim().is_empty() {
+                plain
+            } else {
+                markdown
+            };
+            conn.execute("INSERT INTO knowledge_chunk_state(note_id,source_hash,chunker_version,chunk_count,status) VALUES(?1,?2,?3,(SELECT COUNT(*) FROM knowledge_chunks WHERE note_id=?1),'current')",
+                params![id, knowledge::source_hash(&source), knowledge::CHUNKER_VERSION]).expect("source identity");
         }
     }
 
@@ -2244,6 +2359,8 @@ mod tests {
             query: query.to_string(),
             profile_id: profile_id.to_string(),
             project_id: None,
+            project_ids: None,
+            include_standalone: false,
             tag_id: None,
             include_archived: false,
             favorites_only: false,
@@ -2464,12 +2581,281 @@ mod tests {
     }
 
     #[test]
+    fn semantic_search_ignores_vectors_when_local_chunks_lag_saved_content() {
+        let mut conn = setup();
+        conn.execute("INSERT INTO notes(id,title,content_markdown,plain_text,updated_at) VALUES('n','Note','Berlin','Berlin','2026-10-01')", []).expect("note");
+        knowledge::sync_note(&mut conn, "n").expect("chunks");
+        let secrets = MemorySecrets::default();
+        let saved = save_profile(&mut conn, &secrets, profile_request()).expect("profile");
+        let profile = get_profile(&conn, &saved.id).expect("profile");
+        update_index(
+            &mut conn,
+            &profile,
+            &secrets,
+            &MockHttp,
+            Arc::new(AtomicBool::new(false)),
+            false,
+        )
+        .expect("index");
+        let request = serde_json::from_value(
+            serde_json::json!({"profileId":saved.id,"query":"server", "candidateLimit":10}),
+        )
+        .expect("request");
+        assert_eq!(
+            semantic_candidates(&conn, &profile, &[1.0, 0.5, 0.25], &request)
+                .expect("current candidates")
+                .len(),
+            1
+        );
+        conn.execute("UPDATE notes SET content_markdown='Munich',plain_text='Munich',content_version=content_version+1 WHERE id='n'", []).expect("save ahead of chunking");
+        assert!(
+            semantic_candidates(&conn, &profile, &[1.0, 0.5, 0.25], &request)
+                .expect("stale excluded")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn http_result_for_changed_content_version_is_never_committed_as_current() {
+        let mut original = setup();
+        original.execute("INSERT INTO notes(id,title,content_markdown,plain_text,updated_at) VALUES('n','Note','Berlin','Berlin','2026-10-01')", []).expect("note");
+        knowledge::sync_note(&mut original, "n").expect("chunks");
+        let secrets = MemorySecrets::default();
+        let saved = save_profile(&mut original, &secrets, profile_request()).expect("profile");
+        let path = std::env::temp_dir().join(format!(
+            "noteflow-embedding-race-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        original
+            .execute("VACUUM INTO ?1", params![path.to_string_lossy()])
+            .expect("isolated file fixture");
+        let mut conn = Connection::open(&path).expect("file connection");
+        let profile = get_profile(&conn, &saved.id).expect("profile");
+        struct MutatingHttp(std::path::PathBuf);
+        impl HttpClient for MutatingHttp {
+            fn send(&self, request: HttpRequest) -> DataResult<HttpResponse> {
+                let other = Connection::open(&self.0)?;
+                other.execute("UPDATE notes SET content_markdown='Munich',plain_text='Munich',content_version=content_version+1 WHERE id='n'", [])?;
+                MockHttp.send(request)
+            }
+        }
+        let result = update_index(
+            &mut conn,
+            &profile,
+            &secrets,
+            &MutatingHttp(path.clone()),
+            Arc::new(AtomicBool::new(false)),
+            false,
+        )
+        .expect("bounded update");
+        assert_eq!(result.indexed_chunks, 0);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM knowledge_chunk_embeddings",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .expect("no old vector"),
+            0
+        );
+        assert!(pending_chunks(&conn, &profile)
+            .expect("old chunks not queued")
+            .is_empty());
+        knowledge::sync_note(&mut conn, "n").expect("new chunks");
+        let next = update_index(
+            &mut conn,
+            &profile,
+            &secrets,
+            &MockHttp,
+            Arc::new(AtomicBool::new(false)),
+            false,
+        )
+        .expect("latest indexed");
+        assert_eq!(next.indexed_chunks, 1);
+        drop(conn);
+        std::fs::remove_file(path).expect("remove own fixture");
+    }
+
+    #[test]
+    fn hybrid_multi_project_union_excludes_standalone_and_archived_project_notes() {
+        let mut conn = setup();
+        conn.execute_batch(
+            "INSERT INTO projects(id,title) VALUES('a','ALPHA'),('b','BETA');
+            INSERT INTO notes(id,title,project_id,content_markdown,plain_text,updated_at) VALUES
+                ('a','A','a','server Berlin','server Berlin','2026-10-01'),
+                ('b','B','b','server Munich','server Munich','2026-10-01'),
+                ('c','C',NULL,'server Hamburg','server Hamburg','2026-10-01');",
+        )
+        .expect("dataset");
+        for id in ["a", "b", "c"] {
+            knowledge::sync_note(&mut conn, id).expect("chunks");
+        }
+        let secrets = MemorySecrets::default();
+        let saved = save_profile(&mut conn, &secrets, profile_request()).expect("profile");
+        let profile = get_profile(&conn, &saved.id).expect("record");
+        update_index(
+            &mut conn,
+            &profile,
+            &secrets,
+            &MockHttp,
+            Arc::new(AtomicBool::new(false)),
+            false,
+        )
+        .expect("vectors");
+        let mut request = search_request(&saved.id, "server");
+        for (scope, expected) in [
+            (None, vec!["a", "b", "c"]),
+            (Some(vec!["a".into()]), vec!["a"]),
+            (Some(vec!["a".into(), "b".into()]), vec!["a", "b"]),
+            (Some(vec!["b".into()]), vec!["b"]),
+        ] {
+            request.project_ids = scope;
+            let mut ids = hybrid_search(&conn, &profile, &secrets, &MockHttp, &request)
+                .expect("retrieval")
+                .into_iter()
+                .map(|source| source.note_id)
+                .collect::<Vec<_>>();
+            ids.sort();
+            ids.dedup();
+            assert_eq!(ids, expected);
+        }
+        conn.execute(
+            "UPDATE projects SET archived_at='2026-10-01' WHERE id='b'",
+            [],
+        )
+        .expect("archived project");
+        assert!(
+            hybrid_search(&conn, &profile, &secrets, &MockHttp, &request)
+                .expect("archive filter")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn standalone_mixed_scopes_filter_all_retrieval_paths_and_follow_project_moves() {
+        let mut conn = setup();
+        conn.execute_batch(
+            "INSERT INTO projects(id,title) VALUES('a','ALPHA'),('b','BETA');
+            INSERT INTO notes(id,title,project_id,content_markdown,plain_text,updated_at) VALUES
+            ('s1','S1',NULL,'standalone alpha token','standalone alpha token','2026-10-01'),
+            ('s2','S2',NULL,'standalone beta token','standalone beta token','2026-10-02'),
+            ('a1','A1','a','project A token','project A token','2026-10-03'),
+            ('b1','B1','b','project B token','project B token','2026-10-04');",
+        )
+        .expect("dataset");
+        for id in ["s1", "s2", "a1", "b1"] {
+            knowledge::sync_note(&mut conn, id).expect("chunks");
+        }
+        let secrets = MemorySecrets::default();
+        let saved = save_profile(&mut conn, &secrets, profile_request()).expect("profile");
+        let profile = get_profile(&conn, &saved.id).expect("record");
+        update_index(
+            &mut conn,
+            &profile,
+            &secrets,
+            &MockHttp,
+            Arc::new(AtomicBool::new(false)),
+            false,
+        )
+        .expect("index");
+        let mut request = search_request(&saved.id, "token");
+        for (ids, standalone, expected) in [
+            (None, false, vec!["a1", "b1", "s1", "s2"]),
+            (Some(vec![]), true, vec!["s1", "s2"]),
+            (Some(vec!["a".into()]), false, vec!["a1"]),
+            (Some(vec!["a".into()]), true, vec!["a1", "s1", "s2"]),
+            (Some(vec!["a".into(), "b".into()]), false, vec!["a1", "b1"]),
+            (Some(vec!["b".into()]), true, vec!["b1", "s1", "s2"]),
+            (Some(vec![]), false, vec![]),
+        ] {
+            request.project_ids = ids;
+            request.include_standalone = standalone;
+            let semantic = semantic_candidates(&conn, &profile, &[1.0, 0.5, 0.25], &request)
+                .expect("semantic");
+            let lexical = lexical_candidates(&conn, "token", &request).expect("lexical");
+            let hybrid =
+                hybrid_search(&conn, &profile, &secrets, &MockHttp, &request).expect("hybrid");
+            for mut actual in [
+                semantic.into_iter().map(|c| c.note_id).collect::<Vec<_>>(),
+                lexical.into_iter().map(|c| c.note_id).collect(),
+                hybrid.into_iter().map(|c| c.note_id).collect(),
+            ] {
+                actual.sort();
+                actual.dedup();
+                assert_eq!(actual, expected);
+            }
+        }
+        request.project_ids = Some(vec![]);
+        request.include_standalone = true;
+        conn.execute("UPDATE notes SET project_id='b' WHERE id='s1'", [])
+            .expect("move to project");
+        knowledge::sync_note(&mut conn, "s1").expect("metadata sync");
+        assert!(
+            hybrid_search(&conn, &profile, &secrets, &MockHttp, &request)
+                .expect("standalone after move")
+                .iter()
+                .all(|s| s.note_id != "s1")
+        );
+        request.project_ids = Some(vec!["b".into()]);
+        request.include_standalone = false;
+        assert!(
+            hybrid_search(&conn, &profile, &secrets, &MockHttp, &request)
+                .expect("project after move")
+                .iter()
+                .any(|s| s.note_id == "s1")
+        );
+        conn.execute("UPDATE notes SET project_id=NULL WHERE id='s1'", [])
+            .expect("remove from project");
+        knowledge::sync_note(&mut conn, "s1").expect("metadata sync");
+        assert!(
+            hybrid_search(&conn, &profile, &secrets, &MockHttp, &request)
+                .expect("project after removal")
+                .iter()
+                .all(|s| s.note_id != "s1")
+        );
+        request.project_ids = Some(vec![]);
+        request.include_standalone = true;
+        assert!(
+            hybrid_search(&conn, &profile, &secrets, &MockHttp, &request)
+                .expect("standalone after removal")
+                .iter()
+                .any(|s| s.note_id == "s1")
+        );
+        struct NoNetwork;
+        impl HttpClient for NoNetwork {
+            fn send(&self, _: HttpRequest) -> DataResult<HttpResponse> {
+                panic!("unchanged content must not be reembedded")
+            }
+        }
+        update_index(
+            &mut conn,
+            &profile,
+            &secrets,
+            &NoNetwork,
+            Arc::new(AtomicBool::new(false)),
+            false,
+        )
+        .expect("no redundant embedding");
+        conn.execute(
+            "UPDATE notes SET archived_at='2026-10-05' WHERE id='s1'",
+            [],
+        )
+        .expect("archive standalone");
+        request.include_archived = true;
+        assert!(lexical_candidates(&conn, "token", &request)
+            .expect("archive excluded")
+            .iter()
+            .all(|s| s.note_id != "s1"));
+    }
+
+    #[test]
     fn batch_indexing_skips_unchanged_and_semantic_search_returns_top_k() {
         let mut conn = setup();
         conn.execute("INSERT INTO notes (id, title, is_favorite, updated_at) VALUES ('n', 'Semantic note', 0, '2026-01-01')", []).expect("note");
         for index in 0..3 {
             conn.execute("INSERT INTO knowledge_chunks (id, note_id, chunk_order, heading_path_json, content_markdown, content_text, content_hash, char_count, estimated_tokens, chunker_version, created_at, updated_at) VALUES (?1, 'n', ?2, '[]', ?3, ?3, ?4, 4, 1, 1, 'now', 'now')", params![format!("c{index}"), index, format!("text {index}"), format!("hash{index}")]).expect("chunk");
         }
+        stamp_fixture_states(&conn);
         let secrets = MemorySecrets::default();
         let saved = save_profile(&mut conn, &secrets, profile_request()).expect("save profile");
         let profile = get_profile(&conn, &saved.id).expect("profile");
@@ -2498,6 +2884,8 @@ mod tests {
             query: "meaning".to_string(),
             profile_id: saved.id,
             project_id: None,
+            project_ids: None,
+            include_standalone: false,
             tag_id: None,
             include_archived: false,
             favorites_only: false,
@@ -2615,6 +3003,7 @@ mod tests {
                 ('c3', 'n3', 0, '[]', 'лунная миссия архив', 'лунная миссия архив', 'h3', 19, 4, 1, 'now', 'now');",
         )
         .expect("retrieval fixtures");
+        stamp_fixture_states(&conn);
         let secrets = MemorySecrets::default();
         let saved = save_profile(&mut conn, &secrets, profile_request()).expect("profile");
         let profile = get_profile(&conn, &saved.id).expect("stored profile");
@@ -2700,6 +3089,7 @@ mod tests {
                 ('c2', 'n', 2, '[]', 'third', 'third', 'h2', 5, 1, 1, 'now', 'now');",
         )
         .expect("durability fixtures");
+        stamp_fixture_states(&conn);
         let secrets = MemorySecrets::default();
         let mut request = profile_request();
         request.batch_size = 1;
@@ -2834,6 +3224,8 @@ mod tests {
                 query: "candidate".to_string(),
                 profile_id: "profile".to_string(),
                 project_id: None,
+                project_ids: None,
+                include_standalone: false,
                 tag_id: None,
                 include_archived: false,
                 favorites_only: false,

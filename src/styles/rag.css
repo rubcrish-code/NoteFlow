@@ -14,11 +14,11 @@
 
 .rag-page .rag-panel-overlay {
   animation: nf-popover-in var(--motion-normal) var(--ease-standard) both;
-  bottom: var(--space-2);
+  bottom: calc(var(--rag-overlay-bottom, 0px) + var(--space-2));
   box-shadow: var(--shadow-popover);
   max-width: calc(100% - 2 * var(--space-2));
   position: absolute;
-  top: var(--space-2);
+  top: calc(var(--rag-overlay-top, 0px) + var(--space-2));
   z-index: 60;
 }
 
@@ -34,6 +34,29 @@
   border-radius: var(--radius-popover);
   left: var(--space-2);
   width: min(300px, calc(100% - 2 * var(--space-2)));
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(0, 1fr) var(--control-height-compact);
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: var(--space-2);
+}
+
+.rag-conversations.rag-panel-overlay .rag-new-chat {
+  margin-bottom: 0;
+}
+
+.rag-conversations.rag-panel-overlay .rag-conversation-head {
+  margin: 0;
+  padding: 0;
+}
+
+.rag-conversations.rag-panel-overlay .rag-conversation-head > span {
+  display: none;
+}
+
+.rag-conversations.rag-panel-overlay .rag-history {
+  grid-column: 1 / -1;
+  min-height: 0;
 }
 
 .rag-conversations {
@@ -123,7 +146,12 @@
 }
 
 .rag-chat-title > div {
+  flex: 1 1 auto;
   gap: 1px;
+}
+
+.rag-chat-title {
+  flex: 1 1 auto;
 }
 
 .rag-chat-title b {
@@ -137,6 +165,9 @@
   font-weight: var(--font-weight-regular);
   letter-spacing: 0;
   text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rag-top-actions .icon-close-btn {
@@ -240,6 +271,8 @@
 
 .rag-main-chat {
   background: var(--surface-panel);
+  container-name: rag-conversation;
+  container-type: inline-size;
 }
 
 .rag-chat-scroll {
@@ -250,6 +283,7 @@
 .rag-thread {
   gap: var(--space-6);
   max-width: 780px;
+  min-width: 0;
 }
 
 .rag-user {
@@ -259,6 +293,7 @@
   font-size: var(--text-md-size);
   max-width: min(78%, 620px);
   padding: var(--space-3) var(--space-4);
+  overflow-wrap: anywhere;
 }
 
 .rag-answer {
@@ -268,7 +303,17 @@
   font-size: var(--text-md-size);
   line-height: 1.68;
   max-width: 100%;
+  min-width: 0;
   padding: 0;
+}
+
+.rag-answer .note-chat-markdown {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
+.rag-answer .note-chat-markdown > * {
+  min-width: 0;
 }
 
 .rag-answer-head {
@@ -419,6 +464,8 @@
   border-bottom: 1px solid var(--border-subtle);
   border-top: 1px solid var(--border-subtle);
   gap: 0;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .rag-source-card {
@@ -427,6 +474,21 @@
   border-bottom: 1px solid var(--border-subtle);
   border-radius: 0;
   padding: var(--space-3) var(--space-2);
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  min-width: 0;
+  width: 100%;
+}
+
+.rag-source-card :is(b, small),
+.rag-source-tags em,
+.rag-source-empty,
+.rag-sources-panel-title {
+  overflow-wrap: anywhere;
+}
+
+.rag-source-tags {
+  min-width: 0;
 }
 
 .rag-source-number {
@@ -583,4 +645,53 @@
 
 .rag-layout-tight .rag-model-status {
   padding-bottom: var(--space-2);
+}
+
+.rag-project-trigger { min-width: 0; max-width: 240px; }
+.rag-project-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rag-project-popover { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); }
+.rag-project-popover > .ghost-btn { justify-content: flex-start; }
+.rag-project-options { min-height: 0; overflow-y: auto; }
+.rag-project-options label {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.rag-project-options label:hover { background: var(--surface-hover); }
+.rag-project-options label:focus-within { box-shadow: inset 0 0 0 2px var(--border-focus); }
+.rag-project-options input { flex: 0 0 auto; accent-color: var(--accent); }
+.rag-project-options span { min-width: 0; overflow-wrap: anywhere; }
+.rag-project-empty { color: var(--text-secondary); font-size: var(--text-sm-size); padding: var(--space-2); }
+
+:is(.rag-layout-compact, .rag-layout-narrow, .rag-layout-tight) .rag-top-actions .rag-project-trigger {
+  width: auto;
+  max-width: 200px;
+  padding-inline: var(--space-3);
+  font-size: var(--text-sm-size);
+}
+
+/* Header adaptation follows the actual conversation, not the whole RAG page. */
+@container rag-conversation (max-width: 640px) {
+  .rag-chat-top {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .rag-chat-title {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
+  .rag-top-actions {
+    justify-content: flex-end;
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .rag-top-actions .rag-project-trigger {
+    flex: 0 1 240px;
+  }
 }

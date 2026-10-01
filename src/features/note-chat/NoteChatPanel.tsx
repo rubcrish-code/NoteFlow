@@ -340,7 +340,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
                 aria-label="Скопировать сообщение"
                 className={`note-chat-copy chat-copy-icon ${copyFeedback?.messageId === message.id ? copyFeedback.status : ""}`}
                 onClick={() => void handleCopyMessage(message)}
-                title={copyTitle(copyFeedback, message.id)}
+                data-tooltip={copyTitle(copyFeedback, message.id)}
                 type="button"
               >
                 <Icon name={copyFeedback?.messageId === message.id && copyFeedback.status === "copied" ? "check" : "copy"} />
@@ -368,7 +368,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
                     aria-label="Скопировать сообщение"
                     className={`note-chat-copy chat-copy-icon ${copyFeedback?.messageId === message.id ? copyFeedback.status : ""}`}
                     onClick={() => void handleCopyMessage(message)}
-                    title={copyTitle(copyFeedback, message.id)}
+                    data-tooltip={copyTitle(copyFeedback, message.id)}
                     type="button"
                   >
                     <Icon name={copyFeedback?.messageId === message.id && copyFeedback.status === "copied" ? "check" : "copy"} />

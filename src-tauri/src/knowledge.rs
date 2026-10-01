@@ -537,7 +537,7 @@ pub fn remove_note_index(conn: &mut Connection, note_id: &str) -> DataResult<()>
     Ok(())
 }
 
-fn mark_index_checked(conn: &Connection, checked_at: &str) -> DataResult<()> {
+pub(crate) fn mark_index_checked(conn: &Connection, checked_at: &str) -> DataResult<()> {
     set_index_timestamps(conn, Some(checked_at), None)
 }
 
@@ -576,7 +576,7 @@ fn set_pending(conn: &Connection, note_id: &str, source_hash: &str) -> DataResul
     Ok(())
 }
 
-fn mark_failed(conn: &Connection, note_id: &str, error_code: &str) -> DataResult<()> {
+pub(crate) fn mark_failed(conn: &Connection, note_id: &str, error_code: &str) -> DataResult<()> {
     let safe_error_code = match error_code {
         "data_loss_guard" => "data_loss_guard",
         _ => "chunking_failed",
@@ -593,7 +593,7 @@ fn mark_failed(conn: &Connection, note_id: &str, error_code: &str) -> DataResult
     Ok(())
 }
 
-fn note_needs_sync(conn: &Connection, note_id: &str) -> DataResult<bool> {
+pub(crate) fn note_needs_sync(conn: &Connection, note_id: &str) -> DataResult<bool> {
     let (content_markdown, plain_text) = conn.query_row(
         "SELECT content_markdown, plain_text FROM notes WHERE id = ?1 AND deleted_at IS NULL",
         params![note_id],
@@ -1196,7 +1196,7 @@ fn effective_markdown<'a>(content_markdown: &'a str, plain_text: &'a str) -> &'a
     }
 }
 
-fn source_hash(markdown: &str) -> String {
+pub(crate) fn source_hash(markdown: &str) -> String {
     stable_hash(&format!(
         "chunker:{CHUNKER_VERSION}\0{}",
         normalize_hash_text(markdown)

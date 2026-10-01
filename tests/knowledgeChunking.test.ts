@@ -28,7 +28,7 @@ describe("knowledge chunking frontend", () => {
   it("maps all knowledge index statuses to clear Russian labels", () => {
     assert.equal(getKnowledgeStatusLabel("current"), "Актуальна");
     assert.equal(getKnowledgeStatusLabel("pending"), "Обновляется");
-    assert.equal(getKnowledgeStatusLabel("needs_update"), "Требует обновления");
+    assert.equal(getKnowledgeStatusLabel("needs_update"), "Ожидает обработки");
     assert.equal(getKnowledgeStatusLabel("failed"), "Требует внимания");
   });
 
@@ -49,13 +49,13 @@ describe("knowledge chunking frontend", () => {
     assert.match(settingsSource, /finally\(\(\) =>|finally\s*\{/);
   });
 
-  it("refetches status after every operation and separates everyday update from repair", () => {
+  it("polls automatic status and retains recovery without an everyday update action", () => {
     assert.match(serviceSource, /lastCheckedAt\?: string \| null/);
     assert.match(serviceSource, /lastIndexedAt\?: string \| null/);
     assert.match(settingsSource, /runKnowledgeIndexOperation\(operation\)[\s\S]*getKnowledgeIndexStatus\(\)/);
-    assert.match(settingsSource, /Обновить базу знаний/);
-    assert.match(settingsSource, /Добавляет новые и изменённые заметки\. Обычно занимает несколько секунд\./);
-    assert.match(settingsSource, /Дополнительные действия/);
+    assert.doesNotMatch(settingsSource, /updateKnowledgeIndex\("reconcile"\)/);
+    assert.match(settingsSource, /Новые и изменённые заметки добавляются автоматически/);
+    assert.match(settingsSource, /Восстановление индекса/);
     assert.match(settingsSource, /Пересоздать базу знаний/);
     assert.match(settingsSource, /Пересоздать базу знаний\?/);
     assert.match(settingsSource, /Сами заметки и их форматирование не изменятся/);
@@ -66,7 +66,7 @@ describe("knowledge chunking frontend", () => {
     const dataSettings = settingsSource.slice(settingsSource.indexOf("function DataSettings"), settingsSource.indexOf("function ShortcutsSettings"));
     assert.doesNotMatch(dataSettings, /contentHash|sourceHash|chunkerVersion|system path|системн\w+ пут|embeddings?/i);
     assert.match(dataSettings, /База знаний/);
-    assert.match(dataSettings, /Смысловые фрагменты/i);
+    assert.match(dataSettings, /Фрагменты заметок для ИИ-поиска/i);
   });
 
   it("uses the shared NoteFlow pill action styling and responsive metrics", () => {

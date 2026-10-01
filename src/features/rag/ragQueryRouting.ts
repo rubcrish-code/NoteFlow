@@ -22,7 +22,7 @@ export async function retrieveForRagQuestion(
   if (!request.profileId || !request.canRetrieve) {
     throw new RagGenerationError(
       "retrieval_unavailable",
-      "Для поиска по содержимому настройте и обновите модель смыслового поиска.",
+      "Подключите модель смыслового поиска и дождитесь автоматической обработки заметок.",
       true,
     );
   }
