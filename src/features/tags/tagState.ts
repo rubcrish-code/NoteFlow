@@ -23,8 +23,12 @@ export function removeTagFromNotes(notes: Note[], tagId: string) {
 
 export function mergeTagInNotes(notes: Note[], sourceTagId: string, targetTag: TagRow) {
   return notes.map((note) => {
-    if (!note.tags.some((tag) => tag.id === sourceTagId)) return note;
+    const sourceIndex = note.tags.findIndex((tag) => tag.id === sourceTagId);
+    if (sourceIndex < 0) return note;
+    const targetIndex = note.tags.findIndex((tag) => tag.id === targetTag.id);
+    const insertIndex = targetIndex < 0 ? sourceIndex : Math.min(sourceIndex, targetIndex);
     const tags = note.tags.filter((tag) => tag.id !== sourceTagId && tag.id !== targetTag.id);
-    return { ...note, tags: [...tags, toNoteTag(targetTag)] };
+    tags.splice(insertIndex, 0, toNoteTag(targetTag));
+    return { ...note, tags };
   });
 }

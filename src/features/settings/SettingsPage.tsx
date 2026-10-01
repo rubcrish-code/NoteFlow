@@ -4,6 +4,7 @@ import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
 import * as dataService from "../../services/dataService";
 import type { BackupPreview, ExportResult, ImportBackupResult } from "../../services/dataService";
 import { Icon } from "../../shared/Icon";
+import { formatDisplayDateTime, formatDisplayTime } from "../../shared/displayDate";
 import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
 import { APP_SHORTCUTS, EDITOR_SHORTCUTS, type ShortcutReference } from "../../shared/appShortcuts";
@@ -1426,10 +1427,7 @@ export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()
     return "Время проверки недоступно";
   }
   const isToday = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  const time = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(date);
-  return isToday
-    ? `сегодня, ${time}`
-    : new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+  return isToday ? `сегодня, ${formatDisplayTime(date)}` : formatDisplayDateTime(date);
 }
 
 function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, onExportCurrentProject, onImportBackup, onImportMarkdown, onToast }: DataSettingsProps) {

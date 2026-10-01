@@ -103,6 +103,7 @@ export function AppShell() {
   const [archiveItems, setArchiveItems] = useState<ArchiveItem[]>([]);
   const [activeNoteId, setActiveNoteId] = useState("");
   const [query, setQuery] = useState("");
+  const [projectScope, setProjectScope] = useState<{ id: string; title: string } | null>(null);
   const [searchResults, setSearchResults] = useState<SearchNoteResult[]>([]);
   const [semanticOpenTarget, setSemanticOpenTarget] = useState<SemanticSearchResult | null>(null);
   const [searchStatus, setSearchStatus] = useState<NoteSearchStatus>("idle");
@@ -154,18 +155,16 @@ export function AppShell() {
     sidebarWidth,
   });
 
-  const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0] ?? null;
+  const scopedNotes = projectScope ? notes.filter((note) => note.projectId === projectScope.id) : notes;
+  const activeNote = scopedNotes.find((note) => note.id === activeNoteId) ?? scopedNotes[0] ?? null;
 
   useEffect(() => {
     notes.forEach((note) => noteContentVersionsRef.current.set(note.id, note.contentVersion));
   }, [notes]);
 
   const projectOptions = useMemo(() => {
-    const projectNames = new Set<string>(projects.map((project) => project.title));
-    notes.forEach((note) => projectNames.add(note.project));
-    projectNames.add("Входящие");
-    return Array.from(projectNames);
-  }, [notes, projects]);
+    return projects.filter((project) => !project.archivedAt).map((project) => project.title);
+  }, [projects]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -267,7 +266,7 @@ export function AppShell() {
     setSearchStatus("searching");
     const timeoutId = window.setTimeout(() => {
       void searchService
-        .searchNotes({ includeArchived: includeArchivedSearch, query: trimmedQuery })
+        .searchNotes({ includeArchived: includeArchivedSearch, projectId: projectScope?.id, query: trimmedQuery })
         .then((results) => {
           if (searchRequestIdRef.current !== requestId) {
             return;
@@ -286,7 +285,7 @@ export function AppShell() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [includeArchivedSearch, isDataLoading, query, searchRevision]);
+  }, [includeArchivedSearch, isDataLoading, projectScope?.id, query, searchRevision]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -692,6 +691,7 @@ export function AppShell() {
         setSettingsTarget(undefined);
       }
       activateSection(section);
+      if (section === "notes") setProjectScope(null);
       if (section !== "notes") {
         setIsFocusMode(false);
         setIsChatOpen(false);
@@ -703,6 +703,7 @@ export function AppShell() {
     void (async () => {
       if (!await tryFlushPendingSave()) return;
       activateSection("notes");
+      setProjectScope(null);
       setIsFocusMode(false);
       setIsChatOpen(false);
       setIsNewNoteModalOpen(true);
@@ -748,6 +749,7 @@ export function AppShell() {
         return false;
       }
     }
+    if (projectScope && notes.find((note) => note.id === noteId)?.projectId !== projectScope.id) setProjectScope(null);
     activateSection("notes");
     setActiveNoteId(noteId);
     setIsFocusMode(false);
@@ -801,15 +803,28 @@ export function AppShell() {
       .catch((error) => showToast(`Не удалось обновить закрепление: ${String(error)}`));
   }
 
-  function moveNote(noteId: string, project: string) {
-    void dataService
-      .moveNoteToProject(noteId, project)
-      .then(async (updatedNote) => {
-        replaceNote(updatedNote);
-        await refreshSecondaryData();
-        showToast(`Заметка перемещена в «${project}»`);
-      })
-      .catch((error) => showToast(`Не удалось переместить заметку: ${String(error)}`));
+  async function moveNote(noteId: string, project: string) {
+    const updatedNote = await dataService.moveNoteToProject(noteId, project);
+    replaceNote(updatedNote);
+    await refreshSecondaryData();
+    showToast(`Заметка добавлена в «${project}»`);
+  }
+
+  async function createProjectForNote(noteId: string, title: string) {
+    const project = await createProject(title, "");
+    try {
+      await moveNote(noteId, project.title);
+    } catch {
+      showToast("Проект создан, но заметка не добавлена. Повторите добавление.");
+      throw new Error("Проект создан, но заметка не добавлена. Повторите добавление.");
+    }
+  }
+
+  async function removeNoteFromProject(noteId: string) {
+    const updatedNote = await dataService.removeNoteFromProject(noteId);
+    replaceNote(updatedNote);
+    await refreshSecondaryData();
+    showToast("Заметка убрана из проекта");
   }
 
   function removeNote(noteId: string, mode: "archive" | "delete") {
@@ -825,7 +840,7 @@ export function AppShell() {
         setSearchRevision((revision) => revision + 1);
         showToast(mode === "archive" ? "Заметка архивирована" : "Заметка удалена");
       })
-      .catch((error) => showToast(`Не удалось обновить заметку: ${String(error)}`));
+      .catch(() => showToast(mode === "archive" ? "Не удалось архивировать заметку." : "Не удалось удалить заметку."));
   }
 
   function exportNoteMarkdown(noteId: string) {
@@ -885,6 +900,7 @@ export function AppShell() {
   function updateProject(projectId: string, title: string, description: string) {
     return dataService.updateProject(projectId, title, description).then((project) => {
       setProjects((currentProjects) => currentProjects.map((item) => item.id === project.id ? project : item));
+      setProjectScope((current) => current?.id === project.id ? { id: project.id, title: project.title } : current);
       setNotes((currentNotes) => currentNotes.map((note) => note.projectId === project.id ? { ...note, project: project.title } : note));
       setSearchRevision((revision) => revision + 1);
       showToast("Проект обновлён");
@@ -893,10 +909,15 @@ export function AppShell() {
   }
 
   async function archiveProject(projectId: string) {
+    if (!await tryFlushPendingSave()) throw new Error("Не удалось сохранить заметку");
     await dataService.archiveProject(projectId);
+    const loadedNotes = await dataService.listNotes("");
+    setNotes(loadedNotes);
+    setProjectScope((current) => current?.id === projectId ? null : current);
+    setActiveNoteId((currentId) => loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? "");
     await refreshSecondaryData();
     setSearchRevision((revision) => revision + 1);
-    showToast("Проект архивирован. Заметки остались на месте");
+    showToast("Проект и его активные заметки архивированы");
   }
 
   async function persistTag(value: TagEditorValue) {
@@ -927,6 +948,15 @@ export function AppShell() {
     } catch (error) {
       showToast(`Не удалось изменить теги заметки: ${String(error)}`);
       throw error;
+    }
+  }
+
+  async function makeNoteTagPrimary(noteId: string, tagId: string) {
+    try {
+      replaceNote(await dataService.makeNoteTagPrimary(noteId, tagId));
+    } catch {
+      showToast("Не удалось изменить порядок тегов.");
+      throw new Error("Не удалось изменить порядок тегов.");
     }
   }
 
@@ -979,42 +1009,42 @@ export function AppShell() {
     void (async () => {
       if (!await tryFlushPendingSave()) return;
       activateSection("notes");
+      setProjectScope(null);
       setQuery(tagName);
       showToast(`Открыты заметки с тегом «${tagName}»`);
     })();
   }
 
-  function openProjectNotes(projectTitle: string) {
+  function openProjectNotes(projectId: string) {
     void (async () => {
       if (!await tryFlushPendingSave()) return;
+      const project = projects.find((item) => item.id === projectId);
+      if (!project) return;
       activateSection("notes");
-      setQuery(projectTitle);
-      showToast(`Открыт проект «${projectTitle}»`);
+      setProjectScope({ id: project.id, title: project.title });
+      setActiveNoteId(notes.find((note) => note.projectId === project.id)?.id ?? "");
+      setQuery("");
     })();
   }
 
-  function restoreArchiveItem(item: ArchiveItem) {
-    void dataService
-      .restoreArchiveItem(item)
-      .then(async () => {
-        setArchiveItems(await dataService.listArchive());
-        setNotes(await dataService.listNotes(""));
-        setSearchRevision((revision) => revision + 1);
-        await refreshSecondaryData();
-        showToast(item.kind === "Проект" ? "Проект восстановлен" : "Заметка восстановлена");
-      })
-      .catch((error) => showToast(`Не удалось восстановить элемент: ${String(error)}`));
+  async function restoreArchiveItem(item: ArchiveItem) {
+    await dataService.restoreArchiveItem(item);
+    const loadedNotes = await dataService.listNotes("");
+    setNotes(loadedNotes);
+    setActiveNoteId((currentId) => loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? "");
+    await refreshSecondaryData();
+    setSearchRevision((revision) => revision + 1);
+    showToast(item.kind === "Проект" ? "Проект восстановлен" : "Заметка восстановлена");
   }
 
-  function deleteArchiveItem(item: ArchiveItem) {
-    void dataService
-      .deleteArchiveItem(item)
-      .then(async () => {
-        setArchiveItems(await dataService.listArchive());
-        await refreshSecondaryData();
-        showToast(item.kind === "Проект" ? "Проект удалён" : "Заметка удалена окончательно");
-      })
-      .catch((error) => showToast(`Не удалось удалить элемент: ${String(error)}`));
+  async function deleteArchiveItem(item: ArchiveItem) {
+    await dataService.deleteArchiveItem(item);
+    const loadedNotes = await dataService.listNotes("");
+    setNotes(loadedNotes);
+    setActiveNoteId((currentId) => loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? "");
+    await refreshSecondaryData();
+    setSearchRevision((revision) => revision + 1);
+    showToast(item.kind === "Проект" ? "Проект и его заметки удалены" : "Заметка удалена");
   }
 
   function exportCurrentNoteZip() {
@@ -1069,6 +1099,7 @@ export function AppShell() {
     const importedNotes = await dataService.importMarkdown(notesToImport);
     setNotes((currentNotes) => sortNotesForDisplay([...importedNotes, ...currentNotes]));
     setActiveNoteId(importedNotes[0]?.id ?? activeNoteId);
+    setProjectScope(null);
     setQuery("");
     activateSection("notes");
     void refreshSecondaryData().catch(() => showToast("Импорт завершён, но список проектов обновится после перезапуска"));
@@ -1297,12 +1328,14 @@ export function AppShell() {
             <NoteListPanel
               activeNoteId={activeNote?.id ?? ""}
               includeArchivedSearch={includeArchivedSearch}
-              notes={notes}
+              notes={scopedNotes}
               onQueryChange={setQuery}
               onSelectNote={(noteId) => void openNote(noteId)}
               onToggleArchivedSearch={() => setIncludeArchivedSearch((includeArchived) => !includeArchived)}
               onTogglePin={toggleNotePin}
               projects={projects}
+              projectScope={projectScope}
+              onClearProjectScope={() => setProjectScope(null)}
               query={query}
               searchResults={searchResults}
               searchStatus={searchStatus}
@@ -1342,6 +1375,10 @@ export function AppShell() {
               })
             }
             onMoveNote={moveNote}
+            onCreateProjectForNote={createProjectForNote}
+            onRemoveNoteFromProject={removeNoteFromProject}
+            onMakeNoteTagPrimary={makeNoteTagPrimary}
+            onImportMarkdown={importMarkdown}
             onOpenChat={() => setIsChatOpen(true)}
             onOpenAttachment={dataService.openAttachment}
             onOpenNote={(noteId) => void openNote(noteId)}

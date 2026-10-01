@@ -254,6 +254,19 @@ pub struct ArchiveItemDto {
     pub title: String,
     pub archived_at: String,
     pub kind: String,
+    pub note_count: Option<i64>,
+    pub tag_color: Option<String>,
+    pub tag_custom_color: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedProjectNoteDto {
+    pub id: String,
+    pub title: String,
+    pub archived_at: Option<String>,
+    pub tag_color: Option<String>,
+    pub tag_custom_color: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -808,6 +821,8 @@ struct NoteBackup {
     created_at: String,
     updated_at: String,
     archived_at: Option<String>,
+    #[serde(default)]
+    archived_by_project_id: Option<String>,
     deleted_at: Option<String>,
 }
 
@@ -849,6 +864,8 @@ struct NoteRevisionSidecarBackup {
 struct NoteTagBackup {
     note_id: String,
     tag_id: String,
+    #[serde(default)]
+    position: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1772,7 +1789,7 @@ impl DataStore {
              FROM tags t
              INNER JOIN note_tags nt ON nt.tag_id = t.id
              WHERE nt.note_id = ?1
-             ORDER BY lower(t.name)",
+             ORDER BY nt.position, lower(t.name), t.id",
         )?;
         let rows = statement.query_map(params![note_id], |row| {
             Ok(NoteTagDto {
@@ -1851,35 +1868,24 @@ impl DataStore {
         validate_iso_date(&request.note_date)?;
         let note_id = Uuid::new_v4().to_string();
         let content_json = empty_document();
-        let default_tag_id =
-            ensure_tag_on(transaction, "новая", "blue").map_err(|_| DataError::Transaction)?;
-        let project_id = ensure_project_on(transaction, "Входящие", "Быстрые заметки без проекта")
-            .map_err(|_| DataError::Transaction)?;
 
         transaction
             .execute(
                 "INSERT INTO notes (
                     id, title, note_date, content_json, content_markdown, content_html, plain_text,
                     project_id, is_favorite, icon, created_at, updated_at, revision_checkpoint_at
-                 ) VALUES (?1, ?2, ?3, ?4, '', '', '', ?5, 0, 'doc', ?6, ?6, ?6)",
+                 ) VALUES (?1, ?2, ?3, ?4, '', '', '', NULL, 0, 'doc', ?5, ?5, ?5)",
                 params![
                     note_id,
                     title,
                     request.note_date,
                     content_json.to_string(),
-                    project_id,
                     now
                 ],
             )
             .map_err(|_| DataError::Transaction)?;
         Self::persist_note_content_sidecars(transaction, &note_id, &content_json, &[], now)
             .map_err(|_| DataError::Sidecar)?;
-        transaction
-            .execute(
-                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
-                params![note_id, default_tag_id],
-            )
-            .map_err(|_| DataError::Transaction)?;
         Ok(note_id)
     }
 
@@ -2144,7 +2150,8 @@ impl DataStore {
         }
         let changed = if request.assigned {
             transaction.execute(
-                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id, position)
+                 VALUES (?1, ?2, (SELECT COALESCE(MAX(position) + 1, 0) FROM note_tags WHERE note_id = ?1))",
                 params![request.note_id, request.tag_id],
             )?
         } else {
@@ -2164,6 +2171,27 @@ impl DataStore {
             knowledge::sync_note_best_effort(&mut self.conn, &request.note_id);
         }
         self.get_note(&request.note_id)
+    }
+
+    fn make_note_tag_primary(&mut self, note_id: &str, tag_id: &str) -> DataResult<NoteDto> {
+        let transaction = self.conn.transaction()?;
+        let mut tag_ids = transaction
+            .prepare("SELECT tag_id FROM note_tags WHERE note_id = ?1 ORDER BY position, tag_id")?
+            .query_map(params![note_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let Some(index) = tag_ids.iter().position(|id| id == tag_id) else {
+            return Err(DataError::NotFound("Тег заметки не найден".to_string()));
+        };
+        let primary = tag_ids.remove(index);
+        tag_ids.insert(0, primary);
+        for (position, id) in tag_ids.iter().enumerate() {
+            transaction.execute(
+                "UPDATE note_tags SET position = ?1 WHERE note_id = ?2 AND tag_id = ?3",
+                params![position as i64, note_id, id],
+            )?;
+        }
+        transaction.commit()?;
+        self.get_note(note_id)
     }
 
     fn duplicate_note(&mut self, note_id: &str) -> DataResult<NoteDto> {
@@ -2319,8 +2347,8 @@ impl DataStore {
         }
         transaction
             .execute(
-                "INSERT OR IGNORE INTO note_tags (note_id, tag_id)
-                 SELECT ?1, tag_id FROM note_tags WHERE note_id = ?2",
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id, position)
+                 SELECT ?1, tag_id, position FROM note_tags WHERE note_id = ?2",
                 params![new_id, note_id],
             )
             .map_err(|_| DataError::Transaction)?;
@@ -2402,7 +2430,15 @@ impl DataStore {
 
     fn move_note_to_project(&mut self, request: MoveNoteRequest) -> DataResult<NoteDto> {
         let project_title = normalize_required_text(&request.project_title, "Название проекта")?;
-        let project_id = self.ensure_project(&project_title, "Проект заметок")?;
+        let project_id = self
+            .conn
+            .query_row(
+                "SELECT id FROM projects WHERE title = ?1 COLLATE NOCASE AND archived_at IS NULL",
+                params![project_title],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| DataError::NotFound("Активный проект не найден".to_string()))?;
         self.conn.execute(
             "UPDATE notes SET project_id = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
             params![project_id, now_iso(), request.note_id],
@@ -2410,9 +2446,22 @@ impl DataStore {
         self.get_note(&request.note_id)
     }
 
+    fn remove_note_from_project(&mut self, note_id: &str) -> DataResult<NoteDto> {
+        let changed = self.conn.execute(
+            "UPDATE notes SET project_id = NULL, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL AND archived_at IS NULL",
+            params![now_iso(), note_id],
+        )?;
+        if changed == 0 {
+            return Err(DataError::NotFound("Заметка не найдена".to_string()));
+        }
+        self.get_note(note_id)
+    }
+
     fn archive_note(&mut self, note_id: &str) -> DataResult<()> {
         self.conn.execute(
-            "UPDATE notes SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            "UPDATE notes SET archived_at = ?1, archived_by_project_id = NULL, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL AND archived_at IS NULL",
             params![now_iso(), note_id],
         )?;
         Ok(())
@@ -2420,7 +2469,8 @@ impl DataStore {
 
     fn restore_note(&mut self, note_id: &str) -> DataResult<NoteDto> {
         self.conn.execute(
-            "UPDATE notes SET archived_at = NULL, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            "UPDATE notes SET archived_at = NULL, archived_by_project_id = NULL, updated_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL",
             params![now_iso(), note_id],
         )?;
         knowledge::sync_note_best_effort(&mut self.conn, note_id);
@@ -2440,17 +2490,22 @@ impl DataStore {
 
     fn delete_note_permanently(&mut self, note_id: &str) -> DataResult<()> {
         let transaction = self.conn.transaction()?;
-        transaction.execute("DELETE FROM notes WHERE id = ?1", params![note_id])?;
-        transaction.execute("DELETE FROM notes_fts WHERE note_id = ?1", params![note_id])?;
+        Self::delete_note_rows(&transaction, note_id)?;
         transaction.commit()?;
         let _ = assets::collect_garbage(&mut self.conn, &self.base_dir);
+        Ok(())
+    }
+
+    fn delete_note_rows(transaction: &Transaction<'_>, note_id: &str) -> DataResult<()> {
+        transaction.execute("DELETE FROM notes WHERE id = ?1", params![note_id])?;
+        transaction.execute("DELETE FROM notes_fts WHERE note_id = ?1", params![note_id])?;
         Ok(())
     }
 
     fn list_projects(&self, include_archived: bool) -> DataResult<Vec<ProjectCardDto>> {
         let mut statement = self.conn.prepare(
             "SELECT p.id, p.title, p.description, p.color, p.icon_key, p.status, p.archived_at,
-                    COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND n.archived_at IS NULL THEN n.id END) AS note_count,
+                    COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND (p.archived_at IS NOT NULL OR n.archived_at IS NULL) THEN n.id END) AS note_count,
                     COUNT(DISTINCT a.id) AS file_count
              FROM projects p
              LEFT JOIN notes n ON n.project_id = p.id
@@ -2515,14 +2570,22 @@ impl DataStore {
     }
 
     fn archive_project(&mut self, project_id: &str) -> DataResult<()> {
-        let updated = self.conn.execute(
+        let transaction = self.conn.transaction()?;
+        let now = now_iso();
+        let updated = transaction.execute(
             "UPDATE projects SET archived_at = ?1, status = 'archived', updated_at = ?1
              WHERE id = ?2 AND archived_at IS NULL",
-            params![now_iso(), project_id],
+            params![now, project_id],
         )?;
         if updated == 0 {
             return Err(DataError::NotFound("Проект не найден".to_string()));
         }
+        transaction.execute(
+            "UPDATE notes SET archived_at = ?1, archived_by_project_id = ?2, updated_at = ?1
+             WHERE project_id = ?2 AND archived_at IS NULL AND deleted_at IS NULL",
+            params![now, project_id],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -2567,8 +2630,6 @@ impl DataStore {
         let now = now_iso();
         let note_date = Utc::now().format("%Y-%m-%d").to_string();
         let transaction = self.conn.transaction()?;
-        let project_id =
-            ensure_project_on(&transaction, "Входящие", "Быстрые заметки без проекта")?;
         let mut ids = Vec::with_capacity(request.notes.len());
         for note in &request.notes {
             let id = Uuid::new_v4().to_string();
@@ -2576,7 +2637,7 @@ impl DataStore {
                 "INSERT INTO notes (
                     id, title, note_date, content_json, content_markdown, content_html, plain_text,
                     project_id, is_favorite, icon, created_at, updated_at, revision_checkpoint_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 'doc', ?9, ?9, ?9)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0, 'doc', ?8, ?8, ?8)",
                 params![
                     id,
                     note.title.trim(),
@@ -2585,7 +2646,6 @@ impl DataStore {
                     note.content_markdown,
                     note.content_html,
                     note.plain_text,
-                    project_id,
                     now
                 ],
             )?;
@@ -2726,8 +2786,18 @@ impl DataStore {
 
         let transaction = self.conn.transaction()?;
         transaction.execute(
-            "INSERT OR IGNORE INTO note_tags (note_id, tag_id)
-             SELECT note_id, ?1 FROM note_tags WHERE tag_id = ?2",
+            "UPDATE note_tags SET position = MIN(position, (
+                SELECT source.position FROM note_tags source
+                WHERE source.note_id = note_tags.note_id AND source.tag_id = ?1
+             ))
+             WHERE tag_id = ?2 AND note_id IN (
+                SELECT note_id FROM note_tags WHERE tag_id = ?1
+             )",
+            params![request.source_tag_id, request.target_tag_id],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO note_tags (note_id, tag_id, position)
+             SELECT note_id, ?1, position FROM note_tags WHERE tag_id = ?2",
             params![request.target_tag_id, request.source_tag_id],
         )?;
         transaction.execute(
@@ -2738,45 +2808,53 @@ impl DataStore {
         self.list_tags(None)
     }
 
-    fn ensure_project(&mut self, title: &str, description: &str) -> DataResult<String> {
-        ensure_project_on(&self.conn, title, description)
-    }
-
     fn list_archive(&self, query: Option<String>) -> DataResult<Vec<ArchiveItemDto>> {
         let query = query.unwrap_or_default().trim().to_lowercase();
         let like_query = format!("%{query}%");
         let mut items = Vec::new();
 
         let mut note_statement = self.conn.prepare(
-            "SELECT id, title, archived_at
-             FROM notes
-             WHERE archived_at IS NOT NULL AND deleted_at IS NULL
-               AND (?1 = '' OR lower(title) LIKE ?2)
-             ORDER BY archived_at DESC",
+            "SELECT n.id, n.title, n.archived_at,
+                    (SELECT t.color FROM note_tags nt JOIN tags t ON t.id = nt.tag_id
+                     WHERE nt.note_id = n.id ORDER BY nt.position, lower(t.name), t.id LIMIT 1),
+                    (SELECT t.custom_color FROM note_tags nt JOIN tags t ON t.id = nt.tag_id
+                     WHERE nt.note_id = n.id ORDER BY nt.position, lower(t.name), t.id LIMIT 1)
+             FROM notes n LEFT JOIN projects p ON p.id = n.project_id
+             WHERE n.archived_at IS NOT NULL AND n.deleted_at IS NULL
+               AND p.archived_at IS NULL
+               AND (?1 = '' OR lower(n.title) LIKE ?2)
+             ORDER BY n.archived_at DESC",
         )?;
         let note_rows = note_statement.query_map(params![query, like_query], |row| {
             Ok(ArchiveItemDto {
                 id: row.get(0)?,
                 title: row.get(1)?,
-                archived_at: format_archived_at(row.get::<_, String>(2)?),
+                archived_at: row.get(2)?,
                 kind: "Заметка".to_string(),
+                note_count: None,
+                tag_color: row.get(3)?,
+                tag_custom_color: row.get(4)?,
             })
         })?;
         items.extend(note_rows.collect::<Result<Vec<_>, _>>()?);
 
         let mut project_statement = self.conn.prepare(
-            "SELECT id, title, archived_at
-             FROM projects
-             WHERE archived_at IS NOT NULL
-               AND (?1 = '' OR lower(title) LIKE ?2)
-             ORDER BY archived_at DESC",
+            "SELECT p.id, p.title, p.archived_at,
+                    (SELECT COUNT(*) FROM notes n WHERE n.project_id = p.id AND n.deleted_at IS NULL)
+             FROM projects p
+             WHERE p.archived_at IS NOT NULL
+               AND (?1 = '' OR lower(p.title) LIKE ?2)
+             ORDER BY p.archived_at DESC",
         )?;
         let project_rows = project_statement.query_map(params![query, like_query], |row| {
             Ok(ArchiveItemDto {
                 id: row.get(0)?,
                 title: row.get(1)?,
-                archived_at: format_archived_at(row.get::<_, String>(2)?),
+                archived_at: row.get(2)?,
                 kind: "Проект".to_string(),
+                note_count: Some(row.get(3)?),
+                tag_color: None,
+                tag_custom_color: None,
             })
         })?;
         items.extend(project_rows.collect::<Result<Vec<_>, _>>()?);
@@ -2784,12 +2862,63 @@ impl DataStore {
         Ok(items)
     }
 
+    fn list_archived_project_notes(
+        &self,
+        project_id: &str,
+    ) -> DataResult<Vec<ArchivedProjectNoteDto>> {
+        let archived: bool = self
+            .conn
+            .query_row(
+                "SELECT archived_at IS NOT NULL FROM projects WHERE id = ?1",
+                params![project_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| DataError::NotFound("Проект не найден".to_string()))?;
+        if !archived {
+            return Err(DataError::InvalidInput(
+                "Проект не находится в архиве".to_string(),
+            ));
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT n.id, n.title, n.archived_at,
+                    (SELECT t.color FROM note_tags nt JOIN tags t ON t.id = nt.tag_id
+                     WHERE nt.note_id = n.id ORDER BY nt.position, lower(t.name), t.id LIMIT 1),
+                    (SELECT t.custom_color FROM note_tags nt JOIN tags t ON t.id = nt.tag_id
+                     WHERE nt.note_id = n.id ORDER BY nt.position, lower(t.name), t.id LIMIT 1)
+             FROM notes n WHERE n.project_id = ?1 AND n.deleted_at IS NULL
+             ORDER BY n.updated_at DESC, n.id",
+        )?;
+        let rows = statement.query_map(params![project_id], |row| {
+            Ok(ArchivedProjectNoteDto {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                archived_at: row.get(2)?,
+                tag_color: row.get(3)?,
+                tag_custom_color: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     fn restore_archive_item(&mut self, item_id: &str, kind: &str) -> DataResult<()> {
         if kind == "Проект" {
-            self.conn.execute(
-                "UPDATE projects SET archived_at = NULL, status = 'active', updated_at = ?1 WHERE id = ?2",
-                params![now_iso(), item_id],
+            let transaction = self.conn.transaction()?;
+            let now = now_iso();
+            let changed = transaction.execute(
+                "UPDATE projects SET archived_at = NULL, status = 'active', updated_at = ?1
+                 WHERE id = ?2 AND archived_at IS NOT NULL",
+                params![now, item_id],
             )?;
+            if changed == 0 {
+                return Err(DataError::NotFound("Проект не найден в архиве".to_string()));
+            }
+            transaction.execute(
+                "UPDATE notes SET archived_at = NULL, archived_by_project_id = NULL, updated_at = ?1
+                 WHERE project_id = ?2 AND archived_by_project_id = ?2 AND deleted_at IS NULL",
+                params![now, item_id],
+            )?;
+            transaction.commit()?;
         } else {
             self.conn.execute(
                 "UPDATE notes SET archived_at = NULL, updated_at = ?1 WHERE id = ?2",
@@ -2801,8 +2930,38 @@ impl DataStore {
 
     fn delete_archive_item(&mut self, item_id: &str, kind: &str) -> DataResult<()> {
         if kind == "Проект" {
-            self.conn
-                .execute("DELETE FROM projects WHERE id = ?1", params![item_id])?;
+            let transaction = self.conn.transaction()?;
+            let project_exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1 AND archived_at IS NOT NULL)",
+                params![item_id],
+                |row| row.get(0),
+            )?;
+            if !project_exists {
+                return Err(DataError::NotFound("Проект не найден в архиве".to_string()));
+            }
+            let note_ids = {
+                let mut statement = transaction
+                    .prepare("SELECT id FROM notes WHERE project_id = ?1 ORDER BY id")?;
+                let ids = statement
+                    .query_map(params![item_id], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                ids
+            };
+            for note_id in &note_ids {
+                Self::delete_note_rows(&transaction, note_id)?;
+            }
+            if !note_ids.is_empty() {
+                knowledge::mark_index_changed(&transaction, &now_iso())?;
+            }
+            let changed = transaction.execute(
+                "DELETE FROM projects WHERE id = ?1 AND archived_at IS NOT NULL",
+                params![item_id],
+            )?;
+            if changed == 0 {
+                return Err(DataError::NotFound("Проект не найден в архиве".to_string()));
+            }
+            transaction.commit()?;
+            let _ = assets::collect_garbage(&mut self.conn, &self.base_dir);
         } else {
             self.delete_note_permanently(item_id)?;
         }
@@ -3350,8 +3509,8 @@ impl DataStore {
                 "INSERT INTO notes (
                     id, title, note_date, content_json, content_markdown, content_html, plain_text,
                     project_id, is_favorite, is_pinned, pinned_at, icon, icon_key, created_at, updated_at,
-                    archived_at, deleted_at, content_version, revision_checkpoint_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                    archived_at, deleted_at, content_version, revision_checkpoint_at, archived_by_project_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 params![
                     note.id,
                     note.title,
@@ -3371,10 +3530,19 @@ impl DataStore {
                     note.archived_at,
                     note.deleted_at,
                     imported_content_version,
-                    &restore_now
+                    &restore_now,
+                    note.archived_by_project_id
                 ],
             )?;
         }
+        transaction.execute(
+            "UPDATE notes SET archived_at = (
+                SELECT archived_at FROM projects WHERE projects.id = notes.project_id
+             ), archived_by_project_id = project_id
+             WHERE archived_at IS NULL AND deleted_at IS NULL
+               AND project_id IN (SELECT id FROM projects WHERE archived_at IS NOT NULL)",
+            [],
+        )?;
         for revision in &backup_data.note_revisions {
             let revision_kind =
                 revisions::imported_revision_kind(revision.revision_kind.as_deref());
@@ -3429,8 +3597,12 @@ impl DataStore {
         }
         for note_tag in &backup_data.note_tags {
             transaction.execute(
-                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
-                params![note_tag.note_id, note_tag.tag_id],
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id, position) VALUES (?1, ?2, ?3)",
+                params![
+                    note_tag.note_id,
+                    note_tag.tag_id,
+                    note_tag.position.unwrap_or(0)
+                ],
             )?;
         }
         for blob in &backup_data.asset_blobs {
@@ -3718,7 +3890,7 @@ impl DataStore {
         let mut statement = self.conn.prepare(
             "SELECT id, title, note_date, content_json, content_markdown, content_html, plain_text,
                     project_id, is_favorite, is_pinned, pinned_at, icon, icon_key, created_at, updated_at,
-                    archived_at, deleted_at, content_version
+                    archived_at, deleted_at, content_version, archived_by_project_id
              FROM notes
              ORDER BY is_pinned DESC, pinned_at DESC, updated_at DESC",
         )?;
@@ -3744,6 +3916,7 @@ impl DataStore {
                 updated_at: row.get(14)?,
                 archived_at: row.get(15)?,
                 deleted_at: row.get(16)?,
+                archived_by_project_id: row.get(18)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -3814,13 +3987,14 @@ impl DataStore {
     }
 
     fn collect_note_tags_backup(&self) -> DataResult<Vec<NoteTagBackup>> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT note_id, tag_id FROM note_tags ORDER BY note_id, tag_id")?;
+        let mut statement = self.conn.prepare(
+            "SELECT note_id, tag_id, position FROM note_tags ORDER BY note_id, position, tag_id",
+        )?;
         let rows = statement.query_map([], |row| {
             Ok(NoteTagBackup {
                 note_id: row.get(0)?,
                 tag_id: row.get(1)?,
+                position: Some(row.get(2)?),
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -4124,54 +4298,6 @@ fn rewrite_attachment_ids_in_json(value: &mut Value, replacements: &HashMap<Stri
     }
 }
 
-fn ensure_project_on(
-    connection: &Connection,
-    title: &str,
-    description: &str,
-) -> DataResult<String> {
-    if let Some(project_id) = connection
-        .query_row(
-            "SELECT id FROM projects WHERE lower(title) = lower(?1) LIMIT 1",
-            params![title],
-            |row| row.get(0),
-        )
-        .optional()?
-    {
-        return Ok(project_id);
-    }
-
-    let project_id = Uuid::new_v4().to_string();
-    let now = now_iso();
-    connection.execute(
-        "INSERT INTO projects (id, title, description, color, icon_key, status, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'blue', 'project', 'active', ?4, ?4)",
-        params![project_id, title, description, now],
-    )?;
-    Ok(project_id)
-}
-
-fn ensure_tag_on(connection: &Connection, name: &str, color: &str) -> DataResult<String> {
-    if let Some(tag_id) = connection
-        .query_row(
-            "SELECT id FROM tags WHERE lower(name) = lower(?1) LIMIT 1",
-            params![name],
-            |row| row.get(0),
-        )
-        .optional()?
-    {
-        return Ok(tag_id);
-    }
-
-    let tag_id = Uuid::new_v4().to_string();
-    let now = now_iso();
-    let icon_key = infer_tag_icon_key(name);
-    connection.execute(
-        "INSERT INTO tags (id, name, color, icon_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-        params![tag_id, name, normalize_tag_color(color), icon_key, now],
-    )?;
-    Ok(tag_id)
-}
-
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -4445,6 +4571,30 @@ fn migrations() -> Vec<Migration> {
             version: 14,
             name: "canonical_asset_storage",
             sql: assets::ASSET_MIGRATION_SQL,
+        },
+        Migration {
+            version: 15,
+            name: "project_archive_and_tag_order",
+            sql: "
+                ALTER TABLE notes ADD COLUMN archived_by_project_id TEXT;
+                ALTER TABLE note_tags ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+                UPDATE note_tags SET position = (
+                    SELECT COUNT(*) FROM note_tags earlier
+                    JOIN tags earlier_tag ON earlier_tag.id = earlier.tag_id
+                    JOIN tags current_tag ON current_tag.id = note_tags.tag_id
+                    WHERE earlier.note_id = note_tags.note_id
+                      AND (lower(earlier_tag.name) < lower(current_tag.name)
+                           OR (lower(earlier_tag.name) = lower(current_tag.name)
+                               AND earlier.tag_id < note_tags.tag_id))
+                );
+                CREATE INDEX IF NOT EXISTS idx_note_tags_order ON note_tags(note_id, position);
+                CREATE INDEX IF NOT EXISTS idx_notes_archived_by_project ON notes(archived_by_project_id);
+                UPDATE notes SET archived_at = (
+                        SELECT archived_at FROM projects WHERE projects.id = notes.project_id
+                    ), archived_by_project_id = project_id
+                WHERE archived_at IS NULL AND deleted_at IS NULL
+                  AND project_id IN (SELECT id FROM projects WHERE archived_at IS NOT NULL);
+            ",
         },
     ]
 }
@@ -5030,6 +5180,13 @@ fn validate_backup_data(data: &mut BackupData) -> DataResult<()> {
                 "Резервная копия содержит заметку с неизвестным проектом",
             ));
         }
+        if note.archived_by_project_id.as_ref().is_some_and(|source| {
+            note.project_id.as_ref() != Some(source) || note.archived_at.is_none()
+        }) {
+            return Err(backup_invalid(
+                "Резервная копия содержит несогласованный архив проекта",
+            ));
+        }
     }
     if data
         .note_revisions
@@ -5072,6 +5229,15 @@ fn validate_backup_data(data: &mut BackupData) -> DataResult<()> {
             .iter()
             .map(|item| (item.note_id.as_str(), item.tag_id.as_str())),
     )?;
+    if data
+        .note_tags
+        .iter()
+        .any(|item| item.position.is_some_and(|position| position < 0))
+    {
+        return Err(backup_invalid(
+            "Резервная копия содержит недопустимый порядок тегов",
+        ));
+    }
     unique_backup_ids(data.app_settings.iter().map(|item| item.key.as_str()))?;
     data.app_settings
         .retain(|setting| is_safe_backup_setting_key(&setting.key));
@@ -5938,11 +6104,6 @@ fn escape_html(value: &str) -> String {
 
 fn count_words(text: &str) -> usize {
     text.split_whitespace().count()
-}
-
-fn format_archived_at(value: String) -> String {
-    let date = value.split('T').next().unwrap_or(value.as_str());
-    format!("Архивировано {date}")
 }
 
 fn format_file_size(size: i64) -> String {
@@ -7024,6 +7185,17 @@ pub fn set_note_tag(
 }
 
 #[tauri::command]
+pub fn make_note_tag_primary(
+    note_id: String,
+    tag_id: String,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, PublicCommandError> {
+    state
+        .with_store(|store| store.make_note_tag_primary(&note_id, &tag_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
 pub fn duplicate_note(
     note_id: String,
     state: State<'_, AppState>,
@@ -7050,6 +7222,16 @@ pub fn move_note_to_project(
 ) -> Result<NoteDto, PublicCommandError> {
     state
         .with_store(|store| store.move_note_to_project(request))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn remove_note_from_project(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<NoteDto, PublicCommandError> {
+    state
+        .with_store(|store| store.remove_note_from_project(&note_id))
         .map_err(command_error)
 }
 
@@ -7124,6 +7306,16 @@ pub fn archive_project(
 ) -> Result<(), PublicCommandError> {
     state
         .with_store(|store| store.archive_project(&project_id))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_archived_project_notes(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ArchivedProjectNoteDto>, PublicCommandError> {
+    state
+        .with_store(|store| store.list_archived_project_notes(&project_id))
         .map_err(command_error)
 }
 
@@ -7398,6 +7590,535 @@ mod tests {
 
     fn temp_store_dir() -> PathBuf {
         std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn project_archive_cascades_only_active_notes_and_restore_preserves_manual_archive() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "PROJECT A".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let notes = ["Note A", "Note B", "Note C"].map(|title| {
+            let note = store
+                .create_note(CreateNoteRequest {
+                    title: title.into(),
+                    note_date: "2026-09-30".into(),
+                })
+                .expect("note");
+            store
+                .move_note_to_project(MoveNoteRequest {
+                    note_id: note.id,
+                    project_title: project.title.clone(),
+                })
+                .expect("move")
+        });
+        store.archive_note(&notes[1].id).expect("manual archive");
+        store.archive_project(&project.id).expect("archive project");
+        assert_eq!(store.list_archive(None).expect("archive").len(), 1);
+        let archived = store.list_archive(None).expect("archive");
+        assert_eq!(archived[0].note_count, Some(3));
+        assert_eq!(
+            store
+                .list_archived_project_notes(&project.id)
+                .expect("nested")
+                .len(),
+            3
+        );
+        for note in &notes {
+            assert!(store
+                .get_note(&note.id)
+                .expect("archived note")
+                .archived_at
+                .is_some());
+        }
+        let manual_marker: Option<String> = store
+            .conn
+            .query_row(
+                "SELECT archived_by_project_id FROM notes WHERE id = ?1",
+                params![notes[1].id],
+                |row| row.get(0),
+            )
+            .expect("manual marker");
+        assert_eq!(manual_marker, None);
+        store
+            .restore_archive_item(&project.id, "Проект")
+            .expect("restore");
+        assert!(store
+            .get_note(&notes[0].id)
+            .expect("first")
+            .archived_at
+            .is_none());
+        assert!(store
+            .get_note(&notes[1].id)
+            .expect("manual")
+            .archived_at
+            .is_some());
+        assert!(store
+            .get_note(&notes[2].id)
+            .expect("third")
+            .archived_at
+            .is_none());
+        let reopened = DataStore::open(dir).expect("reopen");
+        assert!(reopened
+            .get_note(&notes[1].id)
+            .expect("manual persists")
+            .archived_at
+            .is_some());
+        assert_eq!(reopened.list_archive(None).expect("archive").len(), 1);
+    }
+
+    #[test]
+    fn project_archive_and_restore_roll_back_on_note_failure() {
+        let mut store = DataStore::open(temp_store_dir()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Atomic".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "One".into(),
+                note_date: "2026-09-30".into(),
+            })
+            .expect("note");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: note.id.clone(),
+                project_title: project.title.clone(),
+            })
+            .expect("move");
+        store.conn.execute_batch("CREATE TRIGGER fail_archive BEFORE UPDATE OF archived_at ON notes BEGIN SELECT RAISE(ABORT, 'test'); END;").expect("fault");
+        assert!(store.archive_project(&project.id).is_err());
+        assert_eq!(store.list_projects(false).expect("projects").len(), 1);
+        assert!(store
+            .get_note(&note.id)
+            .expect("note")
+            .archived_at
+            .is_none());
+        store
+            .conn
+            .execute_batch("DROP TRIGGER fail_archive")
+            .expect("remove fault");
+        store.archive_project(&project.id).expect("archive");
+        store.conn.execute_batch("CREATE TRIGGER fail_restore BEFORE UPDATE OF archived_at ON notes BEGIN SELECT RAISE(ABORT, 'test'); END;").expect("fault");
+        assert!(store.restore_archive_item(&project.id, "Проект").is_err());
+        assert!(store
+            .list_projects(false)
+            .expect("projects")
+            .iter()
+            .all(|item| item.id != project.id));
+        assert!(store
+            .get_note(&note.id)
+            .expect("note")
+            .archived_at
+            .is_some());
+    }
+
+    #[test]
+    fn archived_project_cannot_accept_notes_and_deletion_removes_its_notes() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Старый проект".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Сохранить меня".into(),
+                note_date: "2026-09-30".into(),
+            })
+            .expect("note");
+        let tag = store
+            .create_tag(CreateTagRequest {
+                name: "Важно".into(),
+                color: "pink".into(),
+                custom_color: None,
+            })
+            .expect("tag");
+        store
+            .set_note_tag(SetNoteTagRequest {
+                note_id: note.id.clone(),
+                tag_id: tag.id.clone(),
+                assigned: true,
+            })
+            .expect("tag note");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: note.id.clone(),
+                project_title: project.title.clone(),
+            })
+            .expect("move");
+        store.archive_project(&project.id).expect("archive");
+        assert!(store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: note.id.clone(),
+                project_title: project.title.clone(),
+            })
+            .is_err());
+        store
+            .delete_archive_item(&project.id, "Проект")
+            .expect("delete project");
+        assert!(store.get_note(&note.id).is_err());
+        assert!(store.list_projects(true).expect("projects").is_empty());
+        assert!(store.list_archive(None).expect("archive").is_empty());
+        let relation_count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM note_tags WHERE note_id = ?1",
+                params![note.id],
+                |row| row.get(0),
+            )
+            .expect("tag relations");
+        assert_eq!(relation_count, 0);
+        drop(store);
+        let reopened = DataStore::open(dir).expect("reopen");
+        assert!(reopened.get_note(&note.id).is_err());
+        assert!(reopened
+            .list_projects(true)
+            .expect("projects after reopen")
+            .is_empty());
+    }
+
+    #[test]
+    fn project_delete_removes_notes_search_and_knowledge_but_keeps_other_projects() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Удалить проект".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let other = store
+            .create_project(CreateProjectRequest {
+                title: "Сохранить проект".into(),
+                description: "".into(),
+            })
+            .expect("other project");
+        let mut ids = Vec::new();
+        for index in 0..3 {
+            let note = store
+                .create_note(CreateNoteRequest {
+                    title: format!("Project cascade {index}"),
+                    note_date: "2026-09-30".into(),
+                })
+                .expect("note");
+            let moved = store
+                .move_note_to_project(MoveNoteRequest {
+                    note_id: note.id,
+                    project_title: project.title.clone(),
+                })
+                .expect("move");
+            store
+                .update_note_content(UpdateNoteContentRequest {
+                    note_id: moved.id.clone(),
+                    expected_content_version: 0,
+                    content_json: document_from_text("Knowledge cascade"),
+                    content_markdown: "# Knowledge cascade\n\nProject data".into(),
+                    content_html: "<h1>Knowledge cascade</h1><p>Project data</p>".into(),
+                    content_sidecars: vec![],
+                    plain_text: "Knowledge cascade Project data".into(),
+                })
+                .expect("content");
+            ids.push(moved.id);
+        }
+        let other_note = store
+            .create_note(CreateNoteRequest {
+                title: "Unrelated".into(),
+                note_date: "2026-09-30".into(),
+            })
+            .expect("other note");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: other_note.id.clone(),
+                project_title: other.title.clone(),
+            })
+            .expect("move other");
+        store.archive_project(&project.id).expect("archive");
+        store
+            .delete_archive_item(&project.id, "Проект")
+            .expect("delete");
+        for id in &ids {
+            assert!(store.get_note(id).is_err());
+            assert!(knowledge::get_chunks_by_note_id(&store.conn, id)
+                .expect("chunks")
+                .is_empty());
+            let count: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM note_search_fts WHERE note_id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .expect("search index");
+            assert_eq!(count, 0);
+        }
+        assert!(store.get_note(&other_note.id).is_ok());
+        drop(store);
+        let reopened = DataStore::open(dir).expect("reopen");
+        assert!(reopened.get_note(&other_note.id).is_ok());
+        assert!(ids.iter().all(|id| reopened.get_note(id).is_err()));
+    }
+
+    #[test]
+    fn project_delete_failure_rolls_back_project_notes_and_indexes() {
+        let mut store = DataStore::open(temp_store_dir()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Rollback project".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let ids = (0..2)
+            .map(|index| {
+                let note = store
+                    .create_note(CreateNoteRequest {
+                        title: format!("Rollback note {index}"),
+                        note_date: "2026-09-30".into(),
+                    })
+                    .expect("note");
+                store
+                    .move_note_to_project(MoveNoteRequest {
+                        note_id: note.id,
+                        project_title: project.title.clone(),
+                    })
+                    .expect("move")
+                    .id
+            })
+            .collect::<Vec<_>>();
+        store.archive_project(&project.id).expect("archive");
+        store
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER fail_project_note_delete BEFORE DELETE ON notes
+             WHEN (SELECT COUNT(*) FROM notes WHERE project_id = OLD.project_id) = 1
+             BEGIN SELECT RAISE(ABORT, 'injected note delete failure'); END;",
+            )
+            .expect("fault trigger");
+        assert!(store.delete_archive_item(&project.id, "Проект").is_err());
+        assert_eq!(
+            store.list_archive(None).expect("archive")[0].note_count,
+            Some(2)
+        );
+        for id in &ids {
+            assert!(store.get_note(id).is_ok());
+            let count: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM note_search_fts WHERE note_id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .expect("search index");
+            assert_eq!(count, 1);
+        }
+    }
+
+    #[test]
+    fn archived_empty_project_can_be_deleted_without_touching_active_notes() {
+        let mut store = DataStore::open(temp_store_dir()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Empty archive".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Keep me".into(),
+                note_date: "2026-09-30".into(),
+            })
+            .expect("note");
+        assert!(store.delete_archive_item(&project.id, "Проект").is_err());
+        store.archive_project(&project.id).expect("archive");
+        store
+            .delete_archive_item(&project.id, "Проект")
+            .expect("delete empty");
+        assert!(store.get_note(&note.id).is_ok());
+    }
+
+    #[test]
+    fn project_delete_keeps_shared_asset_and_historical_rag_source_snapshot() {
+        let mut store = DataStore::open(temp_store_dir()).expect("open");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Asset project".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let source = store
+            .create_note(CreateNoteRequest {
+                title: "Project image".into(),
+                note_date: "2026-09-30".into(),
+            })
+            .expect("source");
+        let attachment = store_test_image(&mut store, &source.id, "shared.png", 11);
+        save_image_note(&mut store, &source, &attachment);
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: source.id.clone(),
+                project_title: project.title.clone(),
+            })
+            .expect("move source");
+        let duplicate = store.duplicate_note(&source.id).expect("duplicate");
+        store
+            .remove_note_from_project(&duplicate.id)
+            .expect("detach duplicate");
+        let source_snapshot =
+            json!([{"noteId": source.id, "title": source.title, "excerpt": "Historical source"}])
+                .to_string();
+        store
+            .conn
+            .execute(
+                "INSERT INTO ai_chats (id, scope, note_id, title, created_at, updated_at)
+             VALUES ('historical-rag', 'rag', NULL, 'История', ?1, ?1)",
+                params![now_iso()],
+            )
+            .expect("rag chat");
+        store
+            .conn
+            .execute(
+                "INSERT INTO ai_messages (id, chat_id, role, content, sources_json, created_at)
+             VALUES ('historical-message', 'historical-rag', 'assistant', 'Ответ', ?1, ?2)",
+                params![source_snapshot, now_iso()],
+            )
+            .expect("rag message");
+        store.archive_project(&project.id).expect("archive");
+        store
+            .delete_archive_item(&project.id, "Проект")
+            .expect("delete");
+        assert!(store.get_note(&source.id).is_err());
+        let retained = store.get_note(&duplicate.id).expect("other note remains");
+        let blob_id = retained.attachments[0]
+            .blob_id
+            .as_deref()
+            .expect("shared blob");
+        let (path, _) = assets::resolve_blob_path(&store.conn, &store.base_dir, blob_id)
+            .expect("shared asset resolves");
+        assert!(path.is_file());
+        let historical: String = store
+            .conn
+            .query_row(
+                "SELECT sources_json FROM ai_messages WHERE id = 'historical-message'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("historical source remains");
+        assert_eq!(historical, source_snapshot);
+    }
+
+    #[test]
+    fn tag_order_duplicate_and_backup_round_trip_keep_primary() {
+        let mut store = DataStore::open(temp_store_dir()).expect("open");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Tags".into(),
+                note_date: "2026-09-30".into(),
+            })
+            .expect("note");
+        assert!(note.tags.is_empty());
+        assert!(store
+            .list_tags(None)
+            .expect("tags")
+            .iter()
+            .all(|tag| tag.name != "новая"));
+        let blue = store
+            .create_tag(CreateTagRequest {
+                name: "Blue".into(),
+                color: "blue".into(),
+                custom_color: None,
+            })
+            .expect("blue");
+        let red = store
+            .create_tag(CreateTagRequest {
+                name: "Red".into(),
+                color: "pink".into(),
+                custom_color: None,
+            })
+            .expect("red");
+        for tag in [&blue, &red] {
+            store
+                .set_note_tag(SetNoteTagRequest {
+                    note_id: note.id.clone(),
+                    tag_id: tag.id.clone(),
+                    assigned: true,
+                })
+                .expect("assign");
+        }
+        store
+            .make_note_tag_primary(&note.id, &red.id)
+            .expect("reorder");
+        let duplicate = store.duplicate_note(&note.id).expect("duplicate");
+        assert_eq!(
+            duplicate
+                .tags
+                .iter()
+                .map(|tag| tag.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![red.id.as_str(), blue.id.as_str()]
+        );
+        let backup = backup_bytes_for_store(&store);
+        let mut restored = DataStore::open(temp_store_dir()).expect("restore store");
+        restored
+            .import_backup(ImportBackupRequest {
+                file_name: "tags.zip".into(),
+                bytes: backup,
+            })
+            .expect("restore");
+        assert_eq!(
+            restored.get_note(&note.id).expect("note").tags[0].id,
+            red.id
+        );
+        assert_eq!(
+            restored.get_note(&duplicate.id).expect("copy").tags[0].id,
+            red.id
+        );
+        restored
+            .set_note_tag(SetNoteTagRequest {
+                note_id: note.id.clone(),
+                tag_id: red.id,
+                assigned: false,
+            })
+            .expect("remove primary");
+        assert_eq!(
+            restored.get_note(&note.id).expect("promoted").tags[0].id,
+            blue.id
+        );
+    }
+
+    #[test]
+    fn legacy_tag_links_get_deterministic_order_without_losing_relations() {
+        let dir = temp_store_dir();
+        create_v6_database_with_notes(&dir);
+        let conn = Connection::open(dir.join(DATABASE_FILE)).expect("legacy db");
+        conn.execute_batch(
+            "INSERT INTO tags (id, name, color, created_at, updated_at)
+             VALUES ('z-tag', 'Яблоко', 'blue', '2026-01-01', '2026-01-01'),
+                    ('a-tag', 'Альфа', 'pink', '2026-01-01', '2026-01-01');
+             INSERT INTO note_tags (note_id, tag_id) VALUES
+                    ('v6-note-preserved', 'z-tag'), ('v6-note-preserved', 'a-tag');",
+        )
+        .expect("legacy links");
+        drop(conn);
+        let store = DataStore::open(dir.clone()).expect("migrate");
+        let tags = store.get_note("v6-note-preserved").expect("note").tags;
+        assert_eq!(
+            tags.iter().map(|tag| tag.id.as_str()).collect::<Vec<_>>(),
+            vec!["a-tag", "z-tag"]
+        );
+        drop(store);
+        let reopened = DataStore::open(dir).expect("reopen");
+        assert_eq!(
+            reopened.get_note("v6-note-preserved").expect("note").tags[0].id,
+            "a-tag"
+        );
     }
 
     #[test]

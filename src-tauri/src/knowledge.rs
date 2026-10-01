@@ -541,7 +541,7 @@ fn mark_index_checked(conn: &Connection, checked_at: &str) -> DataResult<()> {
     set_index_timestamps(conn, Some(checked_at), None)
 }
 
-fn mark_index_changed(conn: &Connection, indexed_at: &str) -> DataResult<()> {
+pub(crate) fn mark_index_changed(conn: &Connection, indexed_at: &str) -> DataResult<()> {
     set_index_timestamps(conn, None, Some(indexed_at))
 }
 

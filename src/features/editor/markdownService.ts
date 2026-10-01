@@ -1,3 +1,5 @@
+import { formatDisplayDate } from "../../shared/displayDate";
+
 export interface EditorMark {
   attrs?: Record<string, unknown>;
   type: string;
@@ -648,8 +650,7 @@ function getFontFormatStyle(attrs: Record<string, unknown> | undefined) {
 }
 
 function formatDate(value: string) {
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${day}.${month}.${year}` : value;
+  return formatDisplayDate(value) || value;
 }
 
 function tableCellStyleAttributes(node: EditorNode) {

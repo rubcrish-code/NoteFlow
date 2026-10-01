@@ -255,15 +255,18 @@ pub fn search_notes(
                 COALESCE(p.title, 'Входящие') AS project_title,
                 COALESCE((
                     SELECT json_group_array(json_object(
-                        'id', t.id,
-                        'name', t.name,
-                        'color', t.color,
-                        'customColor', t.custom_color,
-                        'iconKey', t.icon_key
+                        'id', ordered.id,
+                        'name', ordered.name,
+                        'color', ordered.color,
+                        'customColor', ordered.custom_color,
+                        'iconKey', ordered.icon_key
                     ))
-                    FROM note_tags nt_json
-                    INNER JOIN tags t ON t.id = nt_json.tag_id
-                    WHERE nt_json.note_id = n.id
+                    FROM (
+                        SELECT t.id, t.name, t.color, t.custom_color, t.icon_key
+                        FROM note_tags nt_json INNER JOIN tags t ON t.id = nt_json.tag_id
+                        WHERE nt_json.note_id = n.id
+                        ORDER BY nt_json.position, t.id
+                    ) ordered
                 ), '[]') AS tags_json,
                 n.updated_at,
                 n.archived_at IS NOT NULL AS archived,
@@ -542,9 +545,10 @@ mod tests {
                 deleted_at TEXT,
                 is_favorite INTEGER NOT NULL DEFAULT 0
              );
-             CREATE TABLE note_tags (
+            CREATE TABLE note_tags (
                 note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
                 tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (note_id, tag_id)
              );
              CREATE TABLE note_revisions (

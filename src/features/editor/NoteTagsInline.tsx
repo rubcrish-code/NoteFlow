@@ -11,11 +11,12 @@ interface NoteTagsInlineProps {
   noteDate?: string;
   onCreateTag: (noteId: string, value: TagEditorValue) => Promise<void>;
   onSetTag: (noteId: string, tagId: string, assigned: boolean) => Promise<void>;
+  onMakePrimary: (noteId: string, tagId: string) => Promise<void>;
   options: TagRow[];
   tags: NoteTag[];
 }
 
-export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, options, tags }: NoteTagsInlineProps) {
+export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMakePrimary, options, tags }: NoteTagsInlineProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [query, setQuery] = useState("");
@@ -71,10 +72,23 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, option
     }
   }
 
+  async function makePrimary(tagId: string) {
+    if (pendingTagId) return;
+    setPendingTagId(tagId);
+    setError("");
+    try {
+      await onMakePrimary(noteId, tagId);
+    } catch {
+      setError("Не удалось изменить порядок тегов.");
+    } finally {
+      setPendingTagId("");
+    }
+  }
+
   return (
     <>
       <div className="ed-tags">
-        {tags.filter((tag) => tag.id !== "tag-untagged").map((tag) => (
+        {tags.map((tag) => (
           <span className={`tag tag-${tag.color} ed-tag-chip`} key={tag.id}>
             <span>{tag.name}</span>
             <button
@@ -112,17 +126,21 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, option
           </label>
           <div className="ed-tag-options">
             {matchingOptions.map((tag) => (
-              <button
-                aria-pressed={assignedIds.has(tag.id)}
-                disabled={Boolean(pendingTagId)}
-                key={tag.id}
-                onClick={() => void changeTag(tag.id, !assignedIds.has(tag.id))}
-                type="button"
-              >
-                <span className="tag-dot" style={{ backgroundColor: getTagDisplayColor(tag) }} />
-                <span>{tag.name}</span>
-                {assignedIds.has(tag.id) ? <Icon name="check" /> : null}
-              </button>
+              <div className="ed-tag-option-row" key={tag.id}>
+                <button
+                  aria-pressed={assignedIds.has(tag.id)}
+                  disabled={Boolean(pendingTagId)}
+                  onClick={() => void changeTag(tag.id, !assignedIds.has(tag.id))}
+                  type="button"
+                >
+                  <span className="tag-dot" style={{ backgroundColor: getTagDisplayColor(tag) }} />
+                  <span>{tag.name}</span>
+                  {assignedIds.has(tag.id) ? <Icon name="check" /> : null}
+                </button>
+                {assignedIds.has(tag.id) && tags[0]?.id !== tag.id ? (
+                  <button className="ed-tag-primary-action" disabled={Boolean(pendingTagId)} onClick={() => void makePrimary(tag.id)} type="button">Сделать основным</button>
+                ) : null}
+              </div>
             ))}
             {matchingOptions.length === 0 ? <span className="ed-tag-empty">Теги не найдены</span> : null}
           </div>

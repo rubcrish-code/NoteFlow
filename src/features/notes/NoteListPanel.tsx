@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent, t
 import type { Note, ProjectCard } from "../../app/types";
 import type { SearchNoteResult } from "../../services/searchService";
 import { Icon } from "../../shared/Icon";
-import { resolveNoteIcon, type ResolvedNoteIcon } from "../../shared/noteIconRegistry";
+import { getTagDisplayColor } from "../tags/tagPalette";
 import { getNextSearchResultIndex, splitSearchText } from "./searchText";
 
 export type NoteSearchStatus = "idle" | "searching" | "results" | "empty" | "error";
@@ -19,6 +19,8 @@ interface NoteListPanelProps {
   onToggleArchivedSearch: () => void;
   onSelectNote: (noteId: string) => void;
   onTogglePin: (noteId: string) => void;
+  projectScope: { id: string; title: string } | null;
+  onClearProjectScope: () => void;
 }
 
 export function NoteListPanel({
@@ -33,6 +35,8 @@ export function NoteListPanel({
   onToggleArchivedSearch,
   onSelectNote,
   onTogglePin,
+  projectScope,
+  onClearProjectScope,
 }: NoteListPanelProps) {
   const [selectedSearchIndex, setSelectedSearchIndex] = useState(0);
   const isSearchActive = query.trim().length > 0;
@@ -83,6 +87,13 @@ export function NoteListPanel({
           />
         </label>
       </div>
+      {projectScope ? (
+        <div className="note-project-scope">
+          <button aria-label={`Выйти из проекта «${projectScope.title}»`} onClick={onClearProjectScope} type="button">
+            <Icon name="folder" /><span>{projectScope.title}</span><Icon name="x" />
+          </button>
+        </div>
+      ) : null}
       {isSearchActive ? (
         <div className="note-search-controls">
           <button
@@ -98,7 +109,7 @@ export function NoteListPanel({
         </div>
       ) : null}
       <div className="list-head">
-        <span className="t">{isSearchActive ? "Результаты" : "Все заметки"}</span>
+        <span className="t">{isSearchActive ? "Результаты" : projectScope ? "Заметки проекта" : "Все заметки"}</span>
         <span className="c">{isSearchActive ? searchResults.length : notes.length}</span>
       </div>
       <div className="cards">
@@ -114,22 +125,20 @@ export function NoteListPanel({
             ))
           : notes.map((note) => {
               const primaryTag = note.tags[0];
-              const project = (note.projectId ? projectByKey.get(note.projectId) : undefined) ?? projectByKey.get(note.project);
-              const resolvedIcon = resolveNoteIcon(note, project);
+              const project = note.projectId ? projectByKey.get(note.projectId) : undefined;
+              const accentStyle = primaryTag ? { "--note-accent": getTagDisplayColor(primaryTag) } as CSSProperties : undefined;
               return (
-                <div className={`card ${activeNoteId === note.id ? "on" : ""} ${note.pinned ? "pinned" : ""}`} key={note.id}>
+                <div className={`card ${activeNoteId === note.id ? "on" : ""} ${note.pinned ? "pinned" : ""}`} key={note.id} style={accentStyle}>
                   <button className="card-hit" onClick={() => onSelectNote(note.id)} type="button">
-                    <span className={`ic tag-bg-${resolvedIcon.color}`} style={getCustomIconStyle(resolvedIcon)}>
-                      <Icon name={resolvedIcon.iconName} />
-                    </span>
                     <span className="body">
                       <span className="card-main-row">
                         <span className="ct">{note.title}</span>
                         <span className="date">{note.dateLabel}</span>
                       </span>
                       <span className="cs">{note.summary}</span>
+                      {project ? <span className="card-project">{project.title}</span> : null}
                       <span className="cf">
-                        <span className={`tag tag-${primaryTag.color}`}>{primaryTag.name}</span>
+                        {primaryTag ? <span className={`tag tag-${primaryTag.color}`}>{primaryTag.name}</span> : null}
                       </span>
                     </span>
                   </button>
@@ -154,12 +163,14 @@ export function NoteListPanel({
 }
 
 function SearchResultCard({ active, onSelect, query, result }: { active: boolean; onSelect: () => void; query: string; result: SearchNoteResult }) {
+  const primaryTag = result.tags[0];
+  const accentStyle = primaryTag ? { "--note-accent": getTagDisplayColor({ color: primaryTag.color, customColor: primaryTag.customColor ?? undefined }) } as CSSProperties : undefined;
   return (
-    <button className={`search-result-card ${active ? "on" : ""}`} onClick={onSelect} type="button">
+    <button className={`search-result-card ${active ? "on" : ""}`} onClick={onSelect} style={accentStyle} type="button">
       <span className="search-result-title"><HighlightedText query={query} text={result.title} /></span>
       <span className="search-result-snippet"><HighlightedText query={query} text={result.snippet} /></span>
       <span className="search-result-meta">
-        <span>{result.project}</span>
+        {result.projectId ? <span>{result.project}</span> : null}
         {result.tags.slice(0, 2).map((tag) => <span className={`tag tag-${tag.color}`} key={tag.id}>{tag.name}</span>)}
         {result.archived ? <span className="search-result-archived">Архив</span> : null}
       </span>
@@ -171,15 +182,4 @@ function HighlightedText({ query, text }: { query: string; text: string }) {
   return splitSearchText(text, query).map<ReactNode>((segment, index) =>
     segment.highlighted ? <mark key={`${segment.text}-${index}`}>{segment.text}</mark> : segment.text,
   );
-}
-
-function getCustomIconStyle(resolvedIcon: ResolvedNoteIcon): CSSProperties | undefined {
-  if (!resolvedIcon.customColor) {
-    return undefined;
-  }
-
-  return {
-    backgroundColor: resolvedIcon.customColor,
-    color: "#fff",
-  };
 }

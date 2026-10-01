@@ -1,20 +1,27 @@
-import { useRef, useState } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
 import { prepareMarkdownFiles, type PreparedMarkdownNote } from "./markdownImport";
 
 interface MarkdownImportControlProps {
   onImport: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
+  showTrigger?: boolean;
+}
+
+export interface MarkdownImportControlHandle {
+  open: () => void;
 }
 
 type ImportPhase = "closed" | "preparing" | "ready" | "importing" | "error";
 
-export function MarkdownImportControl({ onImport }: MarkdownImportControlProps) {
+export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, MarkdownImportControlProps>(function MarkdownImportControl({ onImport, showTrigger = true }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
   const [phase, setPhase] = useState<ImportPhase>("closed");
   const [notes, setNotes] = useState<PreparedMarkdownNote[]>([]);
   const [error, setError] = useState("");
+
+  useImperativeHandle(ref, () => ({ open: () => inputRef.current?.click() }), []);
 
   async function selectFiles(files: File[]) {
     const requestId = ++requestIdRef.current;
@@ -56,9 +63,7 @@ export function MarkdownImportControl({ onImport }: MarkdownImportControlProps) 
 
   return (
     <>
-      <button className="export-action secondary" onClick={() => inputRef.current?.click()} type="button">
-        <Icon name="doc" /> Импорт Markdown
-      </button>
+      {showTrigger ? <button className="export-action secondary" onClick={() => inputRef.current?.click()} type="button"><Icon name="doc" /> Импорт Markdown</button> : null}
       <input
         accept=".md,text/markdown"
         hidden
@@ -112,4 +117,4 @@ export function MarkdownImportControl({ onImport }: MarkdownImportControlProps) 
       ) : null}
     </>
   );
-}
+});

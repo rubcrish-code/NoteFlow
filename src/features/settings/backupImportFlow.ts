@@ -1,4 +1,5 @@
 import type { BackupPreview, ImportBackupResult } from "../../services/dataService";
+import { formatDisplayDateTime } from "../../shared/displayDate";
 
 export type BackupImportPhase = "applied" | "closed" | "error" | "previewing" | "ready" | "restoring" | "success";
 
@@ -71,15 +72,7 @@ export function reduceBackupImportState(
 }
 
 export function formatBackupDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return "Дата создания недоступна";
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "long",
-    year: "numeric",
-  }).format(date);
+  return formatDisplayDateTime(value) || "Дата создания недоступна";
 }
 
 export function getLegacyBackupHistoryNotice(preview: BackupPreview) {

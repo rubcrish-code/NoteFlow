@@ -44,7 +44,7 @@ describe("inline formula and date editor nodes", () => {
   });
 
   it("localizes ISO dates for the Russian UI", () => {
-    assert.match(formatInlineDate("2026-07-13"), /13 июля 2026/);
+    assert.equal(formatInlineDate("2026-07-13"), "13.07.2026");
     assert.equal(formatInlineDate(""), "Дата");
   });
 

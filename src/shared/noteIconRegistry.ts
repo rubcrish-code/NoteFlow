@@ -49,7 +49,7 @@ export function normalizeNoteIconKey(value: string | null | undefined): NoteIcon
 
 export function resolveNoteIcon(note: Note, project?: ProjectCard): ResolvedNoteIcon {
   const primaryTag = note.tags[0];
-  const colorSource = resolveColorSource(primaryTag, project);
+  const colorSource = resolveColorSource(primaryTag);
 
   const noteIconKey = normalizeNoteIconKey(note.iconKey);
   if (noteIconKey) {
@@ -69,14 +69,7 @@ export function resolveNoteIcon(note: Note, project?: ProjectCard): ResolvedNote
   return buildResolvedIcon(defaultIconKey, "default", defaultColor);
 }
 
-function resolveColorSource(primaryTag: NoteTag | undefined, project?: ProjectCard) {
-  if (project) {
-    return {
-      color: project.color,
-      customColor: undefined,
-    };
-  }
-
+function resolveColorSource(primaryTag: NoteTag | undefined) {
   if (primaryTag) {
     return {
       color: primaryTag.color,

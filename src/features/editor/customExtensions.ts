@@ -1,5 +1,6 @@
 import { Mark, Node, mergeAttributes } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
+import { formatDisplayDate } from "../../shared/displayDate";
 
 export type CalloutVariant = "important" | "info" | "tip" | "warning";
 
@@ -467,19 +468,7 @@ export const FormulaBlock = Node.create({
 });
 
 export function formatInlineDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return "Дата";
-  }
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(date.valueOf())) {
-    return "Дата";
-  }
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "numeric",
-    month: "long",
-    timeZone: "UTC",
-    year: "numeric",
-  }).format(date);
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? formatDisplayDate(value) || "Дата" : "Дата";
 }
 
 const formatDate = formatInlineDate;

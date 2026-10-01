@@ -43,6 +43,8 @@ import { FeatureLoadState, LazyFeatureBoundary } from "../../shared/LazyFeatureB
 import { ModalShell } from "../../shared/ModalShell";
 import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysicalElementWidth";
 import { getEditorSurfaceLayoutMode } from "./editorToolbarLayout";
+import { MarkdownImportControl, type MarkdownImportControlHandle } from "../settings/MarkdownImportControl";
+import type { PreparedMarkdownNote } from "../settings/markdownImport";
 
 interface EditorAreaProps {
   documentReloadGeneration: number;
@@ -66,7 +68,11 @@ interface EditorAreaProps {
   onEditorPageLayoutReset: () => void;
   onExitFocus: () => void;
   onExportMarkdown: (noteId: string) => void;
-  onMoveNote: (noteId: string, project: string) => void;
+  onMoveNote: (noteId: string, project: string) => Promise<void>;
+  onCreateProjectForNote: (noteId: string, title: string) => Promise<void>;
+  onRemoveNoteFromProject: (noteId: string) => Promise<void>;
+  onMakeNoteTagPrimary: (noteId: string, tagId: string) => Promise<void>;
+  onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
   onOpenChat: () => void;
   onOpenAttachment: (attachmentId: string) => Promise<void>;
   onOpenNote: (noteId: string) => void;
@@ -209,6 +215,10 @@ export function EditorArea({
   onExitFocus,
   onExportMarkdown,
   onMoveNote,
+  onCreateProjectForNote,
+  onRemoveNoteFromProject,
+  onMakeNoteTagPrimary,
+  onImportMarkdown,
   onOpenChat,
   onOpenAttachment,
   onOpenNote,
@@ -233,6 +243,12 @@ export function EditorArea({
   const [blockInsertSelection, setBlockInsertSelection] = useState<EditorInsertSelection | null>(null);
   const [blockInsertTarget, setBlockInsertTarget] = useState<EditorInsertTarget | null>(null);
   const [isNoteMenuOpen, setIsNoteMenuOpen] = useState(false);
+  const [isDeleteConfirmationOpen, setIsDeleteConfirmationOpen] = useState(false);
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [newProjectTitle, setNewProjectTitle] = useState("");
+  const [projectCreateBusy, setProjectCreateBusy] = useState(false);
+  const [projectCreateError, setProjectCreateError] = useState("");
+  const importControlRef = useRef<MarkdownImportControlHandle>(null);
   const [imageEditTarget, setImageEditTarget] = useState<EditableImageTarget | null>(null);
   const [aiStatus, setAiStatus] = useState<NoteAiStatus | null>(null);
   const [aiScopeChoice, setAiScopeChoice] = useState<AiPendingAction | null>(null);
@@ -646,12 +662,6 @@ export function EditorArea({
     <section className={`editor-col editor-surface-${editorSurfaceLayoutMode}`} data-layout={editorSurfaceLayoutMode} ref={editorSurfaceRef}>
       {!isFocusMode ? (
         <div className="ed-top">
-          <div className="crumb">
-            <Icon name="folder" />
-            <span>Проекты</span>
-            <span className="sep">/</span>
-            <span>{note.project}</span>
-          </div>
           <div className="ed-act">
             {saveStatus === "error" ? (
               <button
@@ -690,10 +700,13 @@ export function EditorArea({
                 note={note}
                 onArchive={onArchiveNote}
                 onClose={() => setIsNoteMenuOpen(false)}
-                onDelete={onDeleteNote}
+                onDelete={() => setIsDeleteConfirmationOpen(true)}
                 onDuplicate={onDuplicateNote}
                 onExportMarkdown={onExportMarkdown}
+                onImportMarkdown={() => importControlRef.current?.open()}
                 onMove={onMoveNote}
+                onCreateProject={() => { setNewProjectTitle(""); setProjectCreateError(""); setIsCreateProjectOpen(true); }}
+                onRemoveFromProject={onRemoveNoteFromProject}
                 onTogglePin={onTogglePin}
                 projectOptions={projectOptions}
               />
@@ -729,6 +742,7 @@ export function EditorArea({
               noteId={note.id}
               onCreateTag={onCreateNoteTag}
               onSetTag={onSetNoteTag}
+              onMakePrimary={onMakeNoteTagPrimary}
               options={tagOptions}
               tags={note.tags}
             />
@@ -824,6 +838,35 @@ export function EditorArea({
         ) : null}
         <span className="words">{note.wordCount} слов</span>
       </div>
+      <MarkdownImportControl onImport={onImportMarkdown} ref={importControlRef} showTrigger={false} />
+      {isDeleteConfirmationOpen ? (
+        <ModalShell
+          description="Заметка исчезнет из списков и поиска. Восстановить её через интерфейс нельзя."
+          dismissOnBackdrop={false}
+          footer={<div className="new-note-actions"><button className="secondary-btn" onClick={() => setIsDeleteConfirmationOpen(false)} type="button">Отмена</button><button className="danger-btn" onClick={() => { setIsDeleteConfirmationOpen(false); onDeleteNote(note.id); }} type="button">Удалить</button></div>}
+          onClose={() => setIsDeleteConfirmationOpen(false)}
+          open size="compact" title={`Удалить заметку «${note.title}»?`}
+        ><div className="settings-confirm-note">Это действие можно отменить только через резервную копию.</div></ModalShell>
+      ) : null}
+      {isCreateProjectOpen ? (
+        <ModalShell
+          closeDisabled={projectCreateBusy}
+          description="Заметка будет добавлена в новый проект."
+          footer={<div className="new-note-actions"><button className="secondary-btn" disabled={projectCreateBusy} onClick={() => setIsCreateProjectOpen(false)} type="button">Отмена</button><button className="primary-btn" disabled={!newProjectTitle.trim() || projectCreateBusy} form="create-note-project-form" type="submit">{projectCreateBusy ? "Создаём…" : "Создать проект"}</button></div>}
+          onClose={() => setIsCreateProjectOpen(false)} open size="compact" title="Новый проект"
+        >
+          <form className="new-note-form" id="create-note-project-form" onSubmit={(event) => {
+            event.preventDefault();
+            if (!newProjectTitle.trim() || projectCreateBusy) return;
+            setProjectCreateBusy(true);
+            setProjectCreateError("");
+            void onCreateProjectForNote(note.id, newProjectTitle.trim()).then(() => setIsCreateProjectOpen(false)).catch((error: unknown) => setProjectCreateError(error instanceof Error && error.message.startsWith("Проект создан,") ? error.message : "Не удалось создать проект. Проверьте название и попробуйте ещё раз.")).finally(() => setProjectCreateBusy(false));
+          }}>
+            <label>Название проекта<input autoFocus maxLength={180} onChange={(event) => setNewProjectTitle(event.currentTarget.value)} value={newProjectTitle} /></label>
+            {projectCreateError ? <span className="field-error" role="alert">{projectCreateError}</span> : null}
+          </form>
+        </ModalShell>
+      ) : null}
     </section>
   );
 }

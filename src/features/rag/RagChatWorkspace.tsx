@@ -5,6 +5,7 @@ import { acceptNoteAiPrivacy, getNoteAiStatus, type NoteAiStatus } from "../../s
 import * as ragChatService from "../../services/ragChatService";
 import { RagGenerationError, type RagChat, type RagChatMessage, type RagMessageSource } from "../../services/ragChatService";
 import { Icon } from "../../shared/Icon";
+import { formatDisplayDate } from "../../shared/displayDate";
 import { ChatComposer } from "../../shared/ChatComposer";
 import { MenuPopover } from "../../shared/MenuPopover";
 import { ResizeHandle } from "../../shared/ResizeHandle";
@@ -855,8 +856,7 @@ function titleFromQuestion(question: string) {
 }
 
 function formatChatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "short" }).format(date);
+  return formatDisplayDate(value);
 }
 
 function indexStatusLabel(status?: EmbeddingIndexStatus) {

@@ -5,6 +5,7 @@ import type { ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, Note
 import { buildEditorDocumentFromStoredNoteContent } from "../features/editor/editorContentSerializer";
 import { createNotePreview } from "../features/notes/notePreview";
 import { normalizeNoteIconKey } from "../shared/noteIconRegistry";
+import { formatDisplayDate, formatDisplayTime } from "../shared/displayDate";
 import type { PreparedMarkdownNote } from "../features/settings/markdownImport";
 import { runBackupExport } from "../features/settings/backupExportFlow";
 
@@ -198,6 +199,9 @@ interface ArchiveItemDto {
   id: string;
   kind: string;
   title: string;
+  noteCount?: number | null;
+  tagColor?: string | null;
+  tagCustomColor?: string | null;
 }
 
 interface WorkspaceSnapshotDto {
@@ -282,32 +286,16 @@ function mapNoteContentSidecar(sidecar: NoteContentSidecarDto): NoteContentSidec
   };
 }
 
-function getFallbackTag(): NoteTag {
-  return {
-    color: "blue",
-    iconKey: "tag",
-    id: "tag-untagged",
-    name: "без тега",
-  };
-}
-
 function formatDateLabel(updatedAt: string, noteDate: string) {
   const updatedDate = new Date(updatedAt);
   if (!Number.isNaN(updatedDate.valueOf())) {
     const today = new Date();
-    const yesterday = new Date();
-    yesterday.setDate(today.getDate() - 1);
     if (updatedDate.toDateString() === today.toDateString()) {
-      return new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(updatedDate);
+      return formatDisplayTime(updatedDate);
     }
-    if (updatedDate.toDateString() === yesterday.toDateString()) {
-      return "Вчера";
-    }
-    return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "short" }).format(updatedDate).replace(".", "");
+    return formatDisplayDate(updatedDate);
   }
-
-  const date = new Date(`${noteDate}T00:00:00`);
-  return Number.isNaN(date.valueOf()) ? noteDate : new Intl.DateTimeFormat("ru-RU").format(date);
+  return formatDisplayDate(noteDate) || noteDate;
 }
 
 function mapNote(note: NoteDto): Note {
@@ -341,7 +329,7 @@ function mapNote(note: NoteDto): Note {
     project: note.project,
     projectId: note.projectId ?? undefined,
     summary: createNotePreview(plainText || note.contentMarkdown || note.title),
-    tags: tags.length > 0 ? tags : [getFallbackTag()],
+    tags,
     title: note.title,
     updatedAt: note.updatedAt,
     wordCount: note.wordCount,
@@ -380,6 +368,9 @@ function mapArchiveItem(item: ArchiveItemDto): ArchiveItem {
     id: item.id,
     kind: item.kind === "Проект" ? "Проект" : "Заметка",
     title: item.title,
+    noteCount: item.noteCount ?? undefined,
+    tagColor: item.tagColor ? toTagColor(item.tagColor) : undefined,
+    tagCustomColor: item.tagCustomColor ?? undefined,
   };
 }
 
@@ -493,6 +484,10 @@ export async function setNoteTag(noteId: string, tagId: string, assigned: boolea
   return mapNote(await invoke<NoteDto>("set_note_tag", { request: { assigned, noteId, tagId } }));
 }
 
+export async function makeNoteTagPrimary(noteId: string, tagId: string) {
+  return mapNote(await invoke<NoteDto>("make_note_tag_primary", { noteId, tagId }));
+}
+
 export async function duplicateNote(noteId: string) {
   return mapNote(await invokeNotePersistence<NoteDto>("duplicate_note", { noteId }));
 }
@@ -503,6 +498,10 @@ export async function toggleNotePin(noteId: string) {
 
 export async function moveNoteToProject(noteId: string, projectTitle: string) {
   return mapNote(await invoke<NoteDto>("move_note_to_project", { request: { noteId, projectTitle } }));
+}
+
+export async function removeNoteFromProject(noteId: string) {
+  return mapNote(await invoke<NoteDto>("remove_note_from_project", { noteId }));
 }
 
 export async function archiveNote(noteId: string) {
@@ -588,6 +587,18 @@ export async function mergeTags(sourceTagId: string, targetTagId: string) {
 export async function listArchive(query = "") {
   const archiveItems = await invoke<ArchiveItemDto[]>("list_archive", { query: query.trim() || null });
   return archiveItems.map(mapArchiveItem);
+}
+
+export interface ArchivedProjectNote {
+  archivedAt?: string | null;
+  id: string;
+  title: string;
+  tagColor?: string | null;
+  tagCustomColor?: string | null;
+}
+
+export async function listArchivedProjectNotes(projectId: string) {
+  return invoke<ArchivedProjectNote[]>("list_archived_project_notes", { projectId });
 }
 
 export async function restoreArchiveItem(item: ArchiveItem) {

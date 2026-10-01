@@ -12,7 +12,7 @@ interface ProjectsPageProps {
   onCreateProject: (title: string, description: string) => Promise<ProjectCard>;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
-  onOpenProject: (projectTitle: string) => void;
+  onOpenProject: (projectId: string) => void;
   onToast: (message: string) => void;
   onUpdateProject: (projectId: string, title: string, description: string) => Promise<ProjectCard>;
   sidebar: PageShellSidebarProps;
@@ -57,7 +57,7 @@ export function ProjectsPage({ projects, onArchiveProject, onCreateProject, onNa
         <div className="project-grid">
           {projects.map((project) => (
             <article className="project-card" key={project.id}>
-              <button className="project-card-open" onClick={() => onOpenProject(project.title)} type="button">
+              <button className="project-card-open" onClick={() => onOpenProject(project.id)} type="button">
                 <span className="project-icon"><Icon name="folder" /></span>
                 <span className="project-copy">
                   <span className="project-title">{project.title}</span>
@@ -113,7 +113,7 @@ export function ProjectsPage({ projects, onArchiveProject, onCreateProject, onNa
           backdropClassName="confirm-backdrop"
           className="confirm-dialog"
           closeDisabled={archiveBusy}
-          description={`«${pendingArchive.title}» переместится в Архив. Заметки проекта останутся доступными.`}
+          description={`«${pendingArchive.title}» и активные заметки проекта переместятся в Архив. Заметки можно будет просматривать и восстановить вместе с проектом.`}
           dismissOnBackdrop={false}
           footer={<div className="new-note-actions"><button className="secondary-btn" disabled={archiveBusy} onClick={() => setPendingArchive(null)} type="button">Отмена</button><button className="primary-btn" disabled={archiveBusy} onClick={() => void archiveProject()} type="button">{archiveBusy ? "Архивируем…" : "Архивировать"}</button></div>}
           onClose={() => setPendingArchive(null)}

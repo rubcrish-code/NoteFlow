@@ -9,6 +9,7 @@ import type {
   SaveEmbeddingProfileInput,
 } from "../../services/embeddingService";
 import { Icon } from "../../shared/Icon";
+import { formatDisplayDateTime } from "../../shared/displayDate";
 import {
   ModelDiscoveryField,
   ModelStatusBadge,
@@ -600,8 +601,7 @@ function progressPercent(status: EmbeddingIndexStatus) {
 
 function formatDate(value?: string | null) {
   if (!value) return "Ещё не проверялся";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Ещё не проверялся" : new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(date);
+  return formatDisplayDateTime(value) || "Ещё не проверялся";
 }
 
 function resultMessage(result: EmbeddingIndexUpdateResult) {

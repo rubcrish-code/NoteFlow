@@ -88,7 +88,6 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
 
       <nav aria-label="Основная навигация">
         {primaryNavItems.map(renderNavItem)}
-        <div className="nav-sec">Библиотека</div>
         {libraryNavItems.map(renderNavItem)}
       </nav>
 

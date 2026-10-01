@@ -209,6 +209,10 @@
   overflow-y: auto;
 }
 
+.ed-tag-option-row { align-items: center; display: flex; gap: 4px; min-width: 0; }
+.ed-tag-option-row > button:first-child { flex: 1; min-width: 0; }
+.ed-tag-option-row .ed-tag-primary-action { color: var(--accent); flex: 0 0 auto; font-size: 11px; padding: 4px 6px; }
+
 .ed-tag-options button,
 .ed-tag-create {
   align-items: center;
@@ -355,6 +359,12 @@
 .note-menu-projects button:hover {
   background: var(--surface-hover);
   border-color: transparent;
+}
+
+.note-menu-projects button svg {
+  flex: 0 0 16px;
+  height: 16px;
+  width: 16px;
 }
 
 .note-menu-actions-list .danger {

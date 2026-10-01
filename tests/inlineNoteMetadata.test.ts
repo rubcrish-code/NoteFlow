@@ -101,7 +101,7 @@ describe("inline note metadata", () => {
       tags = assigned ? [{ id: tagId, name: "Важное", color: "blue" }] : [];
     };
     const render = async () => act(async () => root.render(h(NoteTagsInline, {
-      noteId: "note-1", tags, options, onSetTag, onCreateTag: async () => {},
+      noteId: "note-1", tags, options, onSetTag, onMakePrimary: async () => {}, onCreateTag: async () => {},
     })));
     await render();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Добавить тег к заметке"]')!.click());
@@ -119,6 +119,7 @@ describe("inline note metadata", () => {
     const created: string[] = [];
     await act(async () => root.render(h(NoteTagsInline, {
       noteId: "note-1", tags: [], options: [], onSetTag: async () => {},
+      onMakePrimary: async () => {},
       onCreateTag: async (_noteId: string, value: { name: string }) => { created.push(value.name); },
     })));
     const openCreate = async () => {

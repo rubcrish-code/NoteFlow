@@ -9,7 +9,10 @@ interface NoteMenuPopoverProps {
   onDelete: (noteId: string) => void;
   onDuplicate: (noteId: string) => void;
   onExportMarkdown: (noteId: string) => void;
-  onMove: (noteId: string, project: string) => void;
+  onImportMarkdown: () => void;
+  onMove: (noteId: string, project: string) => Promise<void>;
+  onCreateProject: () => void;
+  onRemoveFromProject: (noteId: string) => Promise<void>;
   onTogglePin: (noteId: string) => void;
   projectOptions: string[];
 }
@@ -23,11 +26,16 @@ export function NoteMenuPopover({
   onDelete,
   onDuplicate,
   onExportMarkdown,
+  onImportMarkdown,
   onMove,
+  onCreateProject,
+  onRemoveFromProject,
   onTogglePin,
   projectOptions,
 }: NoteMenuPopoverProps) {
   const [mode, setMode] = useState<NoteMenuMode>("actions");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -71,9 +79,11 @@ export function NoteMenuPopover({
             <button
               className={project === note.project ? "active" : ""}
               key={project}
+              disabled={busy}
               onClick={() => {
-                onMove(note.id, project);
-                onClose();
+                setBusy(true);
+                setError("");
+                void onMove(note.id, project).then(onClose).catch(() => setError("Не удалось добавить заметку в проект.")).finally(() => setBusy(false));
               }}
               type="button"
             >
@@ -81,6 +91,8 @@ export function NoteMenuPopover({
               <span>{project}</span>
             </button>
           ))}
+          <button onClick={() => { onCreateProject(); onClose(); }} type="button"><Icon name="plus" /><span>Создать новый проект</span></button>
+          {error ? <span className="field-error" role="alert">{error}</span> : null}
           <button className="secondary-btn" onClick={() => setMode("actions")} type="button">
             Назад
           </button>
@@ -108,7 +120,18 @@ export function NoteMenuPopover({
             {note.pinned ? "Открепить заметку" : "Закрепить заметку"}
           </button>
           <button onClick={() => setMode("move")} type="button">
-            Переместить
+            Добавить в проект
+          </button>
+          {note.projectId ? <button disabled={busy} onClick={() => {
+            setBusy(true);
+            setError("");
+            void onRemoveFromProject(note.id).then(onClose).catch(() => setError("Не удалось убрать заметку из проекта.")).finally(() => setBusy(false));
+          }} type="button">Убрать из проекта</button> : null}
+          <button
+            onClick={() => { onImportMarkdown(); onClose(); }}
+            type="button"
+          >
+            Импортировать Markdown
           </button>
           <button
             onClick={() => {
@@ -138,6 +161,7 @@ export function NoteMenuPopover({
           >
             Удалить
           </button>
+          {error ? <span className="field-error" role="alert">{error}</span> : null}
         </div>
       ) : null}
     </div>

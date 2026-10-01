@@ -108,6 +108,9 @@ export interface ArchiveItem {
   title: string;
   archivedAt: string;
   kind: "Заметка" | "Проект";
+  noteCount?: number;
+  tagColor?: TagColor;
+  tagCustomColor?: string;
 }
 
 export interface ChatMessage {

@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import { createPortal } from "react-dom";
 import { Icon } from "../../shared/Icon";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
+import { formatDisplayDate } from "../../shared/displayDate";
+
+export { formatDisplayDate } from "../../shared/displayDate";
 
 const monthNames = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
 const dayNames = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
@@ -42,11 +45,6 @@ export function parseIsoDate(value: string): DateParts {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return parseIsoDate(todayIsoDate());
   return { day: Number(match[3]), monthIndex: Number(match[2]) - 1, year: Number(match[1]) };
-}
-
-export function formatDisplayDate(value: string) {
-  const date = parseIsoDate(value);
-  return `${padDatePart(date.day)}.${padDatePart(date.monthIndex + 1)}.${date.year}`;
 }
 
 function daysInMonth(year: number, monthIndex: number) {
@@ -190,7 +188,7 @@ export function NoteDatePicker({ isOpen, onChange, onOpenChange, triggerRef, val
         {calendarDays.map((day) => (
           <button
             aria-current={day.iso === today ? "date" : undefined}
-            aria-label={new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date(day.year, day.monthIndex, day.day))}
+            aria-label={formatDisplayDate(day.iso)}
             aria-selected={day.iso === value}
             className={`${day.inCurrentMonth ? "" : "muted"} ${day.iso === value ? "selected" : ""} ${day.iso === today ? "today" : ""}`}
             data-date={day.iso}

@@ -706,6 +706,10 @@
 
 .archive-row-main {
   align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-primary);
   display: flex;
   gap: var(--space-3);
   justify-content: flex-start;
@@ -865,3 +869,24 @@ details[open] > .row-menu-trigger {
 .workspace.workspace-hide-list-for-chat .resize-list {
   display: none;
 }
+
+.archive-filters { display: inline-flex; gap: 4px; margin-bottom: var(--space-4); max-width: 100%; }
+.archive-filters button { background: transparent; border: 1px solid var(--border-subtle); border-radius: var(--button-radius); color: var(--text-secondary); min-height: 34px; padding: 6px 14px; }
+.archive-filters button:hover { background: var(--surface-hover); }
+.archive-filters button.active { background: var(--surface-selected); color: var(--text-primary); font-weight: var(--font-weight-semibold); }
+.archive-row-open { cursor: pointer; min-width: 0; text-align: left; }
+.archive-row-open:hover b { color: var(--accent); }
+.archive-project-view { display: grid; gap: var(--space-4); min-width: 0; }
+.archive-project-view > button { justify-self: start; }
+.archive-project-heading { display: grid; gap: 3px; }
+.archive-project-heading b { color: var(--text-primary); font-size: var(--text-xl-size); overflow-wrap: anywhere; }
+.archive-project-heading span { color: var(--text-muted); font-size: var(--text-sm-size); }
+.archive-project-notes { border-bottom: 1px solid var(--border-subtle); border-top: 1px solid var(--border-subtle); display: grid; }
+.archive-project-notes button { align-items: center; background: transparent; border: 0; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); display: flex; gap: var(--space-3); min-height: 48px; padding: var(--space-3); text-align: left; }
+.archive-project-notes button:hover { background: var(--surface-hover); }
+.archive-project-notes button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-project-notes svg { flex: 0 0 auto; height: 17px; width: 17px; }
+.archive-note-preview { max-height: min(65vh, 680px); overflow: auto; overflow-wrap: anywhere; }
+.archive-delete-name { display: grid; gap: var(--space-2); }
+.archive-delete-name b { user-select: text; }
+.archive-delete-name input { width: 100%; }
