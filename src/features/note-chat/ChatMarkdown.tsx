@@ -117,13 +117,6 @@ function renderBlockNode(node: EditorNode, key: string, citationContext: Citatio
   if (node.type === "detailsContent") {
     return <div key={key}>{renderBlockChildren(node.content, key, citationContext)}</div>;
   }
-  if (node.type === "formulaBlock") {
-    return (
-      <pre className="note-chat-formula" key={key}>
-        <code>{String(node.attrs?.latex ?? "")}</code>
-      </pre>
-    );
-  }
 
   return <p key={key}>{renderInlineNodes(node.content, citationContext) || nodeText(node)}</p>;
 }
@@ -173,9 +166,6 @@ function renderInlineNodes(nodes: EditorNode[] | undefined, citationContext: Cit
           {String(node.attrs?.value ?? "")}
         </time>
       );
-    }
-    if (node.type === "formulaInline") {
-      return <code key={`i-${index}`}>{String(node.attrs?.latex ?? "")}</code>;
     }
     return <span key={`i-${index}`}>{nodeText(node)}</span>;
   });

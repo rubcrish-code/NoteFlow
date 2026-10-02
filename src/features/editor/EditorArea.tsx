@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Color } from "@tiptap/extension-color";
+import Code from "@tiptap/extension-code";
 import Highlight from "@tiptap/extension-highlight";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import Link from "@tiptap/extension-link";
 import Subscript from "@tiptap/extension-subscript";
 import Superscript from "@tiptap/extension-superscript";
 import TableRow from "@tiptap/extension-table-row";
@@ -23,15 +23,17 @@ import { BlockInsertMenu, type EditorInsertSelection, type EditorInsertTarget } 
 import { runtimeAssetUrl } from "./assetUri";
 import { InteractiveFileAttachment } from "./FileAttachmentNodeView";
 import { FormattingToolbar } from "./FormattingToolbar";
+import { EditorContextMenu } from "./EditorContextMenu";
 import { NoteMenuPopover } from "./NoteMenuPopover";
 import { InlineNoteTitle } from "./InlineNoteTitle";
 import { NoteTagsInline } from "./NoteTagsInline";
 import type { TagEditorValue } from "../tags/TagEditorModal";
 import { TableToolsPopover } from "./TableToolsPopover";
-import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, FormulaBlock, FormulaInline, InlineDate, NoteMention } from "./customExtensions";
+import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, InlineDate, NoteMention } from "./customExtensions";
 import { serializeEditorDocumentForStorage } from "./editorContentSerializer";
 import { shouldReloadEditorDocument, type EditorDocumentLoadToken } from "./editorDocumentReload";
 import { handleEditorLinkClick } from "./editorLinkClick";
+import { EditorIndent, NoteFlowLink } from "./editorInteractions";
 import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
 import { NoteFlowTable, NoteFlowTableCell, NoteFlowTableHeader, NoteFlowTableView, TableToolsAnchor } from "./tableExtensions";
 import { NoteFlowTaskItem } from "./taskExtensions";
@@ -144,7 +146,7 @@ const aiActionLabels: Record<NoteAiActionId, string> = {
   translate: "Перевести",
 };
 
-function createEditorExtensions(options: {
+export function createEditorExtensions(options: {
   onEditImage: (target: EditableImageTarget) => void;
   onOpenAttachment: (attachmentId: string) => Promise<void>;
   onRevealAttachment: (attachmentId: string) => Promise<void>;
@@ -152,13 +154,18 @@ function createEditorExtensions(options: {
 }) {
   return [
     StarterKit.configure({
+      link: false,
+      underline: false,
+      code: false,
       heading: {
         levels: [1, 2, 3],
       },
     }),
     Underline,
+    Code.extend({ excludes: "" }),
     TextStyle,
     FontFormat,
+    EditorIndent,
     Color,
     Highlight.configure({ multicolor: true }),
     Superscript,
@@ -173,7 +180,7 @@ function createEditorExtensions(options: {
     TextAlign.configure({
       types: ["heading", "paragraph"],
     }),
-    Link.configure({
+    NoteFlowLink.configure({
       autolink: true,
       linkOnPaste: true,
       openOnClick: false,
@@ -195,8 +202,6 @@ function createEditorExtensions(options: {
     }),
     NoteMention,
     InlineDate,
-    FormulaInline,
-    FormulaBlock,
   ];
 }
 
@@ -296,18 +301,6 @@ export function EditorArea({
           event.preventDefault();
           setBlockInsertSelection(null);
           setBlockInsertTarget({ kind: "date", position: _nodePos, value: String(node.attrs.value ?? "") });
-          setIsBlockMenuOpen(true);
-          return true;
-        }
-
-        if (node.type.name === "formulaInline" || node.type.name === "formulaBlock") {
-          event.preventDefault();
-          setBlockInsertSelection(null);
-          setBlockInsertTarget({
-            kind: node.type.name === "formulaBlock" ? "formula-block" : "formula-inline",
-            latex: String(node.attrs.latex ?? ""),
-            position: _nodePos,
-          });
           setIsBlockMenuOpen(true);
           return true;
         }
@@ -749,6 +742,7 @@ export function EditorArea({
             <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
               <TableToolsPopover editor={editor} onToast={onToast} />
               <EditorContent editor={editor} />
+              <EditorContextMenu editor={editor} onToast={onToast} />
               {isEmptyNote ? <NewNoteHelper /> : null}
             </div>
           </div>

@@ -32,7 +32,7 @@ describe("note persistence frontend coordination", () => {
       shouldReloadEditorDocument({
         currentDocument: documentWithText("Текущая версия"),
         nextDocument: documentWithText("Восстановленная версия"),
-        nextToken: token(3),
+        nextToken: token(3, "note-one", 1),
         previousToken: token(2),
       }),
       true,

@@ -22,12 +22,6 @@ declare module "@tiptap/core" {
     fileAttachment: {
       insertFileAttachment: (attrs: { name: string; size: string; storageId: string; type: string }) => ReturnType;
     };
-    formulaBlock: {
-      insertFormulaBlock: (attrs: { latex: string }) => ReturnType;
-    };
-    formulaInline: {
-      insertFormulaInline: (attrs: { latex: string }) => ReturnType;
-    };
     inlineDate: {
       insertInlineDate: (attrs: { value: string }) => ReturnType;
     };
@@ -233,6 +227,44 @@ export const DetailsBlock = Node.create({
     return ["details", mergeAttributes(HTMLAttributes, { "data-type": "details-block", class: "details-block" }), 0];
   },
 
+  addNodeView() {
+    return ({ node, editor, getPos }) => {
+      let current = node;
+      const dom = document.createElement("div");
+      dom.className = "details-block details-nodeview";
+      dom.dataset.type = "details-block";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "details-toggle";
+      button.contentEditable = "false";
+      const contentDOM = document.createElement("div");
+      dom.append(button, contentDOM);
+      const sync = () => {
+        dom.dataset.open = String(Boolean(current.attrs.open));
+        button.setAttribute("aria-expanded", String(Boolean(current.attrs.open)));
+        button.setAttribute("aria-label", current.attrs.open ? "Свернуть блок" : "Развернуть блок");
+        button.textContent = current.attrs.open ? "−" : "+";
+      };
+      button.onmousedown = (event) => event.preventDefault();
+      button.onclick = () => {
+        const position = getPos();
+        if (position === undefined) return;
+        const tr = editor.state.tr.setNodeMarkup(position, undefined, { ...current.attrs, open: !current.attrs.open });
+        if (current.attrs.open && editor.state.selection.from > position + current.child(0).nodeSize + 1 && editor.state.selection.to < position + current.nodeSize) {
+          tr.setSelection(TextSelection.near(tr.doc.resolve(position + 1)));
+        }
+        editor.view.dispatch(tr);
+      };
+      sync();
+      return { dom, contentDOM,
+        update(next) { if (next.type !== current.type) return false; current = next; sync(); return true; },
+        stopEvent: (event) => button.contains(event.target as globalThis.Node),
+        ignoreMutation: (mutation) => mutation.type !== "selection" && (mutation.target === dom || button.contains(mutation.target)),
+        destroy() { button.onclick = null; button.onmousedown = null; },
+      };
+    };
+  },
+
   addCommands() {
     return {
       insertDetailsBlock:
@@ -367,102 +399,6 @@ export const InlineDate = Node.create({
             { type: this.name, attrs },
             { type: "text", text: " " },
           ]),
-    };
-  },
-});
-
-export const FormulaInline = Node.create({
-  name: "formulaInline",
-  atom: true,
-  group: "inline",
-  inline: true,
-  selectable: true,
-
-  addAttributes() {
-    return {
-      latex: {
-        default: "",
-        parseHTML: (element) => element.getAttribute("data-latex") ?? element.textContent?.replace(/^ƒ\s*/, "") ?? "",
-        renderHTML: (attributes) => ({ "data-latex": String(attributes.latex ?? "") }),
-      },
-    };
-  },
-
-  parseHTML() {
-    return [{ tag: 'span[data-type="formula-inline"]' }];
-  },
-
-  renderHTML({ node, HTMLAttributes }) {
-    return ["span", mergeAttributes(HTMLAttributes, { "data-type": "formula-inline", class: "formula-inline" }), `ƒ ${String(node.attrs.latex ?? "")}`];
-  },
-
-  addCommands() {
-    return {
-      insertFormulaInline:
-        (attrs) =>
-        ({ commands }) =>
-          commands.insertContent([
-            { type: this.name, attrs },
-            { type: "text", text: " " },
-          ]),
-    };
-  },
-});
-
-export const FormulaBlock = Node.create({
-  name: "formulaBlock",
-  atom: true,
-  group: "block",
-  selectable: true,
-
-  addAttributes() {
-    return {
-      latex: {
-        default: "",
-        parseHTML: (element) => element.getAttribute("data-latex") ?? element.textContent?.replace(/^ƒ\s*/, "") ?? "",
-        renderHTML: (attributes) => ({ "data-latex": String(attributes.latex ?? "") }),
-      },
-    };
-  },
-
-  parseHTML() {
-    return [{ tag: 'div[data-type="formula-block"]' }];
-  },
-
-  renderHTML({ node, HTMLAttributes }) {
-    return ["div", mergeAttributes(HTMLAttributes, { "data-type": "formula-block", class: "formula-block" }), `ƒ ${String(node.attrs.latex ?? "")}`];
-  },
-
-  addCommands() {
-    return {
-      insertFormulaBlock:
-        (attrs) =>
-        ({ commands, tr }) => {
-          const insertionPosition = tr.selection.from;
-          const didInsert = commands.insertContent([
-            { type: this.name, attrs },
-            { type: "paragraph" },
-          ]);
-          if (!didInsert) {
-            return false;
-          }
-
-          let insertedFormulaPosition: number | null = null;
-          tr.doc.descendants((node, position) => {
-            if (node.type === this.type && String(node.attrs.latex ?? "") === attrs.latex) {
-              if (insertedFormulaPosition === null || Math.abs(position - insertionPosition) < Math.abs(insertedFormulaPosition - insertionPosition)) {
-                insertedFormulaPosition = position;
-              }
-            }
-          });
-          if (insertedFormulaPosition !== null) {
-            const paragraphPosition = insertedFormulaPosition + 1;
-            if (tr.doc.nodeAt(paragraphPosition)?.type.name === "paragraph") {
-              tr.setSelection(TextSelection.create(tr.doc, paragraphPosition + 1));
-            }
-          }
-          return true;
-        },
     };
   },
 });

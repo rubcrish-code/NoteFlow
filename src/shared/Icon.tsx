@@ -25,7 +25,6 @@ export type IconName =
   | "folder"
   | "focus"
   | "forward"
-  | "formula"
   | "gear"
   | "highlight"
   | "image"
@@ -214,12 +213,6 @@ export function Icon({ name, ...props }: IconProps) {
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" {...props}>
           <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      );
-    case "formula":
-      return (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
-          <path d="M6 19c0 0 1 1 2 1s2-1 2-3l1.5-9c.3-2 1-3 2.5-3s2 1 2 1M7 10h7" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "gear":

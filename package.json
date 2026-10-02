@@ -15,6 +15,7 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tiptap/extension-code": "^3.26.1",
     "@tiptap/extension-color": "^3.26.1",
     "@tiptap/extension-highlight": "^3.26.1",
     "@tiptap/extension-image": "^3.26.1",
@@ -32,6 +33,7 @@
     "@tiptap/extension-underline": "^3.26.1",
     "@tiptap/react": "^3.26.1",
     "@tiptap/starter-kit": "^3.26.1",
+    "marked": "^18.0.14",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

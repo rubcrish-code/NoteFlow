@@ -12,6 +12,7 @@ interface MenuPopoverProps {
   maxHeight?: number;
   onClose: () => void;
   preferredWidth?: number;
+  role?: "menu" | "dialog";
 }
 
 function isMenuNavigationKey(key: string): key is MenuNavigationKey {
@@ -29,6 +30,7 @@ export function MenuPopover({
   maxHeight = 320,
   onClose,
   preferredWidth = 220,
+  role = "menu",
 }: MenuPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const popoverStyle = useFloatingPopoverPosition({
@@ -63,12 +65,14 @@ export function MenuPopover({
         return;
       }
       if (event.key === "Tab") {
+        if (role === "dialog" || (event.target instanceof Element && event.target.closest("form"))) return;
         onClose();
         return;
       }
       if (!isMenuNavigationKey(event.key) || !popoverRef.current) {
         return;
       }
+      if (event.target instanceof Element && event.target.closest("input, textarea, select")) return;
 
       const items = Array.from(
         popoverRef.current.querySelectorAll<HTMLElement>(
@@ -90,7 +94,7 @@ export function MenuPopover({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [anchorRef, isOpen, onClose]);
+  }, [anchorRef, isOpen, onClose, role]);
 
   if (!isOpen) {
     return null;
@@ -99,9 +103,9 @@ export function MenuPopover({
   return createPortal(
     <div
       aria-label={ariaLabel}
-      className={`nf-popover nf-menu ${className}`.trim()}
+      className={`nf-popover ${role === "menu" ? "nf-menu" : ""} ${className}`.trim()}
       ref={popoverRef}
-      role="menu"
+      role={role}
       style={{ ...popoverStyle, visibility: popoverStyle ? "visible" : "hidden" }}
     >
       {children}

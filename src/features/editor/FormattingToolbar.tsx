@@ -9,6 +9,7 @@ import { toPhysicalLayoutPixels } from "../../shared/physicalLayout";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
 import { useObservedElementWidth } from "../../shared/useObservedElementWidth";
 import { EDITOR_AI_ACTION_GROUPS } from "./editorAiActions";
+import { applyEditorFormattingValue, runEditorFormattingCommand } from "./editorFormattingCommands";
 import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
 import {
   getEditorToolbarLayoutMode,
@@ -174,116 +175,11 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
     setIsOverflowMenuOpen(false);
     setPopoverMode(null);
 
-    if (toolId === "undo") {
-      editor.chain().focus().undo().run();
-      return;
-    }
-    if (toolId === "redo") {
-      editor.chain().focus().redo().run();
-      return;
-    }
-    if (toolId === "h1" || toolId === "h2" || toolId === "h3") {
-      editor
-        .chain()
-        .focus()
-        .toggleHeading({ level: Number(toolId.slice(1)) as 1 | 2 | 3 })
-        .run();
-      return;
-    }
-    if (toolId === "p") {
-      editor.chain().focus().setParagraph().run();
-      return;
-    }
-    if (toolId === "bold") {
-      editor.chain().focus().toggleBold().run();
-      return;
-    }
-    if (toolId === "italic") {
-      editor.chain().focus().toggleItalic().run();
-      return;
-    }
-    if (toolId === "underline") {
-      editor.chain().focus().toggleUnderline().run();
-      return;
-    }
-    if (toolId === "strike") {
-      editor.chain().focus().toggleStrike().run();
-      return;
-    }
-    if (toolId === "inline-code") {
-      editor.chain().focus().toggleCode().run();
-      return;
-    }
-    if (toolId === "sup") {
-      editor.chain().focus().toggleSuperscript().run();
-      return;
-    }
-    if (toolId === "sub") {
-      editor.chain().focus().toggleSubscript().run();
-      return;
-    }
-    if (toolId === "ul") {
-      editor.chain().focus().toggleBulletList().run();
-      return;
-    }
-    if (toolId === "ol") {
-      editor.chain().focus().toggleOrderedList().run();
-      return;
-    }
-    if (toolId === "task") {
-      editor.chain().focus().toggleTaskList().run();
-      return;
-    }
-    if (toolId === "quote") {
-      editor.chain().focus().toggleBlockquote().run();
-      return;
-    }
-    if (toolId === "code-block") {
-      editor.chain().focus().toggleCodeBlock().run();
-      return;
-    }
-    if (toolId === "align-left" || toolId === "align-center" || toolId === "align-right") {
-      editor.chain().focus().setTextAlign(toolId.replace("align-", "")).run();
-      return;
-    }
-    if (toolId === "clear") {
-      editor.chain().focus().unsetAllMarks().clearNodes().run();
-    }
+    runEditorFormattingCommand(editor, toolId);
   }
 
   function applyPopoverCommand(value: EditorCommandSubmit) {
-    if (!editor) {
-      return;
-    }
-
-    if (value.mode === "link") {
-      if (value.text.length > 0) {
-        editor
-          .chain()
-          .focus()
-          .insertContent({ type: "text", text: value.text, marks: [{ type: "link", attrs: { href: value.href } }] })
-          .run();
-      } else {
-        editor.chain().focus().extendMarkRange("link").setLink({ href: value.href }).run();
-      }
-    }
-
-    if (value.mode === "color") {
-      if (value.color) {
-        editor.chain().focus().setColor(value.color).run();
-      } else {
-        editor.chain().focus().unsetColor().run();
-      }
-    }
-
-    if (value.mode === "highlight") {
-      if (value.color) {
-        editor.chain().focus().toggleHighlight({ color: value.color }).run();
-      } else {
-        editor.chain().focus().unsetHighlight().run();
-      }
-    }
-
+    if (editor) applyEditorFormattingValue(editor, value);
     setPopoverMode(null);
   }
 

@@ -68,7 +68,8 @@ describe("NoteFlow UI foundation", () => {
     const toast = readFileSync("src/shared/Toast.tsx", "utf8");
 
     assert.match(menu, /createPortal/);
-    assert.match(menu, /role="menu"/);
+    assert.match(menu, /role = "menu"/);
+    assert.match(menu, /role=\{role\}/);
     assert.match(menu, /\[role='menuitem'\]/);
     assert.match(tooltip, /aria-describedby/);
     assert.match(tooltip, /role="tooltip"/);

@@ -13,6 +13,7 @@ export type EditorCommandSubmit =
 interface EditorCommandPopoverProps {
   currentColor?: string;
   initialText?: string;
+  initialHref?: string;
   mode: EditorCommandPopoverMode;
   onClose: () => void;
   onSubmit: (value: EditorCommandSubmit) => void;
@@ -54,8 +55,8 @@ function normalizeColor(value: string) {
   return /^#[0-9a-fA-F]{6}$/.test(trimmedValue) ? trimmedValue : "#3b6ef2";
 }
 
-export function EditorCommandPopover({ currentColor, initialText = "", mode, onClose, onSubmit }: EditorCommandPopoverProps) {
-  const [href, setHref] = useState("");
+export function EditorCommandPopover({ currentColor, initialHref = "", initialText = "", mode, onClose, onSubmit }: EditorCommandPopoverProps) {
+  const [href, setHref] = useState(initialHref);
   const [linkText, setLinkText] = useState(initialText);
   const [imageSrc, setImageSrc] = useState("");
   const [imageAlt, setImageAlt] = useState("");
@@ -90,7 +91,7 @@ export function EditorCommandPopover({ currentColor, initialText = "", mode, onC
     }
 
     const normalizedColor = normalizeColor(color);
-    onSubmit({ mode, color: currentColor?.toLowerCase() === normalizedColor.toLowerCase() ? null : normalizedColor });
+    onSubmit({ mode, color: normalizedColor });
   }
 
   return (
@@ -148,7 +149,7 @@ export function EditorCommandPopover({ currentColor, initialText = "", mode, onC
             onClick={() => onSubmit({ mode, color: null })}
             type="button"
           >
-            {mode === "color" ? "Автоматический цвет" : "Без подсветки"}
+            {mode === "color" ? "Автоматический цвет" : "Убрать выделение"}
           </button>
           <div className="editor-color-grid">
             {palette.map((paletteColor) => (
@@ -156,7 +157,7 @@ export function EditorCommandPopover({ currentColor, initialText = "", mode, onC
                 aria-label={paletteColor}
                 className={currentColor?.toLowerCase() === paletteColor.toLowerCase() || normalizeColor(color).toLowerCase() === paletteColor.toLowerCase() ? "active" : ""}
                 key={paletteColor}
-                onClick={() => onSubmit({ mode, color: currentColor?.toLowerCase() === paletteColor.toLowerCase() ? null : paletteColor })}
+                onClick={() => onSubmit({ mode, color: paletteColor })}
                 style={{ backgroundColor: paletteColor }}
                 type="button"
               />

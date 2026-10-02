@@ -9,6 +9,7 @@ import {
   type EditorNode,
 } from "./markdownService";
 import { normalizeDocumentAssetUris } from "./assetUri";
+import { projectTable, readTableLayouts, restoreTableLayout, type TableLayout } from "./tableDocumentLayout";
 
 export const LEGACY_TIPTAP_SIDECAR_KIND = "legacy_tiptap_json";
 export const EDITOR_NODE_ATTRS_SIDECAR_KIND = "editor_node_attrs_v1";
@@ -70,6 +71,7 @@ interface EditorNodeAttrsSidecarPayload {
   fileAttachments: SidecarNodeEntry[];
   images: SidecarNodeEntry[];
   tables: SidecarNodeEntry[];
+  tableLayouts: Array<{ index: number; layout: TableLayout }>;
   tableCells: SidecarNodeEntry[];
   tableHeaders: SidecarNodeEntry[];
   textMarks: SidecarTextMarkEntry[];
@@ -77,13 +79,14 @@ interface EditorNodeAttrsSidecarPayload {
 }
 
 const emptyDocument: EditorDocument = { type: "doc", content: [{ type: "paragraph" }] };
-const meaningfulAtomTypes = new Set(["callout", "detailsBlock", "fileAttachment", "formulaBlock", "horizontalRule", "image", "table"]);
+const meaningfulAtomTypes = new Set(["callout", "detailsBlock", "fileAttachment", "horizontalRule", "image", "table"]);
 const sidecarTextMarkTypes = new Set(["fontFormat", "subscript", "superscript", "textStyle", "underline"]);
-const blockAttrKeys = new Set(["textAlign"]);
+const blockAttrKeys = new Set(["textAlign", "indent"]);
 const imageAttrKeys = new Set(["alignment", "alt", "attachmentId", "editedAttachmentId", "editMetadata", "height", "originalAttachmentId", "originalSrc", "src", "title", "width"]);
 const fileAttachmentAttrKeys = new Set(["name", "size", "storageId", "type"]);
 const tableAttrKeys = new Set(["emphasizedBorders"]);
 const tableCellAttrKeys = new Set(["backgroundColor", "colspan", "colwidth", "rowspan"]);
+const tableCellAppearanceAttrKeys = new Set(["backgroundColor", "colwidth"]);
 const detailsAttrKeys = new Set(["open"]);
 const calloutAttrKeys = new Set(["variant"]);
 
@@ -192,13 +195,18 @@ function applyNodeAttrsSidecar(document: EditorDocument, sidecars: NoteContentSi
   }
 
   let nextDocument = cloneNode(document) as EditorDocument;
+  const tables = collectNodesByType(nextDocument, "table");
+  payload.tableLayouts.forEach(({ index, layout }) => {
+    if (tables[index]) restoreTableLayout(tables[index], layout);
+  });
   applyEntriesByType(nextDocument, "image", payload.images, imageAttrKeys);
   applyEntriesByType(nextDocument, "fileAttachment", payload.fileAttachments, fileAttachmentAttrKeys);
   applyEntriesByType(nextDocument, "detailsBlock", payload.detailsBlocks, detailsAttrKeys);
   applyEntriesByType(nextDocument, "callout", payload.callouts, calloutAttrKeys);
   applyEntriesByType(nextDocument, "table", payload.tables, tableAttrKeys);
-  applyEntriesByType(nextDocument, "tableCell", payload.tableCells, tableCellAttrKeys);
-  applyEntriesByType(nextDocument, "tableHeader", payload.tableHeaders, tableCellAttrKeys);
+  const cellAttrKeys = payload.tableLayouts.length ? tableCellAppearanceAttrKeys : tableCellAttrKeys;
+  applyEntriesByType(nextDocument, "tableCell", payload.tableCells, cellAttrKeys);
+  applyEntriesByType(nextDocument, "tableHeader", payload.tableHeaders, cellAttrKeys);
   applyBlockEntries(nextDocument, payload.blocks);
   nextDocument = applyTextMarkEntries(nextDocument, payload.textMarks);
   return nextDocument;
@@ -212,13 +220,18 @@ function applyLegacyTiptapAttrs(document: EditorDocument, sidecars: NoteContentS
 
   const payload = extractEditorNodeAttrsPayload(legacyDocument);
   let nextDocument = cloneNode(document) as EditorDocument;
+  const tables = collectNodesByType(nextDocument, "table");
+  payload.tableLayouts.forEach(({ index, layout }) => {
+    if (tables[index]) restoreTableLayout(tables[index], layout);
+  });
   applyEntriesByType(nextDocument, "image", payload.images, imageAttrKeys);
   applyEntriesByType(nextDocument, "fileAttachment", payload.fileAttachments, fileAttachmentAttrKeys);
   applyEntriesByType(nextDocument, "detailsBlock", payload.detailsBlocks, detailsAttrKeys);
   applyEntriesByType(nextDocument, "callout", payload.callouts, calloutAttrKeys);
   applyEntriesByType(nextDocument, "table", payload.tables, tableAttrKeys);
-  applyEntriesByType(nextDocument, "tableCell", payload.tableCells, tableCellAttrKeys);
-  applyEntriesByType(nextDocument, "tableHeader", payload.tableHeaders, tableCellAttrKeys);
+  const cellAttrKeys = payload.tableLayouts.length ? tableCellAppearanceAttrKeys : tableCellAttrKeys;
+  applyEntriesByType(nextDocument, "tableCell", payload.tableCells, cellAttrKeys);
+  applyEntriesByType(nextDocument, "tableHeader", payload.tableHeaders, cellAttrKeys);
   applyBlockEntries(nextDocument, payload.blocks);
   if (getLinearText(nextDocument) === getLinearText(legacyDocument)) {
     nextDocument = applyTextMarkEntries(nextDocument, payload.textMarks);
@@ -234,6 +247,7 @@ function extractEditorNodeAttrsPayload(editorDocument: EditorDocument): EditorNo
     fileAttachments: extractNodeEntries(editorDocument, "fileAttachment", fileAttachmentAttrKeys, ["storageId", "name"]),
     images: extractNodeEntries(editorDocument, "image", imageAttrKeys, ["src", "alt"]),
     tables: extractNodeEntries(editorDocument, "table", tableAttrKeys),
+    tableLayouts: collectNodesByType(editorDocument, "table").map((table, index) => ({ index, layout: projectTable(table).layout })),
     tableCells: extractNodeEntries(editorDocument, "tableCell", tableCellAttrKeys),
     tableHeaders: extractNodeEntries(editorDocument, "tableHeader", tableCellAttrKeys),
     textMarks: extractTextMarkEntries(editorDocument),
@@ -267,7 +281,7 @@ function extractTextMarkEntries(document: EditorDocument): SidecarTextMarkEntry[
     }
 
     const text = node.text ?? "";
-    const marks = (node.marks ?? []).filter(isSidecarTextMark).map(cloneMark);
+    const marks = (node.marks ?? []).filter((mark) => isSidecarTextMark(mark) || node.marks?.some((item) => item.type === "code")).map(cloneMark);
     if (text.length > 0 && marks.length > 0) {
       entries.push({ end: offset + text.length, marks, start: offset });
     }
@@ -352,7 +366,7 @@ function transformTextMarks(node: EditorNode, entries: SidecarTextMarkEntry[], c
 function mergeMarks(baseMarks: EditorMark[], sidecarMarks: EditorMark[]) {
   const markMap = new Map<string, EditorMark>();
   [...baseMarks, ...sidecarMarks].forEach((mark) => {
-    markMap.set(`${mark.type}:${JSON.stringify(mark.attrs ?? {})}`, cloneMark(mark));
+    markMap.set(mark.type, cloneMark(mark));
   });
   return [...markMap.values()];
 }
@@ -384,6 +398,7 @@ function getEditorNodeAttrsPayload(sidecars: NoteContentSidecar[]): EditorNodeAt
     fileAttachments: readNodeEntries(payload.fileAttachments),
     images: readNodeEntries(payload.images),
     tables: readNodeEntries(payload.tables),
+    tableLayouts: readTableLayouts(payload.tableLayouts),
     tableCells: readNodeEntries(payload.tableCells),
     tableHeaders: readNodeEntries(payload.tableHeaders),
     textMarks: readTextMarkEntries(payload.textMarks),

@@ -41,7 +41,7 @@ describe("RC responsive UI contracts", () => {
     const commandSource = toolbarSource.slice(toolbarSource.indexOf("function runCommand("), toolbarSource.indexOf("function applyPopoverCommand("));
     for (const action of EDITOR_TOOLBAR_ACTIONS) {
       assert.ok(action.tip.trim(), `${action.id} needs a tooltip`);
-      assert.match(commandSource, new RegExp(`"${action.id}"`), `${action.id} needs an executable command branch`);
+      assert.match(commandSource + readFileSync("src/features/editor/editorFormattingCommands.ts", "utf8"), new RegExp(`"${action.id}"`), `${action.id} needs an executable command branch`);
     }
     for (const width of [240, 280, 560, 980, 1440, 2560, 3440]) {
       const { visibleActions, overflowActions } = resolveEditorToolbarActions(width);

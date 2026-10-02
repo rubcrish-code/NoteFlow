@@ -24,9 +24,7 @@ export interface EditorInsertSelection {
   to: number;
 }
 
-export type EditorInsertTarget =
-  | { kind: "date"; position: number; value: string }
-  | { kind: "formula-block" | "formula-inline"; latex: string; position: number };
+export type EditorInsertTarget = { kind: "date"; position: number; value: string };
 
 interface BlockMenuItem {
   command: SimpleBlockCommand;
@@ -69,15 +67,12 @@ function formatFileSize(size: number) {
 
 export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAttachment, onToast, selection }: BlockInsertMenuProps) {
   const [dateDraft, setDateDraft] = useState(editTarget?.kind === "date" ? editTarget.value : getTodayIsoDate());
-  const [formulaDraft, setFormulaDraft] = useState(editTarget && editTarget.kind !== "date" ? editTarget.latex : "a^2 + b^2 = c^2");
   const [insertError, setInsertError] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (editTarget?.kind === "date") {
       setDateDraft(editTarget.value);
-    } else if (editTarget) {
-      setFormulaDraft(editTarget.latex);
     }
     setInsertError("");
   }, [editTarget]);
@@ -220,34 +215,6 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
     }
   }
 
-  function insertFormula(block: boolean) {
-    const latex = formulaDraft.trim();
-    if (!editor || !latex) {
-      return;
-    }
-    setInsertError("");
-    let didRun: boolean;
-    if (editTarget?.kind === "formula-inline" || editTarget?.kind === "formula-block") {
-      const isBlockTarget = editTarget.kind === "formula-block";
-      const cursorPosition = Math.min(editTarget.position + (isBlockTarget ? 2 : 1), editor.state.doc.content.size);
-      didRun = editor
-        .chain()
-        .focus()
-        .setNodeSelection(editTarget.position)
-        .updateAttributes(isBlockTarget ? "formulaBlock" : "formulaInline", { latex })
-        .setTextSelection(cursorPosition)
-        .run();
-    } else {
-      const chain = restoreInsertionSelection();
-      didRun = block ? chain?.insertFormulaBlock({ latex }).run() ?? false : chain?.insertFormulaInline({ latex }).run() ?? false;
-    }
-    if (didRun) {
-      onClose();
-    } else {
-      setInsertError("Не удалось вставить формулу. Поставьте курсор в текст и повторите.");
-    }
-  }
-
   function preserveEditorSelection(event: ReactMouseEvent<HTMLButtonElement>) {
     event.preventDefault();
   }
@@ -322,33 +289,6 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
         </div>
       ) : null}
 
-      {!editTarget || editTarget.kind !== "date" ? (
-        <div className="block-menu-inline">
-          <label>
-            Формула
-            <input
-              aria-label="Выражение формулы"
-              onChange={(event) => setFormulaDraft(event.currentTarget.value)}
-              placeholder="Например: a^2 + b^2 = c^2"
-              value={formulaDraft}
-            />
-          </label>
-          {editTarget ? (
-            <button className="secondary-btn" disabled={!formulaDraft.trim()} onClick={() => insertFormula(editTarget.kind === "formula-block")} onMouseDown={preserveEditorSelection} type="button">
-              Сохранить формулу
-            </button>
-          ) : (
-            <>
-              <button className="secondary-btn" disabled={!formulaDraft.trim()} onClick={() => insertFormula(false)} onMouseDown={preserveEditorSelection} type="button">
-                В строке
-              </button>
-              <button className="secondary-btn" disabled={!formulaDraft.trim()} onClick={() => insertFormula(true)} onMouseDown={preserveEditorSelection} type="button">
-                Отдельным блоком
-              </button>
-            </>
-          )}
-        </div>
-      ) : null}
 
       {insertError ? <div aria-live="polite" className="block-menu-error">{insertError}</div> : null}
 

@@ -963,38 +963,38 @@
   white-space: nowrap;
 }
 
-.collapse-sb .sb-brand .nm,
-.collapse-sb .new-btn span,
-.collapse-sb .nav-i span,
-.collapse-sb .nav-sec,
-.collapse-sb .sb-user .info {
+.collapse-sb .sb .sb-brand .nm,
+.collapse-sb .sb .new-btn span,
+.collapse-sb .sb .nav-i span,
+.collapse-sb .sb .nav-sec,
+.collapse-sb .sb .sb-user .info {
   display: none;
 }
 
-.collapse-sb .sb-brand .mark {
+.collapse-sb .sb .sb-brand .mark {
   display: none;
 }
 
-.collapse-sb .sb-brand {
+.collapse-sb .sb .sb-brand {
   justify-content: center;
   padding: 4px 0 16px;
 }
 
-.collapse-sb .sb-brand .col {
+.collapse-sb .sb .sb-brand .col {
   background: var(--asoft);
   color: var(--accent);
   margin: 0 auto;
 }
 
-.collapse-sb .new-btn {
+.collapse-sb .sb .new-btn {
   justify-content: center;
   margin: 0 auto 14px;
   padding: 0;
   width: 46px;
 }
 
-.collapse-sb .nav-i,
-.collapse-sb .sb-user {
+.collapse-sb .sb .nav-i,
+.collapse-sb .sb .sb-user {
   justify-content: center;
 }
 
@@ -2570,6 +2570,9 @@
   caret-color: var(--accent);
   min-height: 320px;
   outline: none;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .ed-body .ProseMirror > *:first-child {
@@ -2632,12 +2635,15 @@
   margin: 0 0 16px;
   overflow-x: auto;
   padding: 14px 16px;
+  white-space: pre;
+  overflow-wrap: normal;
+  max-width: 100%;
 }
 
 .ed-body code {
   background: var(--side);
   border-radius: 5px;
-  color: var(--accent);
+  color: inherit;
   font-family: ui-monospace, Menlo, monospace;
   font-size: 13.5px;
   padding: 2px 6px;
@@ -2652,7 +2658,7 @@
 .ed-body mark {
   background: var(--hl);
   border-radius: 3px;
-  color: var(--hl-t);
+  color: inherit;
   padding: 1px 3px;
 }
 
@@ -2971,6 +2977,24 @@
   font-weight: 700;
 }
 
+.ed-body .details-nodeview { position: relative; }
+.ed-body .details-nodeview .details-summary { list-style: none; cursor: text; padding-inline-start: 24px; }
+.ed-body .details-nodeview .details-summary::-webkit-details-marker { display: none; }
+.ed-body .details-nodeview[data-open="false"] > div > .details-content { display: none; }
+.details-toggle { position: absolute; top: 10px; left: 10px; width: 22px; height: 24px; border: 0; border-radius: 5px; color: var(--tsoft); background: transparent; cursor: pointer; }
+.details-toggle:hover { background: var(--hover); color: var(--text); }
+.details-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ed-body [data-editor-indent="1"] { padding-inline-start: 24px; }
+.ed-body [data-editor-indent="2"] { padding-inline-start: 48px; }
+.ed-body [data-editor-indent="3"] { padding-inline-start: 72px; }
+.ed-body [data-editor-indent="4"] { padding-inline-start: 96px; }
+.ed-body [data-editor-indent="5"] { padding-inline-start: 120px; }
+.ed-body [data-editor-indent="6"] { padding-inline-start: min(144px, 40%); }
+.editor-context-anchor { position: fixed; width: 0; height: 0; pointer-events: none; }
+.editor-context-menu .editor-command-popover { position: static; width: auto; box-shadow: none; border: 0; }
+.editor-context-menu [role="menuitem"] { gap: 8px; }
+.editor-context-menu [role="menuitem"] > svg { width: 16px; height: 16px; flex: 0 0 16px; }
+
 .ed-body .details-content {
   border-top: 1px solid var(--border);
   margin-top: 10px;
@@ -3129,8 +3153,7 @@
 }
 
 .ed-body .note-mention,
-.ed-body .inline-date,
-.ed-body .formula-inline {
+.ed-body .inline-date {
   background: var(--asoft);
   border-radius: 7px;
   color: var(--accent);
@@ -3139,35 +3162,17 @@
   padding: 2px 7px;
 }
 
-.ed-body .inline-date,
-.ed-body .formula-inline,
-.ed-body .formula-block {
+.ed-body .inline-date {
   cursor: pointer;
 }
 
-.ed-body .inline-date.ProseMirror-selectednode,
-.ed-body .formula-inline.ProseMirror-selectednode,
-.ed-body .formula-block.ProseMirror-selectednode {
+.ed-body .inline-date.ProseMirror-selectednode {
   box-shadow: 0 0 0 3px var(--field-ring);
   outline: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
 .ed-body .inline-date {
   color: var(--tag-green-t);
-}
-
-.ed-body .formula-inline,
-.ed-body .formula-block {
-  font-family: ui-monospace, Menlo, monospace;
-}
-
-.ed-body .formula-block {
-  background: var(--side);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--accent);
-  margin: 0 0 16px;
-  padding: 14px 16px;
 }
 
 .block-menu-error {
@@ -6770,7 +6775,8 @@
   pointer-events: none;
   position: fixed;
   text-align: center;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   z-index: 220;
 }
 

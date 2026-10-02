@@ -1,3 +1,5 @@
+import { parseMarkdownInline, readMarkdownList, convertMarkdownList } from "./markdownInline";
+import { projectTable } from "./tableDocumentLayout";
 import { formatDisplayDate } from "../../shared/displayDate";
 
 export interface EditorMark {
@@ -147,7 +149,7 @@ function splitTableRow(line: string) {
     .trim()
     .replace(/^\|/, "")
     .replace(/\|$/, "")
-    .split("|")
+    .split(/(?<!\\)\|/)
     .map((cell) => cell.trim());
 }
 
@@ -164,7 +166,6 @@ function isSpecialBlockStart(lines: string[], index: number) {
   return (
     isBlank(line) ||
     line.startsWith("```") ||
-    line.trim() === "$$" ||
     getFileAttachment(line) !== null ||
     getHeading(line) !== null ||
     getHtmlImage(line) !== null ||
@@ -289,20 +290,6 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
       continue;
     }
 
-    if (line.trim() === "$$") {
-      const formulaLines: string[] = [];
-      index += 1;
-      while (index < lines.length && lines[index].trim() !== "$$") {
-        formulaLines.push(lines[index]);
-        index += 1;
-      }
-      if (index < lines.length) {
-        index += 1;
-      }
-      content.push({ type: "formulaBlock", attrs: { latex: formulaLines.join("\n").trim() } });
-      continue;
-    }
-
     const heading = getHeading(line);
     if (heading) {
       content.push({ type: "heading", attrs: { level: heading.level }, content: parseInlineMarkdown(heading.text) });
@@ -331,42 +318,13 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
       continue;
     }
 
-    if (isTaskLine(line)) {
-      const items: EditorNode[] = [];
-      while (index < lines.length && isTaskLine(lines[index])) {
-        const match = /^\s{0,3}[-*+]\s+\[([ xX])\]\s+(.+)$/.exec(lines[index]);
-        if (match) {
-          items.push({
-            type: "taskItem",
-            attrs: { checked: match[1].toLowerCase() === "x" },
-            content: [paragraph(match[2])],
-          });
-        }
-        index += 1;
+    if (isTaskLine(line) || isBulletLine(line) || isOrderedLine(line)) {
+      const list = readMarkdownList(lines.slice(index).join("\n"));
+      if (list) {
+        content.push(...convertMarkdownList(list, (source) => markdownToTiptapDoc(source).content ?? []));
+        index += list.raw.trimEnd().split("\n").length;
+        continue;
       }
-      content.push({ type: "taskList", content: items });
-      continue;
-    }
-
-    if (isBulletLine(line)) {
-      const items: EditorNode[] = [];
-      while (index < lines.length && isBulletLine(lines[index])) {
-        items.push({ type: "listItem", content: [paragraph(lines[index].replace(/^\s{0,3}[-*+]\s+/, ""))] });
-        index += 1;
-      }
-      content.push({ type: "bulletList", content: items });
-      continue;
-    }
-
-    if (isOrderedLine(line)) {
-      const start = Number(/^\s{0,3}(\d+)\./.exec(line)?.[1] ?? "1");
-      const items: EditorNode[] = [];
-      while (index < lines.length && isOrderedLine(lines[index])) {
-        items.push({ type: "listItem", content: [paragraph(lines[index].replace(/^\s{0,3}\d+\.\s+/, ""))] });
-        index += 1;
-      }
-      content.push({ type: "orderedList", attrs: { start }, content: items });
-      continue;
     }
 
     if (isQuoteLine(line)) {
@@ -392,65 +350,30 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
 }
 
 export function parseInlineMarkdown(text: string): EditorNode[] {
-  const nodes: EditorNode[] = [];
-  const tokenPattern = /(@\[\[[^\]\n]+\]\]|\{\{date:[^}\n]+\}\}|\$[^$\n]+\$|==[^=\n]+==|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|`[^`\n]+`|\[[^\]\n]+\]\([^)]+\)|\*[^*\n]+\*|_[^_\n]+_)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = tokenPattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(textNode(text.slice(lastIndex, match.index)));
-    }
-
-    const token = match[0];
-    if (token.startsWith("@[[")) {
-      const label = token.slice(3, -2);
-      nodes.push({ type: "noteMention", attrs: { label, noteId: label } });
-    } else if (token.startsWith("{{date:")) {
-      nodes.push({ type: "inlineDate", attrs: { value: token.slice(7, -2) } });
-    } else if (token.startsWith("$")) {
-      nodes.push({ type: "formulaInline", attrs: { latex: token.slice(1, -1) } });
-    } else if (token.startsWith("==")) {
-      nodes.push(textNode(token.slice(2, -2), [{ type: "highlight" }]));
-    } else if (token.startsWith("**") || token.startsWith("__")) {
-      nodes.push(textNode(token.slice(2, -2), [{ type: "bold" }]));
-    } else if (token.startsWith("~~")) {
-      nodes.push(textNode(token.slice(2, -2), [{ type: "strike" }]));
-    } else if (token.startsWith("`")) {
-      nodes.push(textNode(token.slice(1, -1), [{ type: "code" }]));
-    } else if (token.startsWith("[")) {
-      const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
-      if (linkMatch) {
-        nodes.push(textNode(linkMatch[1], [{ type: "link", attrs: { href: linkMatch[2] } }]));
-      }
-    } else {
-      nodes.push(textNode(token.slice(1, -1), [{ type: "italic" }]));
-    }
-
-    lastIndex = tokenPattern.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(textNode(text.slice(lastIndex)));
-  }
-
-  return nodes;
+  return parseMarkdownInline(text);
 }
 
 function inlineToMarkdown(nodes: EditorNode[] | undefined) {
   return (nodes ?? [])
     .map((node) => {
+      if (node.type === "hardBreak") return "  \n";
       if (node.type !== "text") {
         return tiptapJsonToMarkdown({ type: "doc", content: [node] }).trim();
       }
 
       const marks = node.marks ?? [];
+      if (marks.some((mark) => mark.type === "code")) {
+        const text = node.text ?? "";
+        const fence = "`".repeat(Math.max(1, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length + 1)));
+        const padding = text.startsWith("`") || text.endsWith("`") ? " " : "";
+        return `${fence}${padding}${text}${padding}${fence}`;
+      }
       return marks.reduce((value, mark) => {
         if (mark.type === "bold") {
           return `**${value}**`;
         }
         if (mark.type === "italic") {
-          return `*${value}*`;
+          return `_${value}_`;
         }
         if (mark.type === "strike") {
           return `~~${value}~~`;
@@ -501,9 +424,6 @@ function nodeText(node: EditorNode | undefined): string {
   if (node.type === "inlineDate") {
     return formatDate(String(node.attrs?.value ?? ""));
   }
-  if (node.type === "formulaInline" || node.type === "formulaBlock") {
-    return String(node.attrs?.latex ?? "");
-  }
   return (node.content ?? []).map(nodeText).join("");
 }
 
@@ -515,24 +435,27 @@ export function tiptapJsonToPlainText(document: EditorDocument): string {
     .trim();
 }
 
-function listItemText(node: EditorNode, fallback = "") {
-  const paragraphNode = node.content?.find((child) => child.type === "paragraph");
-  return paragraphNode ? inlineToMarkdown(paragraphNode.content) : fallback;
+function listToMarkdown(node: EditorNode): string {
+  return (node.content ?? []).map((item, index) => {
+    const prefix = node.type === "orderedList" ? `${Number(node.attrs?.start ?? 1) + index}. `
+      : node.type === "taskList" ? `- [${item.attrs?.checked ? "x" : " "}] ` : "- ";
+    const [first, ...remaining] = item.content ?? [];
+    const firstText = first?.type === "paragraph" ? inlineToMarkdown(first.content) : "";
+    const nested = (first?.type === "paragraph" ? remaining : item.content ?? [])
+      .map((child) => {
+        const separator = ["bulletList", "orderedList", "taskList"].includes(child.type) ? "\n" : "\n\n";
+        const markdown = tiptapJsonToMarkdown({ type: "doc", content: [child] });
+        return separator + markdown.split("\n").map((line) => " ".repeat(node.type === "taskList" ? 2 : prefix.length) + line).join("\n");
+      });
+    return prefix + firstText + nested.join("");
+  }).join("\n");
 }
 
 function tableToMarkdown(node: EditorNode) {
-  const rows = node.content ?? [];
-  if (rows.length === 0) {
-    return "";
-  }
-
-  const tableRows = rows.map((row) => (row.content ?? []).map((cell) => nodeText(cell)));
-  const columnCount = Math.max(...tableRows.map((row) => row.length));
-  const normalizeRow = (row: string[]) => [...row, ...Array<string>(Math.max(0, columnCount - row.length)).fill("")];
-  const header = normalizeRow(tableRows[0]);
-  const bodyRows = tableRows.slice(1).map(normalizeRow);
-
-  return [`| ${header.join(" |")} |`, `| ${header.map(() => "---").join(" |")} |`, ...bodyRows.map((row) => `| ${row.join(" |")} |`)].join("\n");
+  const { grid } = projectTable(node);
+  if (!grid.length) return "";
+  const rows = grid.map((row) => row.map((cell) => cell ? inlineToMarkdown(cell.content?.flatMap((block) => block.content ?? [])).replace(/  \n/g, "<br>").replace(/\|/g, "\\|") : ""));
+  return [`| ${rows[0].join(" | ")} |`, `| ${rows[0].map(() => "---").join(" | ")} |`, ...rows.slice(1).map((row) => `| ${row.join(" | ")} |`)].join("\n");
 }
 
 export function tiptapJsonToMarkdown(document: EditorDocument): string {
@@ -556,16 +479,13 @@ export function tiptapJsonToMarkdown(document: EditorDocument): string {
         return `\`\`\`${language}\n${nodeText(node)}\n\`\`\``;
       }
       if (node.type === "bulletList") {
-        return (node.content ?? []).map((item) => `- ${listItemText(item)}`).join("\n");
+        return listToMarkdown(node);
       }
       if (node.type === "orderedList") {
-        const start = Number(node.attrs?.start ?? 1);
-        return (node.content ?? []).map((item, itemIndex) => `${start + itemIndex}. ${listItemText(item)}`).join("\n");
+        return listToMarkdown(node);
       }
       if (node.type === "taskList") {
-        return (node.content ?? [])
-          .map((item) => `- [${item.attrs?.checked ? "x" : " "}] ${listItemText(item)}`)
-          .join("\n");
+        return listToMarkdown(node);
       }
       if (node.type === "table") {
         return tableToMarkdown(node);
@@ -581,9 +501,6 @@ export function tiptapJsonToMarkdown(document: EditorDocument): string {
       if (node.type === "inlineDate") {
         return `{{date:${String(node.attrs?.value ?? "")}}}`;
       }
-      if (node.type === "formulaInline") {
-        return `$${String(node.attrs?.latex ?? "")}$`;
-      }
       if (node.type === "callout") {
         const variant = String(node.attrs?.variant ?? "info");
         return `:::${variant}\n${tiptapJsonToMarkdown({ type: "doc", content: node.content ?? [] })}\n:::`;
@@ -595,9 +512,6 @@ export function tiptapJsonToMarkdown(document: EditorDocument): string {
       }
       if (node.type === "fileAttachment") {
         return `[file:${String(node.attrs?.name ?? "Файл")}](noteflow-file://${String(node.attrs?.storageId ?? "")})`;
-      }
-      if (node.type === "formulaBlock") {
-        return `$$\n${String(node.attrs?.latex ?? "")}\n$$`;
       }
 
       return index === 0 ? "" : nodeText(node);
@@ -796,12 +710,6 @@ function nodeToHtml(node: EditorNode): string {
   if (node.type === "inlineDate") {
     const value = String(node.attrs?.value ?? "");
     return `<time data-type="inline-date" datetime="${escapeHtml(value)}">${escapeHtml(formatDate(value))}</time>`;
-  }
-  if (node.type === "formulaInline") {
-    return `<span data-type="formula-inline">ƒ ${escapeHtml(String(node.attrs?.latex ?? ""))}</span>`;
-  }
-  if (node.type === "formulaBlock") {
-    return `<div data-type="formula-block">ƒ ${escapeHtml(String(node.attrs?.latex ?? ""))}</div>`;
   }
 
   return inlineToHtml(node.content);

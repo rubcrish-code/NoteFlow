@@ -148,7 +148,7 @@ describe("markdownService conversion", () => {
     assert.match(markdown, /Скрытый текст/);
   });
 
-  it("serializes inline dates, mentions and formulas", () => {
+  it("serializes inline dates, mentions and ordinary dollar text", () => {
     const markdown = tiptapJsonToMarkdown(markdownToTiptapDoc("Дата {{date:2026-06-15}}, связь @[[Архитектура проекта]] и формула $a+b$"));
 
     assert.match(markdown, /\{\{date:2026-06-15\}\}/);

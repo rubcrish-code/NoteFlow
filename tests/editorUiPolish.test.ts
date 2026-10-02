@@ -215,14 +215,10 @@ describe("editor UI polish contract", () => {
     assert.match(backend, /materialize_attachment_view/);
   });
 
-  it("uses Russian formula labels without exposing the LaTeX term", () => {
+  it("removes the formula insertion UI while retaining inline dates", () => {
     const blockMenu = readFileSync("src/features/editor/BlockInsertMenu.tsx", "utf8");
-
-    assert.match(blockMenu, />\s*Формула\s*</);
-    assert.match(blockMenu, />\s*В строке\s*</);
-    assert.match(blockMenu, />\s*Отдельным блоком\s*</);
-    assert.match(blockMenu, /placeholder="Например: a\^2 \+ b\^2 = c\^2"/);
-    assert.doesNotMatch(blockMenu, /Формула LaTeX|>\s*Inline\s*</);
+    assert.doesNotMatch(blockMenu, /formulaDraft|insertFormula|Формула/);
+    assert.match(blockMenu, /insertInlineDate/);
   });
 
   it("uses clear grouped actions in Data and Export settings", () => {

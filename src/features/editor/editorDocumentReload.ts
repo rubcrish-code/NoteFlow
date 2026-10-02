@@ -14,15 +14,14 @@ interface EditorDocumentReloadInput {
 }
 
 export function shouldReloadEditorDocument(input: EditorDocumentReloadInput) {
-  const { currentDocument, nextDocument, nextToken, previousToken } = input;
+  const { nextToken, previousToken } = input;
   if (!previousToken || previousToken.noteId !== nextToken.noteId) {
     return true;
   }
   if (previousToken.reloadGeneration !== nextToken.reloadGeneration) {
     return true;
   }
-  if (previousToken.contentVersion === nextToken.contentVersion) {
-    return false;
-  }
-  return JSON.stringify(currentDocument) !== JSON.stringify(nextDocument);
+  // A save acknowledgement is not an external document replacement. Re-parsing
+  // Markdown here would overwrite in-flight typing and reset the selection.
+  return false;
 }
