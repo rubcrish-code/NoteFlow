@@ -23,7 +23,7 @@ import { Toast, type ToastAction } from "../shared/Toast";
 import { TooltipPortal } from "../shared/TooltipPortal";
 import { AppZoomProvider } from "../shared/AppZoomContext";
 import { LocalProfileModal } from "../shared/LocalProfileModal";
-import { matchesAppShortcut } from "../shared/appShortcuts";
+import { APP_SHORTCUTS, matchesAppShortcut } from "../shared/appShortcuts";
 import { useAppZoom } from "../shared/useAppZoom";
 import { shouldTemporarilyHideNoteList } from "../shared/physicalLayout";
 import { usePhysicalViewportWidth } from "../shared/usePhysicalViewportWidth";
@@ -129,6 +129,8 @@ export function AppShell() {
   const saveTimeoutRef = useRef<number | null>(null);
   const pendingSavesRef = useRef(new PendingNoteSaves<PendingNoteSave>());
   const saveSequenceRef = useRef(0);
+  const bulkDeleteInProgressRef = useRef(false);
+  const notesGenerationRef = useRef(0);
   const noteContentVersionsRef = useRef(new Map<string, number>());
   const isClosingRef = useRef(false);
   const settingsHydratedRef = useRef(false);
@@ -256,6 +258,7 @@ export function AppShell() {
         void dataService
           .listNotes("")
           .then((loadedNotes) => {
+            if (searchRequestIdRef.current !== requestId) return;
             setNotes(loadedNotes);
             setActiveNoteId((currentId) => (loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? ""));
           })
@@ -364,6 +367,10 @@ export function AppShell() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const isCommand = event.ctrlKey || event.metaKey;
+      if (document.querySelector(".bulk-delete-modal") && APP_SHORTCUTS.some((shortcut) => matchesAppShortcut(event, shortcut.id))) {
+        event.preventDefault();
+        return;
+      }
 
       if (event.key === "Escape") {
         if (isNewNoteModalOpen) {
@@ -500,13 +507,16 @@ export function AppShell() {
   }
 
   async function refreshSecondaryData() {
+    const generation = notesGenerationRef.current;
     const [loadedProjects, loadedTags, loadedArchiveItems] = await Promise.all([dataService.listProjects(), dataService.listTags(), dataService.listArchive()]);
+    if (generation !== notesGenerationRef.current) return;
     setProjects(loadedProjects);
     setTags(loadedTags);
     setArchiveItems(loadedArchiveItems);
   }
 
   async function flushPendingSave() {
+    if (bulkDeleteInProgressRef.current) throw new Error("Удаление заметок ещё выполняется");
     if (saveTimeoutRef.current !== null) {
       window.clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
@@ -612,6 +622,7 @@ export function AppShell() {
     wordCount: number,
     contentSidecars: EditorContentSidecarInput[],
   ) {
+    if (bulkDeleteInProgressRef.current || !notes.some((note) => note.id === noteId)) return;
     const currentNote = notes.find((note) => note.id === noteId);
     const shouldPreserveFallbackContent = Boolean(
       currentNote?.editorLoadFallbackReason && !contentMarkdown.trim() && !plainText.trim() && currentNote.contentMarkdown.trim(),
@@ -714,8 +725,10 @@ export function AppShell() {
 
   async function createNote(title: string, noteDate: string) {
     if (!await tryFlushPendingSave()) return;
+    const generation = notesGenerationRef.current;
     try {
       const newNote = await dataService.createNote(title, noteDate);
+      if (generation !== notesGenerationRef.current) return;
       setNotes((currentNotes) => sortNotesForDisplay([newNote, ...currentNotes.filter((note) => note.id !== newNote.id)]));
       setActiveNoteId(newNote.id);
       setQuery("");
@@ -740,11 +753,13 @@ export function AppShell() {
 
   async function openNote(noteId: string, archivedHint?: boolean, failureMessage?: string) {
     if (!await tryFlushPendingSave()) return false;
+    const generation = notesGenerationRef.current;
     const archivedResult = archivedHint ?? searchResults.find((result) => result.noteId === noteId)?.archived;
     openedArchivedNoteIdRef.current = archivedResult ? noteId : null;
     if (!notes.some((note) => note.id === noteId)) {
       try {
         const loadedNote = await dataService.getNote(noteId);
+        if (generation !== notesGenerationRef.current || bulkDeleteInProgressRef.current) return false;
         setNotes((currentNotes) => sortNotesForDisplay([loadedNote, ...currentNotes.filter((note) => note.id !== noteId)]));
       } catch (error) {
         showToast(failureMessage ?? `Не удалось открыть заметку: ${String(error)}`);
@@ -784,9 +799,11 @@ export function AppShell() {
   }
 
   function duplicateNote(noteId: string) {
+    const generation = notesGenerationRef.current;
     void flushPendingSave()
       .then(() => dataService.duplicateNote(noteId))
       .then((duplicatedNote) => {
+        if (generation !== notesGenerationRef.current) return;
         setNotes((currentNotes) => sortNotesForDisplay([duplicatedNote, ...currentNotes.filter((note) => note.id !== duplicatedNote.id)]));
         setActiveNoteId(duplicatedNote.id);
         setSearchRevision((revision) => revision + 1);
@@ -830,10 +847,12 @@ export function AppShell() {
   }
 
   function removeNote(noteId: string, mode: "archive" | "delete") {
+    const generation = notesGenerationRef.current;
     void flushPendingSave()
       .then(() => (mode === "archive" ? dataService.archiveNote(noteId) : dataService.deleteNote(noteId)))
       .then(async () => {
         const loadedNotes = await dataService.listNotes("");
+        if (generation !== notesGenerationRef.current) return;
         setNotes(loadedNotes);
         if (activeNoteId === noteId) {
           setActiveNoteId(loadedNotes[0]?.id ?? "");
@@ -1073,6 +1092,47 @@ export function AppShell() {
     return result;
   }
 
+  async function deleteAllNotes() {
+    if (bulkDeleteInProgressRef.current) throw new Error("Удаление заметок ещё выполняется");
+    bulkDeleteInProgressRef.current = true;
+    if (saveTimeoutRef.current !== null) {
+      window.clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    try {
+      const result = await pendingSavesRef.current.deleteAfterInFlight(dataService.deleteAllNotes);
+      notesGenerationRef.current += 1;
+      searchRequestIdRef.current += 1;
+      saveSequenceRef.current += 1;
+      noteContentVersionsRef.current.clear();
+      openedArchivedNoteIdRef.current = null;
+      setNotes([]);
+      setActiveNoteId("");
+      setProjects((items) => items.map((project) => ({ ...project, notes: 0, files: undefined })));
+      setTags((items) => items.map((tag) => ({ ...tag, count: 0 })));
+      setArchiveItems((items) => items.filter((item) => item.kind === "Проект").map((item) => ({ ...item, noteCount: 0 })));
+      setQuery("");
+      setProjectScope(null);
+      setSearchResults([]);
+      setSearchStatus("idle");
+      setSemanticOpenTarget(null);
+      setEditorSelectionText("");
+      setIsChatOpen(false);
+      setSaveStatus("saved");
+      setEditorReloadGeneration((generation) => generation + 1);
+      setWorkspaceReloadGeneration((generation) => generation + 1);
+      setSearchRevision((revision) => revision + 1);
+      void refreshSecondaryData().catch(() => showToast("Заметки удалены. Не удалось обновить счётчики проектов и тегов."));
+      return result;
+    } finally {
+      bulkDeleteInProgressRef.current = false;
+      // A failed transaction retains drafts and resumes the usual autosave.
+      if (pendingSavesRef.current.hasPending()) {
+        saveTimeoutRef.current = window.setTimeout(() => { void flushPendingSave().catch(() => undefined); }, 850);
+      }
+    }
+  }
+
   async function importMarkdown(notesToImport: Parameters<typeof dataService.importMarkdown>[0]) {
     if (!await tryFlushPendingSave()) throw new Error("Сначала сохраните текущую заметку");
     const importedNotes = await dataService.importMarkdown(notesToImport);
@@ -1257,6 +1317,7 @@ export function AppShell() {
         onBackupPreview={previewBackup}
         onImportBackup={importBackup}
         onImportMarkdown={importMarkdown}
+        onDeleteAllNotes={deleteAllNotes}
         onEditLocalProfile={() => setIsProfileNameModalOpen(true)}
         onThemeChange={(nextTheme) => updateUiSettings({ theme: nextTheme })}
         onToast={showToast}

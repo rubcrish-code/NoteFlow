@@ -521,6 +521,27 @@ export async function deleteNotePermanently(noteId: string) {
   await invoke<void>("delete_note_permanently", { noteId });
 }
 
+export interface DeleteAllNotesSummary {
+  notes: number;
+  archivedNotes: number;
+  revisions: number;
+  noteChats: number;
+  ragChats: number;
+}
+
+export interface DeleteAllNotesResult {
+  deletedNotes: number;
+  cleanupPending: boolean;
+}
+
+export function getDeleteAllNotesSummary() {
+  return invoke<DeleteAllNotesSummary>("get_delete_all_notes_summary");
+}
+
+export function deleteAllNotes() {
+  return invoke<DeleteAllNotesResult>("delete_all_notes");
+}
+
 export async function restoreNote(noteId: string) {
   return mapNote(await invoke<NoteDto>("restore_note", { noteId }));
 }

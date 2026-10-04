@@ -301,6 +301,23 @@ pub struct WorkspaceSnapshotDto {
     pub data_location: DataLocationDto,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAllNotesSummaryDto {
+    pub notes: i64,
+    pub archived_notes: i64,
+    pub revisions: i64,
+    pub note_chats: i64,
+    pub rag_chats: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAllNotesResultDto {
+    pub deleted_notes: i64,
+    pub cleanup_pending: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirstRunStateDto {
@@ -2603,6 +2620,63 @@ impl DataStore {
         transaction.commit()?;
         let _ = assets::collect_garbage(&mut self.conn, &self.base_dir);
         Ok(())
+    }
+
+    fn get_delete_all_notes_summary(&self) -> DataResult<DeleteAllNotesSummaryDto> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(archived_at IS NOT NULL), 0),
+             (SELECT COUNT(*) FROM note_revisions),
+             (SELECT COUNT(*) FROM ai_chats WHERE scope = 'note'),
+             (SELECT COUNT(*) FROM ai_chats WHERE scope = 'rag') FROM notes",
+            [],
+            |row| {
+                Ok(DeleteAllNotesSummaryDto {
+                    notes: row.get(0)?,
+                    archived_notes: row.get(1)?,
+                    revisions: row.get(2)?,
+                    note_chats: row.get(3)?,
+                    rag_chats: row.get(4)?,
+                })
+            },
+        )?)
+    }
+
+    fn delete_all_notes(&mut self) -> DataResult<DeleteAllNotesResultDto> {
+        let transaction = self.conn.transaction()?;
+        // Cascades own revisions, sidecars, relations, assets refs, chunks, vectors
+        // and the queue. Global chat snapshots require explicit bulk-only removal.
+        transaction.execute("DELETE FROM ai_chats", [])?;
+        let deleted_notes = transaction.execute("DELETE FROM notes", [])? as i64;
+        transaction.execute("DELETE FROM notes_fts", [])?;
+        transaction.execute("DELETE FROM note_search_fts", [])?;
+        transaction.execute("DELETE FROM knowledge_chunks_fts", [])?;
+        transaction.execute(
+            "UPDATE embedding_index_state SET status = 'current', total_chunks = 0,
+             indexed_chunks = 0, pending_chunks = 0, failed_chunks = 0,
+             last_error_code = NULL, updated_at = ?1",
+            params![now_iso()],
+        )?;
+        transaction.commit()?;
+
+        // Files never participate in the database transaction. Orphan blob rows
+        // remain discoverable by the existing startup/reconcile retry if GC fails.
+        let gc_failed = assets::collect_garbage(&mut self.conn, &self.base_dir).is_err();
+        let cleanup_pending = gc_failed
+            || self
+                .conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM asset_blobs b
+             WHERE NOT EXISTS(SELECT 1 FROM note_asset_refs n WHERE n.blob_id = b.id)
+             AND NOT EXISTS(SELECT 1 FROM revision_asset_refs r WHERE r.blob_id = b.id)
+             AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.blob_id = b.id))",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap_or(true);
+        Ok(DeleteAllNotesResultDto {
+            deleted_notes,
+            cleanup_pending,
+        })
     }
 
     fn delete_note_rows(transaction: &Transaction<'_>, note_id: &str) -> DataResult<()> {
@@ -7492,6 +7566,37 @@ pub fn delete_note_permanently(
 }
 
 #[tauri::command]
+pub async fn get_delete_all_notes_summary(
+    state: State<'_, AppState>,
+) -> Result<DeleteAllNotesSummaryDto, PublicCommandError> {
+    with_store_blocking(Arc::clone(&state.store), |store| {
+        store.get_delete_all_notes_summary()
+    })
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn delete_all_notes(
+    state: State<'_, AppState>,
+) -> Result<DeleteAllNotesResultDto, PublicCommandError> {
+    let result = with_store_blocking(Arc::clone(&state.store), |store| store.delete_all_notes())
+        .await
+        .map_err(|_| PublicCommandError {
+            code: "DELETE_NOTES_FAILED",
+            message: "Не удалось удалить заметки.",
+            retryable: true,
+        })?;
+    // Providers and credentials survive; cancel only obsolete indexing work.
+    if let Ok(operations) = state.embedding_operations.lock() {
+        for token in operations.values() {
+            token.store(true, Ordering::SeqCst);
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn list_projects(
     include_archived: bool,
     state: State<'_, AppState>,
@@ -7978,6 +8083,362 @@ mod tests {
 
     fn temp_store_dir() -> PathBuf {
         std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()))
+    }
+
+    fn bulk_delete_fixture(dir: PathBuf) -> (DataStore, NoteDto, String) {
+        let mut store = DataStore::open(dir).expect("temporary database");
+        assert_eq!(
+            store.get_delete_all_notes_summary().expect("summary").notes,
+            0
+        );
+        for title in ["Bulk A", "Bulk B"] {
+            store
+                .create_project(CreateProjectRequest {
+                    title: title.into(),
+                    description: "QA only".into(),
+                })
+                .expect("project");
+        }
+        for name in ["red", "green"] {
+            store
+                .create_tag(CreateTagRequest {
+                    name: name.into(),
+                    color: "green".into(),
+                    custom_color: None,
+                })
+                .expect("tag");
+        }
+        let first = create_note_with_content(&mut store, "Bulk N1", "Русский **Markdown** 🔎");
+        let image = store_test_image(&mut store, &first.id, "shared.png", 41);
+        save_image_note(&mut store, &first, &image);
+        let first = store.get_note(&first.id).expect("updated image note");
+        insert_revision_fixture(
+            &store,
+            &first.id,
+            "bulk-revision",
+            &now_iso(),
+            RevisionKind::Periodic,
+        );
+        let second = store.duplicate_note(&first.id).expect("shared asset note");
+        store
+            .rename_note(RenameNoteRequest {
+                note_id: second.id.clone(),
+                title: "Bulk N2".into(),
+            })
+            .expect("rename");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: first.id.clone(),
+                project_title: "Bulk A".into(),
+            })
+            .expect("move A");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: second.id,
+                project_title: "Bulk B".into(),
+            })
+            .expect("move B");
+        create_note_with_content(&mut store, "Bulk N3", "Standalone");
+        let fourth = create_note_with_content(&mut store, "Bulk N4", "Archived standalone");
+        store.archive_note(&fourth.id).expect("archive standalone");
+        let fifth = create_note_with_content(&mut store, "Bulk N5", "Archived project");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: fifth.id,
+                project_title: "Bulk B".into(),
+            })
+            .expect("move archived");
+        let project = store
+            .list_projects(false)
+            .expect("projects")
+            .into_iter()
+            .find(|p| p.title == "Bulk B")
+            .expect("B");
+        store.archive_project(&project.id).expect("archive project");
+        let tag = store.list_tags(None).expect("tags")[0].id.clone();
+        store
+            .set_note_tag(SetNoteTagRequest {
+                note_id: first.id.clone(),
+                tag_id: tag,
+                assigned: true,
+            })
+            .expect("tag relation");
+        store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: first.id.clone(),
+                role: "assistant".into(),
+                content: "История заметки".into(),
+            })
+            .expect("note chat");
+        let rag = store
+            .create_rag_chat(CreateRagChatRequest {
+                title: Some("Bulk RAG".into()),
+            })
+            .expect("rag");
+        store.conn.execute("INSERT INTO ai_messages(id,chat_id,role,content,sources_json,created_at) VALUES('bulk-message',?1,'assistant','История базы',?2,?3)", params![rag.id, json!([{"noteId": first.id, "excerpt":"private snapshot"}]).to_string(), now_iso()]).expect("snapshot");
+        let secrets = llm::MemorySecretStorage::default();
+        store
+            .save_llm_provider(
+                &secrets,
+                llm_provider_request(None, "Bulk provider", Some("test-only-key")),
+            )
+            .expect("provider");
+        let request = serde_json::from_value(json!({"name":"Bulk embeddings","providerType":"openai","baseUrl":"http://127.0.0.1:19999/v1","model":"test","embeddingsEndpoint":"/embeddings","batchSize":8,"timeoutSeconds":5,"locality":"local","enabled":false,"deleteApiKey":false})).expect("embedding request");
+        let profile = embedding::save_profile(&mut store.conn, &secrets, request).expect("profile");
+        knowledge::rebuild(&mut store.conn).expect("chunks");
+        store.conn.execute("INSERT INTO knowledge_chunk_embeddings(chunk_id,profile_id,chunk_content_hash,vector_blob,dimensions,vector_norm,pipeline_version,created_at,updated_at) SELECT id,?1,content_hash,?2,3,1,1,?3,?3 FROM knowledge_chunks", params![profile.id, vec![0_u8; 12], now_iso()]).expect("vectors");
+        store.conn.execute("INSERT INTO embedding_chunk_failures(chunk_id,profile_id,chunk_content_hash,error_code,updated_at) SELECT id,?1,content_hash,'temporary',?2 FROM knowledge_chunks", params![profile.id, now_iso()]).expect("failures");
+        (store, first, profile.id)
+    }
+
+    fn table_count(store: &DataStore, table: &str) -> i64 {
+        store
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("fixture count")
+    }
+
+    const BULK_NOTE_TABLES: &[&str] = &[
+        "notes",
+        "note_tags",
+        "note_revisions",
+        "note_content_sidecars",
+        "note_revision_sidecars",
+        "attachments",
+        "note_asset_refs",
+        "revision_asset_refs",
+        "note_attachment_refs",
+        "revision_attachment_refs",
+        "notes_fts",
+        "note_search_fts",
+        "knowledge_chunks",
+        "knowledge_chunk_state",
+        "knowledge_chunks_fts",
+        "knowledge_chunk_embeddings",
+        "embedding_chunk_failures",
+        "knowledge_sync_queue",
+        "ai_chats",
+        "ai_messages",
+    ];
+
+    #[test]
+    fn bulk_delete_cleans_all_note_data_preserves_profile_and_survives_reopen() {
+        let dir = temp_store_dir();
+        let (mut store, _, profile_id) = bulk_delete_fixture(dir.clone());
+        let settings = store
+            .conn
+            .prepare("SELECT key,value_json FROM app_settings ORDER BY key")
+            .expect("settings")
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .expect("settings rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("settings collect");
+        let before = store.get_delete_all_notes_summary().expect("summary");
+        assert_eq!(before.notes, 5);
+        assert_eq!(before.archived_notes, 3);
+        assert_eq!(before.note_chats, 1);
+        assert_eq!(before.rag_chats, 1);
+        assert!(before.revisions > 0);
+        let result = store.delete_all_notes().expect("delete all");
+        assert_eq!(result.deleted_notes, 5);
+        assert!(!result.cleanup_pending);
+        for table in BULK_NOTE_TABLES {
+            assert_eq!(table_count(&store, table), 0, "{table}");
+        }
+        assert_eq!(table_count(&store, "asset_blobs"), 0);
+        assert_eq!(table_count(&store, "projects"), 2);
+        assert_eq!(table_count(&store, "tags"), 2);
+        assert_eq!(table_count(&store, "llm_providers"), 1);
+        assert_eq!(table_count(&store, "embedding_profiles"), 1);
+        let after = store
+            .conn
+            .prepare("SELECT key,value_json FROM app_settings ORDER BY key")
+            .expect("settings")
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .expect("settings rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("settings collect");
+        assert_eq!(settings, after);
+        assert!(store
+            .list_projects(true)
+            .expect("projects")
+            .iter()
+            .all(|p| p.notes == 0));
+        assert!(store
+            .list_tags(None)
+            .expect("tags")
+            .iter()
+            .all(|t| t.count == 0));
+        assert_eq!(
+            knowledge::index_status(&store.conn)
+                .expect("knowledge")
+                .total_notes,
+            0
+        );
+        assert_eq!(
+            embedding::get_index_status(&mut store.conn, &profile_id)
+                .expect("embedding status")
+                .pending_chunks,
+            0
+        );
+        assert!(store
+            .conn
+            .prepare("PRAGMA foreign_key_check")
+            .expect("integrity")
+            .query([])
+            .expect("check")
+            .next()
+            .expect("row")
+            .is_none());
+        drop(store);
+        let reopened = DataStore::open(dir).expect("reopen");
+        for table in BULK_NOTE_TABLES {
+            assert_eq!(table_count(&reopened, table), 0, "reopened {table}");
+        }
+        assert_eq!(table_count(&reopened, "projects"), 2);
+        assert_eq!(table_count(&reopened, "tags"), 2);
+    }
+
+    #[test]
+    fn bulk_delete_fault_rolls_back_notes_chats_relations_indexes_and_assets() {
+        let (mut store, _, _) = bulk_delete_fixture(temp_store_dir());
+        let before = BULK_NOTE_TABLES
+            .iter()
+            .map(|t| table_count(&store, t))
+            .collect::<Vec<_>>();
+        store.conn.execute_batch("CREATE TRIGGER fail_bulk_delete BEFORE DELETE ON notes WHEN (SELECT COUNT(*) FROM notes)=1 BEGIN SELECT RAISE(ABORT,'fault'); END;").expect("fault");
+        assert!(store.delete_all_notes().is_err());
+        for (table, count) in BULK_NOTE_TABLES.iter().zip(before) {
+            assert_eq!(table_count(&store, table), count, "rollback {table}");
+        }
+        assert_eq!(table_count(&store, "asset_blobs"), 1);
+        assert_eq!(table_count(&store, "projects"), 2);
+        assert_eq!(table_count(&store, "tags"), 2);
+    }
+
+    #[test]
+    fn bulk_delete_rejects_late_autosave_and_note_chat_write() {
+        let (mut store, note, _) = bulk_delete_fixture(temp_store_dir());
+        store.delete_all_notes().expect("delete");
+        assert!(store
+            .update_note_content(UpdateNoteContentRequest {
+                note_id: note.id.clone(),
+                expected_content_version: note.content_version,
+                content_json: document_from_text("late draft"),
+                content_markdown: "late draft".into(),
+                content_html: "<p>late draft</p>".into(),
+                content_sidecars: vec![],
+                plain_text: "late draft".into(),
+            })
+            .is_err());
+        assert!(store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: note.id,
+                role: "assistant".into(),
+                content: "late answer".into()
+            })
+            .is_err());
+        assert_eq!(table_count(&store, "notes"), 0);
+        assert_eq!(table_count(&store, "ai_messages"), 0);
+    }
+
+    #[test]
+    fn bulk_delete_backup_before_and_after_and_restore_work() {
+        let (mut store, _, _) = bulk_delete_fixture(temp_store_dir());
+        let before = backup_bytes_for_store(&store);
+        store.delete_all_notes().expect("delete");
+        let after = backup_value_from_bytes(&backup_bytes_for_store(&store));
+        assert_eq!(after["notes"].as_array().expect("notes").len(), 0);
+        assert_eq!(after["projects"].as_array().expect("projects").len(), 2);
+        assert_eq!(after["tags"].as_array().expect("tags").len(), 2);
+        store
+            .import_backup(ImportBackupRequest {
+                file_name: "before.zip".into(),
+                bytes: before,
+            })
+            .expect("restore");
+        assert_eq!(table_count(&store, "notes"), 5);
+        assert_eq!(table_count(&store, "ai_chats"), 2);
+        assert_eq!(table_count(&store, "asset_blobs"), 1);
+    }
+
+    #[test]
+    fn bulk_delete_gc_failure_is_retryable_without_undoing_database() {
+        let (mut store, _, _) = bulk_delete_fixture(temp_store_dir());
+        let relative: String = store
+            .conn
+            .query_row(
+                "SELECT storage_rel_path FROM asset_blobs LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .expect("path");
+        let path = store.base_dir.join(relative);
+        fs::remove_file(&path).expect("fixture file");
+        fs::create_dir(&path).expect("simulate blocked file");
+        let result = store.delete_all_notes().expect("committed deletion");
+        assert!(result.cleanup_pending);
+        assert_eq!(table_count(&store, "notes"), 0);
+        assert_eq!(table_count(&store, "asset_blobs"), 1);
+        fs::remove_dir(&path).expect("release blocked path");
+        assets::collect_garbage(&mut store.conn, &store.base_dir).expect("retry");
+        assert_eq!(table_count(&store, "asset_blobs"), 0);
+    }
+
+    #[test]
+    fn bulk_delete_during_embedding_response_cannot_recreate_vectors_or_chunks() {
+        struct DeleteDuringResponse(PathBuf);
+        impl llm::HttpClient for DeleteDuringResponse {
+            fn send(&self, request: llm::HttpRequest) -> DataResult<llm::HttpResponse> {
+                let count = request.body.as_ref().expect("request")["input"]
+                    .as_array()
+                    .expect("inputs")
+                    .len();
+                DataStore::open(self.0.clone())?.delete_all_notes()?;
+                Ok(llm::HttpResponse { status:200, body:json!({"data":(0..count).map(|index| json!({"index":index,"embedding":[1.0,0.5,0.25]})).collect::<Vec<_>>()}).to_string() })
+            }
+        }
+        let dir = temp_store_dir();
+        let (mut store, _, profile_id) = bulk_delete_fixture(dir.clone());
+        store
+            .conn
+            .execute(
+                "UPDATE embedding_profiles SET enabled=1 WHERE id=?1",
+                params![profile_id],
+            )
+            .expect("enabled");
+        crate::auto_knowledge::drain_local_queue(&mut store.conn).expect("source current");
+        let profile = embedding::get_profile(&store.conn, &profile_id).expect("profile");
+        let result = embedding::update_index(
+            &mut store.conn,
+            &profile,
+            &llm::MemorySecretStorage::default(),
+            &DeleteDuringResponse(dir),
+            Arc::new(AtomicBool::new(false)),
+            true,
+        )
+        .expect("late response safely ignored");
+        assert_eq!(result.indexed_chunks, 0);
+        assert_eq!(table_count(&store, "notes"), 0);
+        assert_eq!(table_count(&store, "knowledge_chunks"), 0);
+        assert_eq!(table_count(&store, "knowledge_chunk_embeddings"), 0);
+    }
+
+    #[test]
+    #[ignore = "seeds a synthetic isolated profile for native bulk-delete QA"]
+    fn seed_bulk_delete_native_qa() {
+        let dir =
+            PathBuf::from(std::env::var("NOTEFLOW_BULK_QA_DIR").expect("isolated QA directory"));
+        assert!(dir
+            .file_name()
+            .expect("directory name")
+            .to_string_lossy()
+            .starts_with("noteflow-bulk-qa-"));
+        assert!(!dir.join(DATABASE_FILE).exists());
+        let (store, _, _) = bulk_delete_fixture(dir);
+        store.create_backup().expect("QA backup before deletion");
     }
 
     #[test]

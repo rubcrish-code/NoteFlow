@@ -116,6 +116,8 @@ pub fn run() {
             data::create_rag_chat,
             data::create_tag,
             data::delete_archive_item,
+            data::delete_all_notes,
+            data::get_delete_all_notes_summary,
             data::delete_embedding_profile,
             data::delete_llm_provider,
             data::delete_llm_provider_key,

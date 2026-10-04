@@ -32,6 +32,7 @@ import type { ModelDiscoveryOption, ModelDiscoveryState } from "./ModelSettingsU
 import { SemanticSearchSettings } from "./SemanticSearchSettings";
 import { getSettingsLayoutMode } from "./settingsResponsive";
 import { MarkdownImportControl } from "./MarkdownImportControl";
+import { DeleteAllNotesControl } from "./DeleteAllNotesControl";
 import type { PreparedMarkdownNote } from "./markdownImport";
 import {
   formatBackupDate,
@@ -54,6 +55,7 @@ interface SettingsPageProps {
   onBackupPreview: (file: File) => Promise<BackupPreview>;
   onImportBackup: (file: File) => Promise<ImportBackupResult>;
   onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
+  onDeleteAllNotes: () => Promise<dataService.DeleteAllNotesResult>;
   onEditLocalProfile: () => void;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
@@ -151,6 +153,7 @@ export function SettingsPage({
   onBackupPreview,
   onImportBackup,
   onImportMarkdown,
+  onDeleteAllNotes,
   onEditLocalProfile,
   onNavigate,
   onNewNote,
@@ -209,6 +212,7 @@ export function SettingsPage({
               onBackupPreview={onBackupPreview}
               onImportBackup={onImportBackup}
               onImportMarkdown={onImportMarkdown}
+              onDeleteAllNotes={onDeleteAllNotes}
               onToast={onToast}
             />
           ) : null}
@@ -1391,6 +1395,7 @@ interface DataSettingsProps {
   onBackupPreview: (file: File) => Promise<BackupPreview>;
   onImportBackup: (file: File) => Promise<ImportBackupResult>;
   onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
+  onDeleteAllNotes: () => Promise<dataService.DeleteAllNotesResult>;
   onToast: (message: string) => void;
 }
 
@@ -1417,7 +1422,7 @@ export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()
   return isToday ? `сегодня, ${formatDisplayTime(date)}` : formatDisplayDateTime(date);
 }
 
-function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImportMarkdown, onToast }: DataSettingsProps) {
+function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImportMarkdown, onDeleteAllNotes, onToast }: DataSettingsProps) {
   const importInputRef = useRef<HTMLInputElement>(null);
   const importRequestIdRef = useRef(0);
   const knowledgeMoreRef = useRef<HTMLDetailsElement>(null);
@@ -1639,6 +1644,11 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImpor
           type="file"
         />
       </div>
+      <DeleteAllNotesControl
+        disabled={backupExportState === "creating" || importState.phase !== "closed" || knowledgeOperation !== null}
+        onDelete={onDeleteAllNotes}
+        onToast={onToast}
+      />
       {importState.phase !== "closed" ? (
         <SettingsModalShell
           className="backup-import-modal"

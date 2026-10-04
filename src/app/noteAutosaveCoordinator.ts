@@ -38,6 +38,8 @@ export function shouldRestoreFailedSave<T extends PendingSaveVersion>(
 export class PendingNoteSaves<T extends PendingSaveVersion> {
   private readonly pending = new Map<string, T>();
   private inFlight: Promise<void> | null = null;
+  private generation = 0;
+  private suspended = false;
 
   enqueue(save: T) {
     const current = this.pending.get(save.noteId);
@@ -56,12 +58,28 @@ export class PendingNoteSaves<T extends PendingSaveVersion> {
 
   clear() {
     this.pending.clear();
+    this.generation += 1;
+  }
+
+  async deleteAfterInFlight<TResult>(remove: () => Promise<TResult>): Promise<TResult> {
+    if (this.suspended) throw new Error("Операция с заметками уже выполняется");
+    this.suspended = true;
+    try {
+      // Do not flush unsent drafts. Settle only the write already dispatched.
+      await this.inFlight?.catch(() => undefined);
+      const result = await remove();
+      this.clear();
+      return result;
+    } finally {
+      this.suspended = false;
+    }
   }
 
   flush<Saved extends { contentVersion: number }>(
     persist: (save: T) => Promise<Saved>,
     onSaved: (save: T, saved: Saved, hasNewerSave: boolean) => void,
   ): Promise<void> {
+    if (this.suspended) return Promise.resolve();
     if (this.inFlight) {
       return this.inFlight;
     }
@@ -80,7 +98,8 @@ export class PendingNoteSaves<T extends PendingSaveVersion> {
     persist: (save: T) => Promise<Saved>,
     onSaved: (save: T, saved: Saved, hasNewerSave: boolean) => void,
   ) {
-    while (this.pending.size > 0) {
+    const generation = this.generation;
+    while (!this.suspended && generation === this.generation && this.pending.size > 0) {
       const save = [...this.pending.values()].reduce((first, next) =>
         next.sequence < first.sequence ? next : first,
       );
@@ -90,11 +109,14 @@ export class PendingNoteSaves<T extends PendingSaveVersion> {
       try {
         saved = await persist(save);
       } catch (error) {
+        if (generation !== this.generation) return;
         if (shouldRestoreFailedSave(this.get(save.noteId), save)) {
           this.pending.set(save.noteId, save);
         }
         throw error;
       }
+
+      if (generation !== this.generation) return;
 
       const pending = this.get(save.noteId);
       const hasNewerSave = hasNewerPendingSave(pending, save.noteId, save.sequence);
