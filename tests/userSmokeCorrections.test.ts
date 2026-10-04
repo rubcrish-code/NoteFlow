@@ -74,10 +74,9 @@ describe("final user smoke corrective pass", () => {
     assert.doesNotMatch(uiSettingsSource, /localStorage/);
   });
 
-  it("presents honest language status and only registered shortcut references", () => {
+  it("has no language controls and keeps only registered shortcut references", () => {
     assert.doesNotMatch(settingsSource, /id: "language"/);
-    assert.match(settingsSource, /Язык интерфейса/);
-    assert.match(settingsSource, /Другие языки интерфейса появятся/);
+    assert.doesNotMatch(settingsSource, /Язык интерфейса|Другие языки интерфейса появятся/);
     assert.match(settingsSource, /APP_SHORTCUTS/);
     assert.match(settingsSource, /EDITOR_SHORTCUTS/);
     assert.ok(APP_SHORTCUTS.every((shortcut) => settingsSource.includes("APP_SHORTCUTS") && shortcut.keys.length > 0));

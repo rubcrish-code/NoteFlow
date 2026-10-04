@@ -9,6 +9,7 @@ import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 interface ProjectsPageProps {
   projects: ProjectCard[];
   onArchiveProject: (projectId: string) => Promise<void>;
+  onExportProject: (project: ProjectCard) => Promise<void>;
   onCreateProject: (title: string, description: string) => Promise<ProjectCard>;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
@@ -18,13 +19,14 @@ interface ProjectsPageProps {
   sidebar: PageShellSidebarProps;
 }
 
-export function ProjectsPage({ projects, onArchiveProject, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast, onUpdateProject, sidebar }: ProjectsPageProps) {
+export function ProjectsPage({ projects, onArchiveProject, onExportProject, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast, onUpdateProject, sidebar }: ProjectsPageProps) {
   const [editingProject, setEditingProject] = useState<ProjectCard | null>(null);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [pendingArchive, setPendingArchive] = useState<ProjectCard | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const [openMenuId, setOpenMenuId] = useState("");
+  const [exportBusy, setExportBusy] = useState("");
   const menuAnchorRef = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback(() => setOpenMenuId(""), []);
 
@@ -84,6 +86,11 @@ export function ProjectsPage({ projects, onArchiveProject, onCreateProject, onNa
               </button>
               <MenuPopover anchorRef={menuAnchorRef} ariaLabel={`Действия с проектом «${project.title}»`} className="row-actions-menu" isOpen={openMenuId === project.id} onClose={closeMenu} preferredWidth={210}>
                 <button onClick={() => { closeMenu(); setEditingProject(project); setIsProjectModalOpen(true); }} role="menuitem" type="button">Изменить проект</button>
+                <button disabled={Boolean(exportBusy)} onClick={() => {
+                  if (exportBusy) return;
+                  setExportBusy(project.id);
+                  void onExportProject(project).then(closeMenu).catch((error) => onToast(error instanceof Error && error.message === "Не удалось сохранить изменения перед экспортом." ? error.message : "Не удалось экспортировать проект.")).finally(() => setExportBusy(""));
+                }} role="menuitem" type="button">{exportBusy === project.id ? <span aria-hidden="true" className="button-spinner" /> : null}{exportBusy === project.id ? "Сохраняем…" : "Экспортировать"}</button>
                 <button onClick={() => { closeMenu(); setArchiveError(""); setPendingArchive(project); }} role="menuitem" type="button">Архивировать</button>
               </MenuPopover>
             </article>

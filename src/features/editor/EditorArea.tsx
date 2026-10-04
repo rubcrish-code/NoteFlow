@@ -47,6 +47,10 @@ import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysica
 import { getEditorSurfaceLayoutMode } from "./editorToolbarLayout";
 import { MarkdownImportControl, type MarkdownImportControlHandle } from "../settings/MarkdownImportControl";
 import type { PreparedMarkdownNote } from "../settings/markdownImport";
+import { HeadingAnchors, scrollToNoteHeading } from "./headingAnchors";
+import { NoteOutline } from "./NoteOutline";
+import { NoteExportDialog } from "../export/NoteExportDialog";
+import type { NoteExportFormat } from "../export/exportDocument";
 
 interface EditorAreaProps {
   documentReloadGeneration: number;
@@ -69,7 +73,7 @@ interface EditorAreaProps {
   onEditorPageLayoutChange: (layout: EditorPageLayoutSettings) => void;
   onEditorPageLayoutReset: () => void;
   onExitFocus: () => void;
-  onExportMarkdown: (noteId: string) => void;
+  onExportNote: (noteId: string, format: NoteExportFormat) => Promise<void>;
   onMoveNote: (noteId: string, project: string) => Promise<void>;
   onCreateProjectForNote: (noteId: string, title: string) => Promise<void>;
   onRemoveNoteFromProject: (noteId: string) => Promise<void>;
@@ -166,6 +170,7 @@ export function createEditorExtensions(options: {
     TextStyle,
     FontFormat,
     EditorIndent,
+    HeadingAnchors,
     Color,
     Highlight.configure({ multicolor: true }),
     Superscript,
@@ -218,7 +223,7 @@ export function EditorArea({
   onEditorPageLayoutChange,
   onEditorPageLayoutReset,
   onExitFocus,
-  onExportMarkdown,
+  onExportNote,
   onMoveNote,
   onCreateProjectForNote,
   onRemoveNoteFromProject,
@@ -263,6 +268,7 @@ export function EditorArea({
   const [pendingAiActionId, setPendingAiActionId] = useState<NoteAiActionId | undefined>();
   const [isAiPrivacyAccepting, setIsAiPrivacyAccepting] = useState(false);
   const editorRef = useRef<Editor | null>(null);
+  const [exportNoteId, setExportNoteId] = useState<string | null>(null);
   const aiRequestIdRef = useRef(0);
   const isMountedRef = useRef(false);
   const loadedDocumentTokenRef = useRef<EditorDocumentLoadToken | null>(null);
@@ -292,6 +298,8 @@ export function EditorArea({
     editorProps: {
       handleClick: (_view, _pos, event) => handleEditorLinkClick(event, (url) => {
         void openUrl(url).catch(() => onToast("Не удалось открыть ссылку"));
+      }, (anchor) => {
+        if (!scrollToNoteHeading(_view, anchor)) onToast("Заголовок по этой ссылке не найден.");
       }),
       handleClickOn: (_view, _pos, node, _nodePos, event, direct) => {
         if (!direct) {
@@ -707,6 +715,7 @@ export function EditorArea({
             <button className="ibtn" data-tooltip="Фокус-режим (Ctrl+\)" onClick={onToggleFocus} type="button">
               <Icon name="focus" />
             </button>
+            <NoteOutline editor={editor} />
             <button className="ibtn" data-tooltip="Меню заметки" onClick={() => setIsNoteMenuOpen((value) => !value)} type="button">
               <Icon name="dots" />
             </button>
@@ -717,7 +726,7 @@ export function EditorArea({
                 onClose={() => setIsNoteMenuOpen(false)}
                 onDelete={() => setIsDeleteConfirmationOpen(true)}
                 onDuplicate={onDuplicateNote}
-                onExportMarkdown={onExportMarkdown}
+                onExportMarkdown={(noteId) => setExportNoteId(noteId)}
                 onImportMarkdown={() => importControlRef.current?.open()}
                 onMove={onMoveNote}
                 onCreateProject={() => { setNewProjectTitle(""); setProjectCreateError(""); setIsCreateProjectOpen(true); }}
@@ -730,6 +739,7 @@ export function EditorArea({
         </div>
       ) : (
         <div className="focus-strip">
+          <NoteOutline editor={editor} />
           <button className="focus-exit" data-tooltip="Выйти из режима фокуса" onClick={onExitFocus} type="button">
             <Icon name="focus" />
             <span>Выйти из режима фокуса</span>
@@ -746,6 +756,7 @@ export function EditorArea({
         onToast={onToast}
         pendingAiActionId={pendingAiActionId}
       />
+      {exportNoteId ? <NoteExportDialog onClose={() => setExportNoteId(null)} onExport={(format) => onExportNote(exportNoteId, format)} /> : null}
 
       <div className="ed-scroll" ref={editorPageLayout.viewportRef}>
         <div className={`ed-page-frame ${editorPageLayout.isResizing ? "resizing" : ""}`} ref={editorPageLayout.pageRef} style={editorPageLayout.pageStyle}>

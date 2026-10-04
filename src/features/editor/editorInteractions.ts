@@ -62,7 +62,7 @@ export const NoteFlowLink = Link.extend({
     const result = this.parent!(props);
     // Keep the parent's URI/XSS validation; only annotate safe anchors.
     if (typeof href === "string" && sanitizeMarkdownLinkHref(href) && Array.isArray(result) && typeof result[1] === "object" && result[1] !== null) {
-      Object.assign(result[1], { "data-tooltip": href });
+      Object.assign(result[1], { "data-tooltip": href.startsWith("#") ? "Перейти к заголовку" : href });
     }
     return result;
   },

@@ -158,8 +158,7 @@ describe("P1.3 final UX polish", () => {
     assert.doesNotMatch(sidebarSource, /Уильям|noteflow@local|>\s*Выйти\s*</);
     assert.match(sidebarSource, /Локальный профиль/);
     assert.doesNotMatch(settingsSource, /onLanguageChange|Смена языка пока демонстрационная/);
-    assert.match(settingsSource, /Язык интерфейса[\s\S]*Русский/);
-    assert.match(settingsSource, /Другие языки интерфейса появятся в следующих версиях/);
+    assert.doesNotMatch(settingsSource, /Язык интерфейса|Другие языки интерфейса/);
     assert.doesNotMatch(editorSource, /Добавление тегов появится|data-tooltip="Добавить тег"/);
   });
 

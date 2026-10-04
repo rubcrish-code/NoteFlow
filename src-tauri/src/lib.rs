@@ -1,6 +1,7 @@
 mod assets;
 mod auto_knowledge;
 mod data;
+mod document_export;
 mod embedding;
 mod knowledge;
 mod knowledge_agent;
@@ -126,6 +127,10 @@ pub fn run() {
             data::export_note_markdown,
             data::export_note_zip,
             data::export_project_zip,
+            data::export_note_markdown_at_path,
+            data::export_project_zip_at_path,
+            data::get_note_export_images,
+            data::write_note_export_file,
             data::accept_note_ai_privacy,
             data::get_note_ai_status,
             data::get_embedding_index_status,

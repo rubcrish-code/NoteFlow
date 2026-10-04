@@ -7,6 +7,8 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  worker: { format: "es" },
+  optimizeDeps: { include: ["docx", "pdfmake/build/pdfmake", "pdfmake/build/vfs_fonts"] },
 
   build: {
     rollupOptions: {

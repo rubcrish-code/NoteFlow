@@ -182,12 +182,12 @@ describe("editor UI polish contract", () => {
     }
   });
 
-  it("communicates Markdown export path and exposes reveal action", () => {
+  it("communicates successful note export and exposes safe reveal action", () => {
     const appShell = readFileSync("src/app/AppShell.tsx", "utf8");
     const dataService = readFileSync("src/services/dataService.ts", "utf8");
     const toast = readFileSync("src/shared/Toast.tsx", "utf8");
 
-    assert.match(appShell, /Markdown экспортирован: \$\{result\.path\}/);
+    assert.match(appShell, /Заметка сохранена\./);
     assert.match(appShell, /Показать в проводнике/);
     assert.match(appShell, /revealExportedItem\(result\.path\)/);
     assert.match(dataService, /revealItemInDir/);

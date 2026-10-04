@@ -149,7 +149,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            Экспорт Markdown
+            Экспортировать
           </button>
           <button
             className="danger"

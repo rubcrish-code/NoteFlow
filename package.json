@@ -33,13 +33,16 @@
     "@tiptap/extension-underline": "^3.26.1",
     "@tiptap/react": "^3.26.1",
     "@tiptap/starter-kit": "^3.26.1",
+    "docx": "^9.8.1",
     "marked": "^18.0.14",
+    "pdfmake": "^0.2.23",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/jsdom": "^30.0.0",
+    "@types/pdfmake": "^0.2.12",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

@@ -3232,74 +3232,88 @@ impl DataStore {
     }
 
     fn export_note_markdown(&self, note_id: &str) -> DataResult<ExportResultDto> {
-        let note = self.get_note(note_id)?;
-        let stem = sanitize_file_name(&note.title);
+        let note = self.portable_note_snapshot(note_id)?;
+        let stem = crate::document_export::filename(&note.title);
         let file_name = format!("{stem}.md");
         let relative_path = format!("exports/{file_name}");
         let path = self.resolve_storage_path(&relative_path)?;
-        let assets_directory_name = format!("{stem}.assets");
-        let assets_directory =
-            self.resolve_storage_path(&format!("exports/{assets_directory_name}"))?;
-        let mut markdown = note.content_markdown.clone();
-        let mut used_names = HashSet::new();
-        let mut exported_blobs = HashMap::<String, String>::new();
-        let referenced_blobs = {
-            let mut statement = self.conn.prepare(
-                "SELECT b.id, b.mime_type, MIN(a.original_name)
-                 FROM note_asset_refs r
-                 INNER JOIN asset_blobs b ON b.id = r.blob_id
-                 LEFT JOIN attachments a ON a.blob_id = b.id AND a.note_id = ?1
-                 WHERE r.note_id = ?1
-                 GROUP BY b.id, b.mime_type
-                 ORDER BY b.id",
-            )?;
-            let rows = statement
-                .query_map(params![note.id], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
-        };
-        if !referenced_blobs.is_empty() {
-            fs::create_dir_all(&assets_directory)?;
-        }
-        for (blob_id, mime_type, original_name) in referenced_blobs {
-            let preferred = original_name
-                .map(|name| sanitize_file_name(&name))
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| default_asset_export_name(&blob_id, &mime_type));
-            let exported_name = collision_safe_export_name(&preferred, &mut used_names);
-            let (source, _) = assets::resolve_blob_path(&self.conn, &self.base_dir, &blob_id)?;
-            fs::copy(source, assets_directory.join(&exported_name))?;
-            let relative_asset_path = format!("{assets_directory_name}/{exported_name}");
-            markdown = markdown.replace(&assets::asset_uri(&blob_id), &relative_asset_path);
-            exported_blobs.insert(blob_id, exported_name);
-        }
-        for attachment in &note.attachments {
-            let Some(blob_id) = attachment.blob_id.as_deref() else {
-                continue;
-            };
-            let exported_name = if let Some(existing) = exported_blobs.get(blob_id) {
-                existing
-            } else {
-                continue;
-            };
-            let relative_asset_path = format!("{assets_directory_name}/{exported_name}");
-            markdown = markdown.replace(
-                &format!("noteflow-file://{}", attachment.id),
-                &relative_asset_path,
-            );
-        }
-        fs::write(&path, markdown)?;
+        crate::document_export::write_markdown(&path, note)?;
         Ok(export_result(
             path,
             relative_path,
             "Markdown-экспорт заметки создан",
         ))
+    }
+
+    fn portable_note_snapshot(
+        &self,
+        note_id: &str,
+    ) -> DataResult<crate::document_export::PortableNote> {
+        let note = self.get_note(note_id)?;
+        let mut statement = self.conn.prepare(
+            "SELECT b.id, b.mime_type, MIN(a.original_name)
+             FROM note_asset_refs r JOIN asset_blobs b ON b.id = r.blob_id
+             LEFT JOIN attachments a ON a.blob_id = b.id AND a.note_id = ?1
+             WHERE r.note_id = ?1 GROUP BY b.id, b.mime_type ORDER BY b.id",
+        )?;
+        let blobs = statement
+            .query_map(params![note.id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut files = Vec::new();
+        for (id, mime, original) in blobs {
+            let mut references = vec![assets::asset_uri(&id)];
+            references.extend(
+                note.attachments
+                    .iter()
+                    .filter(|a| a.blob_id.as_deref() == Some(&id))
+                    .map(|a| format!("noteflow-file://{}", a.id)),
+            );
+            if !references
+                .iter()
+                .any(|reference| note.content_markdown.contains(reference))
+            {
+                continue;
+            }
+            let (source, _) = assets::resolve_blob_path(&self.conn, &self.base_dir, &id)?;
+            files.push(crate::document_export::PortableAsset {
+                name: original.unwrap_or_else(|| default_asset_export_name(&id, &mime)),
+                id,
+                source,
+                mime,
+                references,
+            });
+        }
+        Ok(crate::document_export::PortableNote {
+            title: note.title,
+            markdown: note.content_markdown,
+            assets: files,
+        })
+    }
+
+    fn portable_project_snapshot(
+        &self,
+        project_id: &str,
+    ) -> DataResult<Vec<crate::document_export::PortableNote>> {
+        let archived: Option<String> = self.conn.query_row(
+            "SELECT archived_at FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )?;
+        let mut statement = self.conn.prepare("SELECT id FROM notes WHERE project_id = ?1 AND deleted_at IS NULL AND (?2 OR archived_at IS NULL) ORDER BY created_at, id")?;
+        let ids = statement
+            .query_map(params![project_id, archived.is_some()], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.iter()
+            .map(|id| self.portable_note_snapshot(id))
+            .collect()
     }
 
     fn export_note_zip(&self, note_id: &str) -> DataResult<ExportResultDto> {
@@ -7752,6 +7766,165 @@ pub async fn create_backup(
     with_store_blocking(Arc::clone(&state.store), |store| store.create_backup())
         .await
         .map_err(backup_command_error)
+}
+
+#[tauri::command]
+pub async fn export_note_markdown_at_path(
+    note_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, PublicCommandError> {
+    let destination = PathBuf::from(path);
+    let check_path = destination.clone();
+    let snapshot = with_store_blocking(Arc::clone(&state.store), move |store| {
+        crate::document_export::validate_destination(&check_path, "md", &store.base_dir)?;
+        store.portable_note_snapshot(&note_id)
+    })
+    .await
+    .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::document_export::write_markdown(&destination, snapshot)?;
+        Ok(export_result(
+            destination,
+            String::new(),
+            "Заметка сохранена.",
+        ))
+    })
+    .await
+    .map_err(|_| command_error(DataError::State("Экспорт не завершён".into())))?
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn export_project_zip_at_path(
+    project_id: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, PublicCommandError> {
+    let destination = PathBuf::from(path);
+    let check_path = destination.clone();
+    let snapshot = with_store_blocking(Arc::clone(&state.store), move |store| {
+        crate::document_export::validate_destination(&check_path, "zip", &store.base_dir)?;
+        store.portable_project_snapshot(&project_id)
+    })
+    .await
+    .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::document_export::write_project(&destination, snapshot)?;
+        Ok(export_result(
+            destination,
+            String::new(),
+            "Проект сохранён.",
+        ))
+    })
+    .await
+    .map_err(|_| command_error(DataError::State("Экспорт не завершён".into())))?
+    .map_err(command_error)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportImageDto {
+    uri: String,
+    mime: String,
+    bytes: Vec<u8>,
+}
+
+#[tauri::command]
+pub async fn get_note_export_images(
+    note_id: String,
+    content_version: i64,
+    uris: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ExportImageDto>, PublicCommandError> {
+    let files = with_store_blocking(Arc::clone(&state.store), move |store| {
+        if store.get_note(&note_id)?.content_version != content_version {
+            return Err(DataError::StaleWrite);
+        }
+        if uris.len() > 500 {
+            return Err(DataError::InvalidInput("Слишком много изображений".into()));
+        }
+        let snapshot = store.portable_note_snapshot(&note_id)?;
+        let mut files = Vec::new();
+        for uri in uris {
+            let asset = snapshot
+                .assets
+                .iter()
+                .find(|a| a.references.contains(&uri))
+                .ok_or_else(|| {
+                    DataError::InvalidInput("Изображение отсутствует в заметке".into())
+                })?;
+            if !assets::IMAGE_MIME_TYPES.contains(&asset.mime.as_str()) {
+                return Err(DataError::InvalidInput(
+                    "Неподдерживаемое изображение".into(),
+                ));
+            }
+            files.push((uri, asset.source.clone(), asset.mime.clone()));
+        }
+        Ok(files)
+    })
+    .await
+    .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut total = 0usize;
+        let mut images = Vec::new();
+        for (uri, path, mime) in files {
+            let size = fs::metadata(&path)?.len();
+            if size > 32 * 1024 * 1024 {
+                return Err(DataError::InvalidInput(
+                    "Изображение слишком большое".into(),
+                ));
+            }
+            total = total.saturating_add(size as usize);
+            if total > crate::document_export::MAX_EXPORT_BYTES {
+                return Err(DataError::InvalidInput(
+                    "Изображения слишком большие".into(),
+                ));
+            }
+            images.push(ExportImageDto {
+                uri,
+                mime,
+                bytes: fs::read(path)?,
+            });
+        }
+        Ok(images)
+    })
+    .await
+    .map_err(|_| command_error(DataError::State("Экспорт не завершён".into())))?
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn write_note_export_file(
+    note_id: String,
+    path: String,
+    format: String,
+    bytes: Vec<u8>,
+    state: State<'_, AppState>,
+) -> Result<ExportResultDto, PublicCommandError> {
+    let destination = PathBuf::from(path);
+    let check_path = destination.clone();
+    let check_format = format.clone();
+    with_store_blocking(Arc::clone(&state.store), move |store| {
+        store.get_note(&note_id)?;
+        if !matches!(check_format.as_str(), "txt" | "docx" | "pdf") {
+            return Err(DataError::InvalidInput("Неподдерживаемый формат".into()));
+        }
+        crate::document_export::validate_destination(&check_path, &check_format, &store.base_dir)
+    })
+    .await
+    .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::document_export::write_document(&destination, &format, &bytes)?;
+        Ok(export_result(
+            destination,
+            String::new(),
+            "Заметка сохранена.",
+        ))
+    })
+    .await
+    .map_err(|_| command_error(DataError::State("Экспорт не завершён".into())))?
+    .map_err(command_error)
 }
 
 #[tauri::command]
@@ -13491,13 +13664,148 @@ mod tests {
             .expect("portable export");
         let markdown = fs::read_to_string(&export.path).expect("export markdown");
         assert!(!markdown.contains(assets::ASSET_URI_PREFIX));
-        assert!(markdown.contains("Portable_export.assets/диаграмма.png"));
+        assert!(markdown.contains("Portable%20export.assets-"));
+        assert!(markdown.contains("/диаграмма.png"));
+        let folder = fs::read_dir(store.base_dir.join("exports"))
+            .expect("exports")
+            .filter_map(Result::ok)
+            .find(|entry| entry.path().is_dir())
+            .expect("assets directory");
+        assert!(folder.path().join("диаграмма.png").is_file());
+    }
+
+    #[test]
+    fn portable_project_snapshot_contains_only_selected_active_notes_and_needed_assets() {
+        let mut store = temp_store();
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Экспортируемый".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let mut ids = Vec::new();
+        for index in 0..4 {
+            let note = store
+                .create_note(CreateNoteRequest {
+                    title: format!("Заметка {index}"),
+                    note_date: "2026-10-04".into(),
+                })
+                .expect("note");
+            if index < 3 {
+                store
+                    .move_note_to_project(MoveNoteRequest {
+                        note_id: note.id.clone(),
+                        project_title: project.title.clone(),
+                    })
+                    .expect("assign");
+            }
+            ids.push(note.id);
+        }
+        store
+            .archive_note(&ids[2])
+            .expect("archive standalone note");
+        let note = store.get_note(&ids[0]).expect("fresh");
+        let attachment = store_test_image(&mut store, &note.id, "Рисунок.png", 30);
+        save_image_note(&mut store, &note, &attachment);
+        let snapshots = store
+            .portable_project_snapshot(&project.id)
+            .expect("snapshot");
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots
+            .iter()
+            .all(|note| !note.title.ends_with('2') && !note.title.ends_with('3')));
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|note| note.assets.len())
+                .sum::<usize>(),
+            1
+        );
+        store.archive_project(&project.id).expect("archive project");
+        assert_eq!(
+            store
+                .portable_project_snapshot(&project.id)
+                .expect("archived snapshot")
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    #[ignore = "explicit isolated Phase E export fixture; never opens a user profile"]
+    fn seed_phase_e_export_fixture() {
+        let directory = PathBuf::from(
+            std::env::var_os("NOTEFLOW_PHASE_E_QA_DIR").expect("explicit QA directory"),
+        );
+        assert!(
+            directory.starts_with(std::env::temp_dir())
+                && directory
+                    .file_name()
+                    .expect("name")
+                    .to_string_lossy()
+                    .starts_with("noteflow-phase-e-")
+        );
+        let mut store = DataStore::open(directory).expect("QA store");
         assert!(store
-            .base_dir
-            .join("exports")
-            .join("Portable_export.assets")
-            .join("диаграмма.png")
-            .is_file());
+            .list_notes(None, true)
+            .expect("fresh notes")
+            .is_empty());
+        store
+            .complete_first_run(CompleteFirstRunRequest {
+                profile_name: "QA Phase E".into(),
+            })
+            .expect("profile");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "EXPORT TEST".into(),
+                description: "Phase E QA only".into(),
+            })
+            .expect("project");
+        for index in 0..3 {
+            let note = store
+                .create_note(CreateNoteRequest {
+                    title: if index < 2 {
+                        "Документация API".into()
+                    } else {
+                        "Третья заметка".into()
+                    },
+                    note_date: "2026-10-04".into(),
+                })
+                .expect("note");
+            store
+                .move_note_to_project(MoveNoteRequest {
+                    note_id: note.id.clone(),
+                    project_title: project.title.clone(),
+                })
+                .expect("project note");
+            let image = store
+                .store_attachment(StoreAttachmentRequest {
+                    note_id: note.id.clone(),
+                    kind: "image".into(),
+                    original_name: "Схема.png".into(),
+                    mime_type: "image/png".into(),
+                    original_attachment_id: None,
+                    edit_metadata: None,
+                    bytes: include_bytes!("../icons/32x32.png").to_vec(),
+                })
+                .expect("real PNG")
+                .attachment;
+            let uri = image.asset_uri.expect("asset");
+            let markdown = format!("# Документация API\n\n**Жирный** и *курсив*. Съешь ещё этих мягких французских булок. Ёжик.\n\n## Списки\n\n- пункт один\n- пункт два\n\n1. первый\n2. второй\n\n- [ ] задача\n- [x] готово\n\n> Цитата\n\n[Сайт](https://example.com) и [Раздел](#таблица)\n\n## Таблица\n\n| Колонка А | Колонка Б |\n| --- | --- |\n| Русский текст | Значение |\n| Строка 2 | Проверка |\n\n:::info\nВажное примечание\n:::\n\n:::details Подробности\nСкрытое содержимое\n:::\n\n---\n\n![Схема]({uri})\n\n### Результаты\n\n{}\n\n## Результаты\n\nКонец.", "Русский длинный текст для проверки пагинации.\n\n".repeat(80));
+            let current = store.get_note(&note.id).expect("current");
+            let document = json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"QA rich export"}]},{"type":"image","attrs":{"src":uri,"attachmentId":image.id,"alt":"Схема"}}]});
+            store
+                .update_note_content(UpdateNoteContentRequest {
+                    note_id: note.id,
+                    expected_content_version: current.content_version,
+                    content_json: document,
+                    content_markdown: markdown,
+                    content_html: "<p>QA cache only</p>".into(),
+                    plain_text: "QA rich export".into(),
+                    content_sidecars: vec![],
+                })
+                .expect("rich fixture");
+        }
     }
 
     #[test]
@@ -13536,7 +13844,8 @@ mod tests {
             .expect("portable export");
         let markdown = fs::read_to_string(export.path).expect("markdown");
         assert!(!markdown.contains(assets::ASSET_URI_PREFIX));
-        assert!(markdown.contains("Legacy_portable.assets/asset-"));
+        assert!(markdown.contains("Legacy%20portable.assets-"));
+        assert!(markdown.contains("/asset-"));
     }
 
     #[test]
@@ -13568,16 +13877,16 @@ mod tests {
             .expect("save images");
         let export = store.export_note_markdown(&note.id).expect("export");
         let markdown = fs::read_to_string(export.path).expect("markdown");
-        assert!(markdown.contains("Collision_export.assets/схема.png"));
-        assert!(markdown.contains("Collision_export.assets/схема (2).png"));
-        assert!(store
-            .base_dir
-            .join("exports/Collision_export.assets/схема.png")
-            .is_file());
-        assert!(store
-            .base_dir
-            .join("exports/Collision_export.assets/схема (2).png")
-            .is_file());
+        assert!(markdown.contains("Collision%20export.assets-"));
+        assert!(markdown.contains("/схема.png"));
+        assert!(markdown.contains("/схема%20%282%29.png"));
+        let folder = fs::read_dir(store.base_dir.join("exports"))
+            .expect("exports")
+            .filter_map(Result::ok)
+            .find(|entry| entry.path().is_dir())
+            .expect("assets directory");
+        assert!(folder.path().join("схема.png").is_file());
+        assert!(folder.path().join("схема (2).png").is_file());
     }
 
     #[test]

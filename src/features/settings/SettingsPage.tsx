@@ -52,8 +52,6 @@ interface SettingsPageProps {
   onNewNote: () => void;
   onBackupCreate: () => Promise<ExportResult | null>;
   onBackupPreview: (file: File) => Promise<BackupPreview>;
-  onExportCurrentNote: () => void;
-  onExportCurrentProject: () => void;
   onImportBackup: (file: File) => Promise<ImportBackupResult>;
   onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
   onEditLocalProfile: () => void;
@@ -151,8 +149,6 @@ export function SettingsPage({
   theme,
   onBackupCreate,
   onBackupPreview,
-  onExportCurrentNote,
-  onExportCurrentProject,
   onImportBackup,
   onImportMarkdown,
   onEditLocalProfile,
@@ -211,8 +207,6 @@ export function SettingsPage({
             <DataSettings
               onBackupCreate={onBackupCreate}
               onBackupPreview={onBackupPreview}
-              onExportCurrentNote={onExportCurrentNote}
-              onExportCurrentProject={onExportCurrentProject}
               onImportBackup={onImportBackup}
               onImportMarkdown={onImportMarkdown}
               onToast={onToast}
@@ -235,7 +229,7 @@ function GeneralSettings({ localProfileName, onEditLocalProfile }: GeneralSettin
   return (
     <div>
       <div className="settings-title">Основные</div>
-      <div className="settings-subtitle">Профиль, язык и основные сведения о локальной работе NoteFlow.</div>
+      <div className="settings-subtitle">Профиль и основные сведения о локальной работе NoteFlow.</div>
       <section className="settings-preference-group" aria-labelledby="general-profile-heading">
         <div className="settings-preference-label" id="general-profile-heading">Профиль</div>
         <div className="settings-preference-list">
@@ -252,11 +246,6 @@ function GeneralSettings({ localProfileName, onEditLocalProfile }: GeneralSettin
           <div className="settings-preference-row">
             <span className="settings-info-icon"><Icon name="doc" /></span>
             <span className="settings-preference-copy"><b>Данные на устройстве</b><small>Заметки и настройки хранятся локально. Регистрация не требуется.</small></span>
-          </div>
-          <div className="settings-preference-row">
-            <span className="settings-info-icon"><Icon name="gear" /></span>
-            <span className="settings-preference-copy"><b>Язык интерфейса</b><small>Другие языки интерфейса появятся в следующих версиях.</small></span>
-            <span className="settings-status-label">Русский</span>
           </div>
         </div>
       </section>
@@ -1400,8 +1389,6 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
 interface DataSettingsProps {
   onBackupCreate: () => Promise<ExportResult | null>;
   onBackupPreview: (file: File) => Promise<BackupPreview>;
-  onExportCurrentNote: () => void;
-  onExportCurrentProject: () => void;
   onImportBackup: (file: File) => Promise<ImportBackupResult>;
   onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
   onToast: (message: string) => void;
@@ -1430,7 +1417,7 @@ export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()
   return isToday ? `сегодня, ${formatDisplayTime(date)}` : formatDisplayDateTime(date);
 }
 
-function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, onExportCurrentProject, onImportBackup, onImportMarkdown, onToast }: DataSettingsProps) {
+function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImportMarkdown, onToast }: DataSettingsProps) {
   const importInputRef = useRef<HTMLInputElement>(null);
   const importRequestIdRef = useRef(0);
   const knowledgeMoreRef = useRef<HTMLDetailsElement>(null);
@@ -1564,7 +1551,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
   return (
     <div>
       <div className="settings-title">Данные и экспорт</div>
-      <div className="settings-subtitle">Выгрузите одну заметку, проект или всю базу.</div>
+      <div className="settings-subtitle">Резервные копии профиля, импорт и восстановление данных.</div>
       <div className="settings-card knowledge-index-card">
         <div className="settings-section-head knowledge-index-head">
           <div>
@@ -1605,19 +1592,11 @@ function DataSettings({ onBackupCreate, onBackupPreview, onExportCurrentNote, on
       <div className="settings-card export-card">
         <div className="export-action-group">
           <div className="export-action-head">
-            <b>Экспорт</b>
-            <span>Выберите объём данных</span>
+            <b>Резервная копия</b>
+            <span>Все данные профиля</span>
           </div>
           <div className="export-action-list">
-            <button className="export-action primary" onClick={onExportCurrentNote} type="button">
-              <Icon name="doc" />
-              Текущая заметка
-            </button>
-            <button className="export-action secondary" onClick={onExportCurrentProject} type="button">
-              <Icon name="folder" />
-              Проект
-            </button>
-            <button className="export-action secondary" disabled={backupExportState === "creating"} onClick={() => void createExternalBackup()} type="button">
+            <button className="export-action primary" disabled={backupExportState === "creating"} onClick={() => void createExternalBackup()} type="button">
               {backupExportState === "creating" ? <span aria-hidden="true" className="button-spinner" /> : <Icon name="archive" />}
               {backupExportState === "creating" ? "Создаём копию…" : "Создать резервную копию"}
             </button>

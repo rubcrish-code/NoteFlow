@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, ProjectCard, SaveStatus, TagRow } from "./types";
 import * as dataService from "../services/dataService";
+import * as noteExportService from "../services/noteExportService";
+import type { NoteExportFormat } from "../features/export/exportDocument";
+import { exportAfterFlush } from "../features/export/savedExportFlow";
 import * as searchService from "../services/searchService";
 import type { SearchNoteResult } from "../services/searchService";
 import type { SemanticSearchResult } from "../services/embeddingService";
@@ -842,21 +845,20 @@ export function AppShell() {
       .catch(() => showToast(mode === "archive" ? "Не удалось архивировать заметку." : "Не удалось удалить заметку."));
   }
 
-  function exportNoteMarkdown(noteId: string) {
-    void flushPendingSave()
-      .then(() => dataService.exportNoteMarkdown(noteId))
-      .then((result) =>
-        showToast(`Markdown экспортирован: ${result.path}`, {
-          label: "Показать в проводнике",
-          onClick: () => {
-            void dataService
-              .revealExportedItem(result.path)
-              .then(() => showToast(`Открыт экспорт: ${result.relativePath}`))
-              .catch((error) => showToast(`Не удалось открыть папку экспорта: ${String(error)}`));
-          },
-        }),
-      )
-      .catch((error) => showToast(`Не удалось экспортировать Markdown: ${String(error)}`));
+  function showExportSuccess(result: dataService.ExportResult, message: string) {
+    showToast(message, { label: "Показать в проводнике", onClick: () => {
+      void dataService.revealExportedItem(result.path).catch(() => showToast("Не удалось показать файл в проводнике."));
+    } });
+  }
+
+  async function exportNote(noteId: string, format: NoteExportFormat) {
+    const result = await exportAfterFlush(flushPendingSave, () => noteExportService.exportNote(noteId, format));
+    if (result) showExportSuccess(result, "Заметка сохранена.");
+  }
+
+  async function exportProject(project: ProjectCard) {
+    const result = await exportAfterFlush(flushPendingSave, () => noteExportService.exportProject(project.id, project.title));
+    if (result) showExportSuccess(result, "Проект сохранён.");
   }
 
   function storeAttachment(file: File, kind: "file" | "image", options: dataService.StoreAttachmentOptions = {}) {
@@ -1046,28 +1048,6 @@ export function AppShell() {
     showToast(item.kind === "Проект" ? "Проект и его заметки удалены" : "Заметка удалена");
   }
 
-  function exportCurrentNoteZip() {
-    if (!activeNote) {
-      showToast("Нет активной заметки для экспорта");
-      return;
-    }
-    void flushPendingSave()
-      .then(() => dataService.exportNoteZip(activeNote.id))
-      .then((result) => showToast(`${result.message}: ${result.relativePath}`))
-      .catch((error) => showToast(`Не удалось экспортировать заметку: ${String(error)}`));
-  }
-
-  function exportCurrentProjectZip() {
-    if (!activeNote?.projectId) {
-      showToast("У текущей заметки нет проекта для экспорта");
-      return;
-    }
-    void flushPendingSave()
-      .then(() => dataService.exportProjectZip(activeNote.projectId ?? ""))
-      .then((result) => showToast(`${result.message}: ${result.relativePath}`))
-      .catch((error) => showToast(`Не удалось экспортировать проект: ${String(error)}`));
-  }
-
   async function createBackup() {
     await flushPendingSave();
     return dataService.createBackup();
@@ -1190,7 +1170,7 @@ export function AppShell() {
     return renderLazyFeaturePage(
       "projects",
       "проекты",
-      <LazyProjectsPage onArchiveProject={archiveProject} onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} onUpdateProject={updateProject} projects={projects} sidebar={sharedPageSidebar} />,
+      <LazyProjectsPage onArchiveProject={archiveProject} onExportProject={exportProject} onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} onUpdateProject={updateProject} projects={projects} sidebar={sharedPageSidebar} />,
     );
   }
 
@@ -1275,8 +1255,6 @@ export function AppShell() {
         onNewNote={openNewNoteModal}
         onBackupCreate={createBackup}
         onBackupPreview={previewBackup}
-        onExportCurrentNote={exportCurrentNoteZip}
-        onExportCurrentProject={exportCurrentProjectZip}
         onImportBackup={importBackup}
         onImportMarkdown={importMarkdown}
         onEditLocalProfile={() => setIsProfileNameModalOpen(true)}
@@ -1365,7 +1343,7 @@ export function AppShell() {
             editorContentOffset={uiSettings.editorContentOffset}
             editorContentWidth={uiSettings.editorContentWidth}
             onExitFocus={() => setIsFocusMode(false)}
-            onExportMarkdown={exportNoteMarkdown}
+            onExportNote={exportNote}
             onEditorPageLayoutChange={(layout) => updateUiSettings(layout)}
             onEditorPageLayoutReset={() =>
               updateUiSettings({
