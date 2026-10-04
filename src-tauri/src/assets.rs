@@ -18,6 +18,24 @@ pub const ASSET_ROOT: &str = "assets";
 pub const ASSET_URI_PREFIX: &str = "noteflow-asset://";
 pub const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 pub const MAX_ATTACHMENT_BYTES: u64 = 512 * 1024 * 1024;
+pub const IMAGE_MIME_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentPolicy {
+    max_image_bytes: u64,
+    max_file_bytes: u64,
+    image_mime_types: [&'static str; 3],
+}
+
+#[tauri::command]
+pub fn get_attachment_policy() -> AttachmentPolicy {
+    AttachmentPolicy {
+        max_image_bytes: MAX_IMAGE_BYTES,
+        max_file_bytes: MAX_ATTACHMENT_BYTES,
+        image_mime_types: IMAGE_MIME_TYPES,
+    }
+}
 const MAX_LEGACY_IMAGE_BYTES: usize = 100 * 1024 * 1024;
 const MIGRATION_STATE_KEY: &str = "internal.asset-storage.v1";
 

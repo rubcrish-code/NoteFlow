@@ -1,251 +1,152 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { canvasToPngDataUrl, getCanvasContext, loadImage } from "./imageEditService";
+import { useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type PointerEvent, type Ref } from "react";
+import { cropPixels, intrinsicPoint, renderImageDocument, type AnnotationTool, type ImageAnnotation, type ImagePoint, type ImageSize } from "./imageEditorDocument";
+import type { Rect } from "./imageGeometry";
+import { Icon, type IconName } from "../../shared/Icon";
+import { annotationBounds, hitTestAnnotation, translateAnnotation } from "./annotationGeometry";
 
-type AnnotationTool = "arrow" | "line" | "marker" | "pen" | "rect" | "text";
+export interface ImageAnnotationCanvasHandle { clearSelection: () => boolean }
+type CanvasTool = AnnotationTool | "move";
+type PointerDraft = { pointerId: number; annotation: ImageAnnotation } & (
+  { kind: "create" } | { kind: "move"; index: number; anchor: ImagePoint; original: ImageAnnotation }
+);
 
 interface ImageAnnotationCanvasProps {
-  src: string;
-  onApply: (dataUrl: string) => void;
+  image: HTMLImageElement | null;
+  size: ImageSize;
+  crop: Rect;
+  annotations: readonly ImageAnnotation[];
+  onCommit: (annotation: ImageAnnotation) => void;
+  onUpdate: (index: number, annotation: ImageAnnotation) => void;
+  onBusyChange: (busy: boolean) => void;
+  ref?: Ref<ImageAnnotationCanvasHandle>;
 }
-
-const tools: Array<{ label: string; value: AnnotationTool }> = [
-  { label: "Карандаш", value: "pen" },
-  { label: "Маркер", value: "marker" },
-  { label: "Линия", value: "line" },
-  { label: "Стрелка", value: "arrow" },
-  { label: "Прямоугольник", value: "rect" },
-  { label: "Текст", value: "text" },
+const tools: Array<{ label: string; value: CanvasTool; icon: IconName }> = [
+  { label: "Перемещение", value: "move", icon: "hand" },
+  { label: "Карандаш", value: "pen", icon: "pen" }, { label: "Маркер", value: "marker", icon: "highlight" },
+  { label: "Линия", value: "line", icon: "minus" }, { label: "Стрелка", value: "arrow", icon: "annotationArrow" },
+  { label: "Прямоугольник", value: "rect", icon: "rectangle" }, { label: "Текст", value: "text", icon: "annotationText" },
 ];
 
-function drawArrowHead(context: CanvasRenderingContext2D, fromX: number, fromY: number, toX: number, toY: number) {
-  const angle = Math.atan2(toY - fromY, toX - fromX);
-  const size = 14;
-  context.beginPath();
-  context.moveTo(toX, toY);
-  context.lineTo(toX - size * Math.cos(angle - Math.PI / 6), toY - size * Math.sin(angle - Math.PI / 6));
-  context.moveTo(toX, toY);
-  context.lineTo(toX - size * Math.cos(angle + Math.PI / 6), toY - size * Math.sin(angle + Math.PI / 6));
-  context.stroke();
-}
-
-export function ImageAnnotationCanvas({ src, onApply }: ImageAnnotationCanvasProps) {
+export function ImageAnnotationCanvas({ image, size, crop, annotations, onCommit, onUpdate, onBusyChange, ref }: ImageAnnotationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const drawingRef = useRef(false);
-  const startRef = useRef<{ x: number; y: number } | null>(null);
-  const snapshotRef = useRef<ImageData | null>(null);
-  const [tool, setTool] = useState<AnnotationTool>("pen");
+  const draftRef = useRef<PointerDraft | null>(null);
+  const frameRef = useRef<number | null>(null);
+  const [tool, setTool] = useState<CanvasTool>("pen");
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const selectedRef = useRef<number | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [color, setColor] = useState("#3b6ef2");
   const [lineWidth, setLineWidth] = useState(4);
-  const [textDraft, setTextDraft] = useState("Подпись");
-  const [history, setHistory] = useState<string[]>([]);
-  const [redoStack, setRedoStack] = useState<string[]>([]);
-
-  useEffect(() => {
-    let isMounted = true;
-    void loadImage(src).then((image) => {
-      if (!isMounted || !canvasRef.current) {
-        return;
+  const [text, setText] = useState<{ point: ImagePoint; value: string; color: string; width: number } | null>(null);
+  function paint(document = annotations) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const draft = draftRef.current;
+    const preview = !draft ? document : draft.kind === "create" ? [...document, draft.annotation]
+      : document.map((annotation, index) => index === draft.index ? draft.annotation : annotation);
+    renderImageDocument(canvas, image, size, crop, preview);
+    const selected = selectedRef.current === null ? undefined : preview[selectedRef.current];
+    const context = canvas.getContext("2d");
+    if (!selected || !context) return;
+    const pixels = cropPixels(size, crop);
+    const scale = pixels.width / Math.max(1, canvas.getBoundingClientRect().width);
+    const bounds = annotationBounds(selected, context);
+    const inset = 4 * scale;
+    context.save();
+    context.strokeStyle = "#3b6ef2";
+    context.lineWidth = scale;
+    context.setLineDash([4 * scale, 3 * scale]);
+    context.strokeRect(bounds.x - pixels.x - inset, bounds.y - pixels.y - inset, bounds.width + inset * 2, bounds.height + inset * 2);
+    context.restore();
+  }
+  function select(index: number | null) { selectedRef.current = index; setSelectedIndex(index); }
+  function clearSelection() {
+    if (selectedRef.current === null) return false;
+    select(null); paint(); return true;
+  }
+  useImperativeHandle(ref, () => ({ clearSelection }));
+  useEffect(() => { if (selectedRef.current !== null && !annotations[selectedRef.current]) select(null); paint(); }, [image, size, crop, annotations]);
+  useEffect(() => () => { if (frameRef.current !== null) cancelAnimationFrame(frameRef.current); }, []);
+  useEffect(() => { onBusyChange(text !== null); return () => onBusyChange(false); }, [text, onBusyChange]);
+  function point(event: PointerEvent<HTMLCanvasElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return intrinsicPoint({ x: event.clientX, y: event.clientY }, { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height }, size, crop);
+  }
+  function start(event: PointerEvent<HTMLCanvasElement>) {
+    if (event.button !== 0 || draftRef.current || text) return;
+    event.preventDefault();
+    const anchor = point(event);
+    if (tool === "move") {
+      const context = event.currentTarget.getContext("2d");
+      const tolerance = 6 * cropPixels(size, crop).width / Math.max(1, event.currentTarget.getBoundingClientRect().width);
+      const index = context ? hitTestAnnotation(annotations, anchor, tolerance, context) : null;
+      select(index);
+      if (index !== null) {
+        const annotation = annotations[index];
+        draftRef.current = { kind: "move", pointerId: event.pointerId, index, anchor, original: annotation, annotation };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDragging(true); onBusyChange(true);
       }
-      const canvas = canvasRef.current;
-      canvas.width = image.naturalWidth;
-      canvas.height = image.naturalHeight;
-      const context = getCanvasContext(canvas);
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0);
-      setHistory([canvasToPngDataUrl(canvas)]);
-      setRedoStack([]);
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [src]);
-
-  function getCanvasPoint(event: PointerEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return { x: 0, y: 0 };
+      paint(); return;
     }
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: ((event.clientX - rect.left) / rect.width) * canvas.width,
-      y: ((event.clientY - rect.top) / rect.height) * canvas.height,
-    };
-  }
-
-  function configureStroke(context: CanvasRenderingContext2D, useMarker = false) {
-    context.globalAlpha = useMarker ? 0.35 : 1;
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.lineWidth = useMarker ? lineWidth * 2.4 : lineWidth;
-    context.strokeStyle = color;
-    context.fillStyle = color;
-  }
-
-  function commitHistory() {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-    const dataUrl = canvasToPngDataUrl(canvas);
-    setHistory((currentHistory) => [...currentHistory, dataUrl].slice(-30));
-    setRedoStack([]);
-  }
-
-  function startDrawing(event: PointerEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    const point = getCanvasPoint(event);
-    const context = getCanvasContext(canvas);
+    const intrinsicWidth = lineWidth * size.width * crop.width / Math.max(1, event.currentTarget.getBoundingClientRect().width);
     if (tool === "text") {
-      context.font = `${Math.max(16, lineWidth * 5)}px Inter, system-ui, sans-serif`;
-      context.fillStyle = color;
-      context.globalAlpha = 1;
-      context.fillText(textDraft.trim() || "Подпись", point.x, point.y);
-      commitHistory();
-      return;
+      setText({ point: anchor, value: "", color, width: intrinsicWidth }); return;
     }
-
-    drawingRef.current = true;
-    startRef.current = point;
-    snapshotRef.current = context.getImageData(0, 0, canvas.width, canvas.height);
-    configureStroke(context, tool === "marker");
-    context.beginPath();
-    context.moveTo(point.x, point.y);
+    draftRef.current = { kind: "create", pointerId: event.pointerId, annotation: { tool, points: [anchor], color, width: intrinsicWidth } };
     event.currentTarget.setPointerCapture(event.pointerId);
+    onBusyChange(true);
+    paint();
   }
-
-  function draw(event: PointerEvent<HTMLCanvasElement>) {
-    if (!drawingRef.current || !canvasRef.current || !startRef.current) {
-      return;
-    }
-
-    const canvas = canvasRef.current;
-    const context = getCanvasContext(canvas);
-    const point = getCanvasPoint(event);
-    configureStroke(context, tool === "marker");
-
-    if (tool === "pen" || tool === "marker") {
-      context.lineTo(point.x, point.y);
-      context.stroke();
-      return;
-    }
-
-    if (snapshotRef.current) {
-      context.putImageData(snapshotRef.current, 0, 0);
-    }
-    const start = startRef.current;
-    context.beginPath();
-    if (tool === "rect") {
-      context.rect(start.x, start.y, point.x - start.x, point.y - start.y);
-      context.stroke();
-      return;
-    }
-    context.moveTo(start.x, start.y);
-    context.lineTo(point.x, point.y);
-    context.stroke();
-    if (tool === "arrow") {
-      drawArrowHead(context, start.x, start.y, point.x, point.y);
-    }
+  function move(event: PointerEvent<HTMLCanvasElement>) {
+    const draft = draftRef.current;
+    if (!draft || draft.pointerId !== event.pointerId) return;
+    const next = point(event);
+    draft.annotation = draft.kind === "move" ? translateAnnotation(draft.original, { x: next.x - draft.anchor.x, y: next.y - draft.anchor.y })
+      : { ...draft.annotation, points: draft.annotation.tool === "pen" || draft.annotation.tool === "marker"
+      ? [...draft.annotation.points, next] : [draft.annotation.points[0], next] };
+    if (frameRef.current === null) frameRef.current = requestAnimationFrame(() => { frameRef.current = null; paint(); });
   }
-
-  function stopDrawing(event: PointerEvent<HTMLCanvasElement>) {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    if (!drawingRef.current) {
-      return;
-    }
-    drawingRef.current = false;
-    startRef.current = null;
-    snapshotRef.current = null;
-    const context = canvasRef.current ? getCanvasContext(canvasRef.current) : null;
-    if (context) {
-      context.globalAlpha = 1;
-    }
-    commitHistory();
+  function finish(event: PointerEvent<HTMLCanvasElement>, cancelled = false) {
+    if (draftRef.current?.pointerId !== event.pointerId) return;
+    if (!cancelled) move(event);
+    const draft = draftRef.current;
+    draftRef.current = null;
+    if (frameRef.current !== null) { cancelAnimationFrame(frameRef.current); frameRef.current = null; }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    onBusyChange(false); setDragging(false);
+    if (!cancelled && draft.kind === "create") onCommit(draft.annotation);
+    if (!cancelled && draft.kind === "move" && draft.annotation.points.some((point, index) => point.x !== draft.original.points[index].x || point.y !== draft.original.points[index].y)) onUpdate(draft.index, draft.annotation);
+    paint(!cancelled && draft.kind === "move" ? annotations.map((annotation, index) => index === draft.index ? draft.annotation : annotation) : annotations);
   }
-
-  async function restoreFromDataUrl(dataUrl: string) {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-    const image = await loadImage(dataUrl);
-    const context = getCanvasContext(canvas);
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0);
+  function confirmText() {
+    if (!text) return;
+    if (text.value.trim()) onCommit({ tool: "text", points: [text.point], color: text.color, width: text.width, text: text.value });
+    setText(null);
   }
-
-  function undo() {
-    if (history.length <= 1) {
-      return;
-    }
-    const previous = history[history.length - 2];
-    const current = history[history.length - 1];
-    setHistory((currentHistory) => currentHistory.slice(0, -1));
-    setRedoStack((currentRedo) => [...currentRedo, current]);
-    void restoreFromDataUrl(previous);
-  }
-
-  function redo() {
-    const next = redoStack[redoStack.length - 1];
-    if (!next) {
-      return;
-    }
-    setRedoStack((currentRedo) => currentRedo.slice(0, -1));
-    setHistory((currentHistory) => [...currentHistory, next]);
-    void restoreFromDataUrl(next);
-  }
-
-  function applyAnnotations() {
-    if (canvasRef.current) {
-      onApply(canvasToPngDataUrl(canvasRef.current));
-    }
-  }
-
-  return (
-    <div className="image-annotation-tool">
-      <div className="image-editor-toolbar">
-        <div className="image-editor-segmented" role="toolbar" aria-label="Инструменты рисования">
-          {tools.map((item) => (
-            <button className={tool === item.value ? "active" : ""} key={item.value} onClick={() => setTool(item.value)} type="button">
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <label className="image-editor-color">
-          Цвет
-          <input onChange={(event) => setColor(event.currentTarget.value)} type="color" value={color} />
-        </label>
-        <label className="image-editor-range">
-          Толщина
-          <input max="18" min="2" onChange={(event) => setLineWidth(Number(event.currentTarget.value))} type="range" value={lineWidth} />
-        </label>
-        {tool === "text" ? (
-          <label className="image-editor-text">
-            Текст
-            <input onChange={(event) => setTextDraft(event.currentTarget.value)} value={textDraft} />
-          </label>
-        ) : null}
-        <div className="image-editor-history">
-          <button className="secondary-btn" disabled={history.length <= 1} onClick={undo} type="button">
-            Отмена
-          </button>
-          <button className="secondary-btn" disabled={redoStack.length === 0} onClick={redo} type="button">
-            Повтор
-          </button>
-        </div>
+  const textPosition = text ? {
+    "--annotation-text-x": `${Math.min(85, Math.max(0, (text.point.x / size.width - crop.x) / crop.width * 100))}%`,
+    "--annotation-text-y": `${Math.min(90, Math.max(0, (text.point.y / size.height - crop.y) / crop.height * 100))}%`,
+  } as CSSProperties : undefined;
+  return <div className="image-annotation-tool">
+    <div className="image-editor-toolbar">
+      <div className="image-editor-segmented" role="toolbar" aria-label="Инструменты рисования">
+        {tools.map((item) => <button aria-label={item.label} title={item.value === "move" ? "Перемещение элементов" : item.label} aria-pressed={tool === item.value} className={`image-drawing-tool ${tool === item.value ? "active" : ""}`} key={item.value}
+          disabled={dragging || text !== null} onClick={() => { clearSelection(); setTool(item.value); }} type="button"><Icon name={item.icon} /></button>)}
       </div>
-      <div className="image-annotation-stage">
-        <canvas ref={canvasRef} onPointerDown={startDrawing} onPointerMove={draw} onPointerUp={stopDrawing} />
-      </div>
-      <button className="primary-btn image-editor-apply" onClick={applyAnnotations} type="button">
-        Применить
-      </button>
+      <label className="image-editor-color">Цвет<input type="color" value={color} onChange={(event) => setColor(event.currentTarget.value)} /></label>
+      <label className="image-editor-range drawing-stroke-range" style={{ "--drawing-color": color } as CSSProperties}>Толщина<input aria-label="Толщина" type="range" min="2" max="18" value={lineWidth} onChange={(event) => setLineWidth(Number(event.currentTarget.value))} /><output>{lineWidth}</output></label>
     </div>
-  );
+    <div className="image-annotation-stage"><div className="image-annotation-surface" style={{ "--image-editor-aspect": cropPixels(size, crop).width / cropPixels(size, crop).height } as CSSProperties}>
+      <canvas ref={canvasRef} aria-label="Холст рисования" data-tool={tool} data-selected={selectedIndex !== null} data-dragging={dragging} tabIndex={0}
+        onKeyDown={(event) => { if (event.key === "Escape" && clearSelection()) { event.preventDefault(); event.stopPropagation(); } }} onPointerDown={start} onPointerMove={move} onPointerUp={(event) => finish(event)}
+        onPointerCancel={(event) => finish(event, true)} onLostPointerCapture={(event) => finish(event, true)} />
+      {text ? <form className="image-annotation-text-entry" style={textPosition} onSubmit={(event) => { event.preventDefault(); confirmText(); }}>
+        <input aria-label="Текст на изображении" autoFocus value={text.value} onChange={(event) => setText({ ...text, value: event.currentTarget.value })}
+          onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setText(null); } }} />
+        <button aria-label="Добавить текст" className="secondary-btn" type="submit">OK</button>
+        <button aria-label="Отменить текст" className="secondary-btn" type="button" onClick={() => setText(null)}>Отмена</button>
+      </form> : null}
+    </div></div>
+  </div>;
 }

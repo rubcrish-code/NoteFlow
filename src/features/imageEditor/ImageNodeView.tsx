@@ -26,6 +26,7 @@ export interface EditableImageTarget {
   attrs: EditableImageAttributes;
   mode: ImageEditMode;
   updateAttributes: (attrs: Partial<EditableImageAttributes>) => void;
+  isCurrent: () => boolean;
 }
 
 interface EditableImageOptions {
@@ -105,6 +106,7 @@ function ImageNodeView(props: NodeViewProps) {
   const [draftSize, setDraftSize] = useState<Size | null>(null);
   const [isMoreActionsOpen, setIsMoreActionsOpen] = useState(false);
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
+  const [isResetOpen, setIsResetOpen] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const descriptionFormId = `image-description-${useId()}`;
   const attrs = readImageAttrs(props.node.attrs);
@@ -133,7 +135,12 @@ function ImageNodeView(props: NodeViewProps) {
   }
 
   function openEditor(mode: ImageEditMode) {
-    options.onEditImage?.({ attrs, mode, updateAttributes: updateImageAttrs });
+    const node = props.node;
+    options.onEditImage?.({ attrs, mode, updateAttributes: updateImageAttrs, isCurrent: () => {
+      if (props.editor.isDestroyed) return false;
+      const position = props.getPos();
+      return typeof position === "number" && props.editor.state.doc.nodeAt(position) === node;
+    } });
   }
 
   function startResize(event: PointerEvent<HTMLButtonElement>, handle: ResizeHandle) {
@@ -272,7 +279,7 @@ function ImageNodeView(props: NodeViewProps) {
           >
             <button onClick={() => { setIsMoreActionsOpen(false); openEditor("draw"); }} role="menuitem" type="button">Рисовать</button>
             <button onClick={openDescription} role="menuitem" type="button">Описание изображения</button>
-            <button onClick={() => { setIsMoreActionsOpen(false); resetImage(); }} role="menuitem" type="button">Сбросить изменения</button>
+            <button disabled={!attrs.width && !attrs.height && (!attrs.originalSrc || attrs.originalSrc === attrs.src)} onClick={() => { setIsMoreActionsOpen(false); setIsResetOpen(true); }} role="menuitem" type="button">Сбросить изменения</button>
             <div className="nf-menu-separator" />
             <button className="danger" onClick={() => { setIsMoreActionsOpen(false); props.deleteNode(); }} role="menuitem" type="button">Удалить изображение</button>
           </MenuPopover>
@@ -298,6 +305,10 @@ function ImageNodeView(props: NodeViewProps) {
           </div>
         ) : null}
       </figure>
+      {isResetOpen ? <ModalShell open title="Сбросить изменения?" size="compact" onClose={() => setIsResetOpen(false)}
+        footer={<><button className="secondary-btn" onClick={() => setIsResetOpen(false)} type="button">Отмена</button><button className="primary-btn" onClick={() => { resetImage(); setIsResetOpen(false); }} type="button">Сбросить</button></>}>
+        <p>Изображение будет восстановлено до оригинала. Изменения размера и аннотации будут отменены.</p>
+      </ModalShell> : null}
       {isDescriptionOpen ? (
         <ModalShell
           backdropClassName="modal-backdrop"

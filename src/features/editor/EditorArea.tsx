@@ -255,6 +255,7 @@ export function EditorArea({
   const [projectCreateError, setProjectCreateError] = useState("");
   const importControlRef = useRef<MarkdownImportControlHandle>(null);
   const [imageEditTarget, setImageEditTarget] = useState<EditableImageTarget | null>(null);
+  const [drawingSelection, setDrawingSelection] = useState<EditorInsertSelection | null>(null);
   const [aiStatus, setAiStatus] = useState<NoteAiStatus | null>(null);
   const [aiScopeChoice, setAiScopeChoice] = useState<AiPendingAction | null>(null);
   const [aiPrivacyAction, setAiPrivacyAction] = useState<AiPendingAction | null>(null);
@@ -430,6 +431,8 @@ export function EditorArea({
     });
     loadedDocumentTokenRef.current = nextToken;
     if (shouldReload) {
+      setImageEditTarget(null);
+      setDrawingSelection(null);
       clearImageNodeSelection(editor);
       editor.commands.setContent(note.editorDocument, { emitUpdate: false });
     }
@@ -616,7 +619,7 @@ export function EditorArea({
 
   async function applyImageEdit(dataUrl: string, mode: ImageEditMode) {
     const target = imageEditTarget;
-    if (!target) {
+    if ((!target && !drawingSelection) || !editor) {
       return;
     }
 
@@ -624,10 +627,13 @@ export function EditorArea({
       appliedAt: new Date().toISOString(),
       mode,
     };
-    const originalAttachmentId = target.attrs.originalAttachmentId ?? target.attrs.attachmentId ?? undefined;
-    const fileName = createEditedImageFileName(mode, target.attrs.title ?? target.attrs.alt ?? "image");
+    const originalAttachmentId = target?.attrs.originalAttachmentId ?? target?.attrs.attachmentId ?? undefined;
+    const fileName = createEditedImageFileName(mode, target?.attrs.title ?? target?.attrs.alt ?? "Рисунок");
 
+    const noteId = note.id;
+    const documentToken = loadedDocumentTokenRef.current;
     try {
+      if (target && !target.isCurrent()) throw new Error("Изображение изменилось");
       const editedFile = await dataUrlToFile(dataUrl, fileName);
       const stored = await onStoreAttachment(editedFile, "image", {
         editMetadata: metadata,
@@ -636,18 +642,34 @@ export function EditorArea({
       if (!stored.attachment.assetUri) {
         throw new Error("Managed asset не создан");
       }
-      target.updateAttributes({
+      if (noteIdRef.current !== noteId || loadedDocumentTokenRef.current?.reloadGeneration !== documentToken?.reloadGeneration) {
+        throw new Error("Документ изменился во время редактирования");
+      }
+      if (target && !target.isCurrent()) throw new Error("Изображение изменилось");
+      if (!target && drawingSelection) {
+        const imageAttrs = {
+          attachmentId: stored.attachment.id, originalAttachmentId: stored.attachment.id,
+          originalSrc: stored.attachment.assetUri, src: stored.attachment.assetUri, alt: "Рисунок", title: "Рисунок",
+        };
+        const inserted = editor.chain().focus().setTextSelection(drawingSelection).setImage(imageAttrs).run();
+        if (!inserted) throw new Error("Не удалось вставить рисунок");
+        setDrawingSelection(null);
+        onToast("Рисунок добавлен");
+        return;
+      }
+      target?.updateAttributes({
         attachmentId: stored.attachment.id,
         editedAttachmentId: stored.attachment.id,
         editMetadata: metadata,
-        originalAttachmentId: originalAttachmentId ?? target.attrs.originalAttachmentId ?? null,
-        originalSrc: target.attrs.originalSrc ?? target.attrs.src,
+        originalAttachmentId: originalAttachmentId ?? target?.attrs.originalAttachmentId ?? null,
+        originalSrc: target?.attrs.originalSrc ?? target?.attrs.src,
         src: stored.attachment.assetUri,
+        height: null,
       });
       setImageEditTarget(null);
       onToast(mode === "crop" ? "Изображение обрезано" : "Аннотации применены");
-    } catch (error) {
-      onToast(`Не удалось сохранить изображение: ${String(error)}`);
+    } catch {
+      throw new Error("Не удалось сохранить изображение");
     }
   }
 
@@ -783,17 +805,17 @@ export function EditorArea({
         />
       ) : null}
 
-      {imageEditTarget ? (
+      {imageEditTarget || drawingSelection ? (
         <LazyFeatureBoundary
-          errorFallback={<ImageEditorLoadState kind="error" onClose={() => setImageEditTarget(null)} />}
-          loadingFallback={<ImageEditorLoadState kind="loading" onClose={() => setImageEditTarget(null)} />}
+          errorFallback={<ImageEditorLoadState kind="error" onClose={() => { setImageEditTarget(null); setDrawingSelection(null); }} />}
+          loadingFallback={<ImageEditorLoadState kind="loading" onClose={() => { setImageEditTarget(null); setDrawingSelection(null); }} />}
         >
           <LazyImageEditorModal
-            mode={imageEditTarget.mode}
-            onApply={(dataUrl, mode) => void applyImageEdit(dataUrl, mode)}
-            onClose={() => setImageEditTarget(null)}
-            src={runtimeAssetUrl(imageEditTarget.attrs.src)}
-            title={imageEditTarget.attrs.title ?? imageEditTarget.attrs.alt ?? "Изображение"}
+            mode={imageEditTarget?.mode ?? "draw"}
+            onApply={applyImageEdit}
+            onClose={() => { setImageEditTarget(null); setDrawingSelection(null); }}
+            src={imageEditTarget ? runtimeAssetUrl(imageEditTarget.attrs.src) : ""}
+            title={imageEditTarget?.attrs.title ?? imageEditTarget?.attrs.alt ?? ""}
           />
         </LazyFeatureBoundary>
       ) : null}
@@ -826,6 +848,11 @@ export function EditorArea({
               setBlockInsertTarget(null);
             }}
             onPickAndStoreAttachment={onPickAndStoreAttachment}
+            onCreateDrawing={() => {
+              if (!editor) return;
+              setDrawingSelection(blockInsertSelection ?? { from: editor.state.selection.from, to: editor.state.selection.to });
+              setIsBlockMenuOpen(false);
+            }}
             onToast={onToast}
             selection={blockInsertSelection}
           />

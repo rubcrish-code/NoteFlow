@@ -3215,8 +3215,9 @@ impl DataStore {
     ) -> DataResult<()> {
         let exists = self.conn.query_row(
             "SELECT COUNT(*)
-                 FROM attachments
-                 WHERE id = ?1 AND note_id = ?2 AND kind = 'image'",
+                 FROM attachments a
+                 INNER JOIN note_attachment_refs r ON r.attachment_id = a.id
+                 WHERE a.id = ?1 AND r.note_id = ?2 AND a.kind = 'image'",
             params![attachment_id, note_id],
             |row| row.get::<_, i64>(0),
         )? > 0;
@@ -6368,7 +6369,29 @@ fn command_error(error: DataError) -> PublicCommandError {
         ),
         DataError::InvalidInput(raw) => {
             let lower = raw.to_lowercase();
-            if lower.contains("timeout")
+            if raw == "Файл пустой" {
+                (
+                    "ATTACHMENT_EMPTY",
+                    "Файл пустой. Выберите непустой файл.",
+                    false,
+                )
+            } else if matches!(
+                raw.as_str(),
+                "Изображение превышает допустимый размер" | "Файл превышает допустимый размер"
+            ) {
+                (
+                    "ATTACHMENT_TOO_LARGE",
+                    "Файл превышает допустимый размер.",
+                    false,
+                )
+            } else if raw == "Поддерживаются только изображения PNG, JPEG и WebP"
+            {
+                (
+                    "IMAGE_FORMAT_UNSUPPORTED",
+                    "Формат изображения не поддерживается. Выберите PNG, JPEG или WebP.",
+                    false,
+                )
+            } else if lower.contains("timeout")
                 || lower.contains("timed out")
                 || lower.contains("время ожидания")
             {
@@ -8322,6 +8345,16 @@ mod tests {
         assert!(!database.message.contains("private"));
 
         for (raw, expected_code) in [
+            ("Файл пустой", "ATTACHMENT_EMPTY"),
+            ("Файл превышает допустимый размер", "ATTACHMENT_TOO_LARGE"),
+            (
+                "Изображение превышает допустимый размер",
+                "ATTACHMENT_TOO_LARGE",
+            ),
+            (
+                "Поддерживаются только изображения PNG, JPEG и WebP",
+                "IMAGE_FORMAT_UNSUPPORTED",
+            ),
             ("401 Unauthorized Bearer sk-secret", "PROVIDER_UNAUTHORIZED"),
             ("Timeout with prompt text", "PROVIDER_TIMEOUT"),
             ("429 rate limit with source text", "PROVIDER_RATE_LIMITED"),
@@ -12761,6 +12794,135 @@ mod tests {
             )
             .expect("asset refs");
         assert_eq!(reference_count, 1);
+    }
+
+    #[test]
+    fn phase_d_edit_on_duplicate_creates_new_asset_and_preserves_shared_original() {
+        let mut store = temp_store();
+        let first = store
+            .create_note(CreateNoteRequest {
+                title: "Original image".into(),
+                note_date: "2026-09-22".into(),
+            })
+            .expect("note");
+        let original = store_test_image(&mut store, &first.id, "Оригинал.png", 21);
+        let first = save_image_note(&mut store, &first, &original);
+        let duplicate = store.duplicate_note(&first.id).expect("duplicate");
+        let duplicate_original_id = duplicate.content_json["content"][0]["attrs"]
+            ["originalAttachmentId"]
+            .as_str()
+            .expect("duplicate original attachment")
+            .to_string();
+        let original_path = store
+            .resolve_attachment_path(&original.id)
+            .expect("original path");
+        let original_bytes = fs::read(&original_path).expect("original bytes");
+        let edited = store
+            .store_attachment(StoreAttachmentRequest {
+                note_id: duplicate.id.clone(),
+                kind: "image".into(),
+                original_name: "Рисунок-crop.png".into(),
+                mime_type: "image/png".into(),
+                original_attachment_id: Some(duplicate_original_id),
+                edit_metadata: Some(json!({ "mode": "crop" })),
+                bytes: test_png_bytes(22),
+            })
+            .expect("edit shared image")
+            .attachment;
+        assert_ne!(edited.blob_id, original.blob_id);
+        assert_ne!(edited.asset_uri, original.asset_uri);
+        let saved = save_image_note(&mut store, &duplicate, &edited);
+        assert!(saved
+            .content_markdown
+            .contains(edited.asset_uri.as_deref().expect("edited uri")));
+        assert!(store
+            .get_note(&first.id)
+            .expect("first unchanged")
+            .content_markdown
+            .contains(original.asset_uri.as_deref().expect("original uri")));
+        assets::collect_garbage(&mut store.conn, &store.base_dir).expect("gc");
+        assert_eq!(
+            fs::read(&original_path).expect("original remains"),
+            original_bytes
+        );
+        let backup = store.create_backup().expect("backup edited asset");
+        let backup_bytes = fs::read(backup.path).expect("backup bytes");
+        let directory = store.base_dir.clone();
+        drop(store);
+        let reopened = DataStore::open(directory).expect("restart");
+        assert_eq!(
+            reopened
+                .get_note(&duplicate.id)
+                .expect("edited note reopened")
+                .content_markdown,
+            saved.content_markdown
+        );
+        let mut restored = temp_store();
+        restored
+            .import_backup(ImportBackupRequest {
+                file_name: "edited-images.zip".into(),
+                bytes: backup_bytes,
+            })
+            .expect("restore");
+        assert_eq!(
+            restored
+                .get_note(&duplicate.id)
+                .expect("restored edit")
+                .content_markdown,
+            saved.content_markdown
+        );
+        assert_eq!(
+            fs::read(
+                restored
+                    .resolve_attachment_path(&edited.id)
+                    .expect("restored file")
+            )
+            .expect("bytes"),
+            test_png_bytes(22)
+        );
+        assert_eq!(
+            fs::read(
+                restored
+                    .resolve_attachment_path(&original.id)
+                    .expect("restored original")
+            )
+            .expect("bytes"),
+            original_bytes
+        );
+    }
+
+    #[test]
+    fn phase_d_edit_rejects_unreferenced_original_without_creating_asset() {
+        let mut store = temp_store();
+        let first = store
+            .create_note(CreateNoteRequest {
+                title: "Source".into(),
+                note_date: "2026-09-22".into(),
+            })
+            .expect("source");
+        let other = store
+            .create_note(CreateNoteRequest {
+                title: "Unrelated".into(),
+                note_date: "2026-09-22".into(),
+            })
+            .expect("other");
+        let original = store_test_image(&mut store, &first.id, "original.png", 23);
+        assert!(store
+            .store_attachment(StoreAttachmentRequest {
+                note_id: other.id,
+                kind: "image".into(),
+                original_name: "wrong.png".into(),
+                mime_type: "image/png".into(),
+                original_attachment_id: Some(original.id),
+                edit_metadata: None,
+                bytes: test_png_bytes(24),
+            })
+            .is_err());
+        let count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM asset_blobs", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 1);
     }
 
     #[test]

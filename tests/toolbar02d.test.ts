@@ -30,7 +30,7 @@ function sourceBetween(source: string, start: string, end: string) {
 
 describe("toolbar and block insert menu contract", () => {
   it("keeps simple formatting out of the bottom insert menu", () => {
-    const blockItemsSource = sourceBetween(blockInsertMenuSource, "const blockMenuItems", "const calloutVariants");
+    const blockItemsSource = sourceBetween(blockInsertMenuSource, "const blockMenuItems", "function getTodayIsoDate");
 
     for (const duplicateCommand of ["paragraph", "h1", "h2", "h3", "bulletList", "orderedList", "taskList", "blockquote", "codeBlock"]) {
       assert.doesNotMatch(blockItemsSource, new RegExp(`command: "${duplicateCommand}"`));

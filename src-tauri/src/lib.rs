@@ -14,7 +14,17 @@ mod search;
 use tauri::Manager;
 
 fn renderable_asset_mime(mime: &str) -> bool {
-    matches!(mime, "image/png" | "image/jpeg" | "image/webp")
+    assets::IMAGE_MIME_TYPES.contains(&mime)
+}
+
+fn asset_canvas_origin(origin: &str) -> bool {
+    let app_origin = matches!(
+        origin,
+        "http://tauri.localhost" | "https://tauri.localhost" | "tauri://localhost"
+    );
+    app_origin
+        || (cfg!(debug_assertions)
+            && matches!(origin, "http://127.0.0.1:1420" | "http://localhost:1420"))
 }
 
 fn exit_process(app_handle: &tauri::AppHandle) -> ! {
@@ -40,20 +50,35 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_uri_scheme_protocol("noteflow-asset", |context, request| {
+            let origin = request
+                .headers()
+                .get(tauri::http::header::ORIGIN)
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| asset_canvas_origin(value));
             let asset_id = request.uri().path().trim_start_matches('/');
             let state = context.app_handle().state::<data::AppState>();
             match state.resolve_asset_protocol(asset_id) {
                 Ok((path, mime_type)) if renderable_asset_mime(&mime_type) => {
                     match std::fs::read(path) {
-                        Ok(bytes) => tauri::http::Response::builder()
-                            .header(tauri::http::header::CONTENT_TYPE, mime_type)
-                            .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
-                            .header(
-                                tauri::http::header::CACHE_CONTROL,
-                                "private, max-age=31536000, immutable",
-                            )
-                            .body(bytes)
-                            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                        Ok(bytes) => {
+                            let mut response = tauri::http::Response::builder()
+                                .header(tauri::http::header::CONTENT_TYPE, mime_type)
+                                .header(tauri::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                                .header(
+                                    tauri::http::header::CACHE_CONTROL,
+                                    "private, max-age=31536000, immutable",
+                                )
+                                .header(tauri::http::header::VARY, "Origin");
+                            if let Some(origin) = origin {
+                                response = response.header(
+                                    tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                                    origin,
+                                );
+                            }
+                            response
+                                .body(bytes)
+                                .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
+                        }
                         Err(_) => tauri::http::Response::builder()
                             .status(404)
                             .body(Vec::new())
@@ -76,6 +101,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            assets::get_attachment_policy,
             data::archive_note,
             data::archive_project,
             data::accept_embedding_cloud_consent,
@@ -194,7 +220,30 @@ pub fn run() {
 
 #[cfg(test)]
 mod security_tests {
-    use super::renderable_asset_mime;
+    use super::{asset_canvas_origin, renderable_asset_mime};
+
+    #[test]
+    fn canvas_cors_only_allows_noteflow_origins() {
+        for origin in [
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+            "tauri://localhost",
+        ] {
+            assert!(asset_canvas_origin(origin));
+        }
+        for origin in [
+            "https://example.com",
+            "null",
+            "http://tauri.localhost.evil",
+            "http://127.0.0.1:9999",
+        ] {
+            assert!(!asset_canvas_origin(origin));
+        }
+        assert_eq!(
+            asset_canvas_origin("http://127.0.0.1:1420"),
+            cfg!(debug_assertions)
+        );
+    }
 
     #[test]
     fn custom_asset_protocol_never_serves_active_documents() {

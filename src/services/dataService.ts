@@ -1,4 +1,5 @@
 import { invoke } from "./safeInvoke";
+import { getAttachmentPolicy, validateAttachmentBytes, validateAttachmentSize } from "./attachmentPolicy";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, NoteContentSidecar, NoteTag, ProjectCard, TagColor, TagRow } from "../app/types";
@@ -619,10 +620,14 @@ export interface StoreAttachmentOptions {
 }
 
 export async function storeAttachment(noteId: string, file: File, kind: "file" | "image", options: StoreAttachmentOptions = {}) {
+  const policy = await getAttachmentPolicy();
+  validateAttachmentSize(file.size, kind, policy);
+  const bytes = await fileToBytes(file);
+  validateAttachmentBytes(file.size, Uint8Array.from(bytes.slice(0, 12)), kind, policy);
   return mapAttachmentStoreResult(
     await invoke<AttachmentStoreResultDto>("store_attachment", {
       request: {
-        bytes: await fileToBytes(file),
+        bytes,
         editMetadata: options.editMetadata ?? null,
         kind,
         mimeType: file.type || "application/octet-stream",

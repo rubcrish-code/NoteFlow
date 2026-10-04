@@ -9,6 +9,7 @@ interface MenuPopoverProps {
   children: ReactNode;
   className?: string;
   isOpen: boolean;
+  initialFocusSelector?: string;
   maxHeight?: number;
   onClose: () => void;
   preferredWidth?: number;
@@ -27,6 +28,7 @@ export function MenuPopover({
   children,
   className = "",
   isOpen,
+  initialFocusSelector = MENU_ITEM_SELECTOR,
   maxHeight = 320,
   onClose,
   preferredWidth = 220,
@@ -40,15 +42,21 @@ export function MenuPopover({
     popoverRef,
     preferredWidth,
   });
+  const isPositioned = popoverStyle !== undefined;
+
+  useEffect(() => {
+    if (!isOpen || !isPositioned) return undefined;
+    // Hidden portal content cannot receive focus before floating geometry is ready.
+    const frame = window.requestAnimationFrame(() => {
+      popoverRef.current?.querySelector<HTMLElement>(initialFocusSelector)?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialFocusSelector, isOpen, isPositioned]);
 
   useEffect(() => {
     if (!isOpen) {
       return undefined;
     }
-
-    const animationFrame = window.requestAnimationFrame(() => {
-      popoverRef.current?.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
-    });
 
     function handlePointerDown(event: PointerEvent) {
       const target = event.target;
@@ -90,7 +98,6 @@ export function MenuPopover({
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
     return () => {
-      window.cancelAnimationFrame(animationFrame);
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };

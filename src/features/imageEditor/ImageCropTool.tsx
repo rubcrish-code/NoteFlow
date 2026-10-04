@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { canvasToPngDataUrl, getCanvasContext } from "./imageEditService";
+import { useEffect, useRef, type CSSProperties, type PointerEvent } from "react";
 import {
   clampValue,
   createRectFromPoints,
@@ -13,7 +12,9 @@ import {
 
 interface ImageCropToolProps {
   src: string;
-  onApply: (dataUrl: string) => void;
+  aspectRatio: number;
+  crop: Rect;
+  onChange: (crop: Rect) => void;
 }
 
 type CropInteraction =
@@ -22,7 +23,6 @@ type CropInteraction =
   | { handle: ResizeHandle; kind: "resize"; pointerId: number; startCrop: Rect; startPoint: { x: number; y: number } };
 
 const cropBounds = { height: 1, width: 1 };
-const defaultCrop: Rect = { x: 0.08, y: 0.08, width: 0.84, height: 0.84 };
 const minimumCropSize = { height: 0.04, width: 0.04 };
 
 function getCropHandleLabel(handle: ResizeHandle) {
@@ -39,11 +39,10 @@ function getCropHandleLabel(handle: ResizeHandle) {
   return labels[handle];
 }
 
-export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
+export function ImageCropTool({ src, aspectRatio, crop, onChange: setCrop }: ImageCropToolProps) {
   const imageRef = useRef<HTMLImageElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const interactionRef = useRef<CropInteraction | null>(null);
-  const [crop, setCrop] = useState<Rect>(defaultCrop);
 
   function getRelativePoint(event: PointerEvent<Element>) {
     const layer = layerRef.current;
@@ -62,7 +61,7 @@ export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
   }
 
   function startCreate(event: PointerEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget) {
+    if (event.button !== 0 || event.target !== event.currentTarget) {
       return;
     }
     event.preventDefault();
@@ -74,6 +73,7 @@ export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
   }
 
   function startMove(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     interactionRef.current = { kind: "move", pointerId: event.pointerId, startCrop: crop, startPoint: getRelativePoint(event) };
@@ -83,6 +83,7 @@ export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
   }
 
   function startResize(event: PointerEvent<HTMLButtonElement>, handle: ResizeHandle) {
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     interactionRef.current = { handle, kind: "resize", pointerId: event.pointerId, startCrop: crop, startPoint: getRelativePoint(event) };
@@ -93,7 +94,7 @@ export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
 
   function updateCrop(event: PointerEvent<HTMLDivElement>) {
     const interaction = interactionRef.current;
-    if (!interaction) {
+    if (!interaction || interaction.pointerId !== event.pointerId) {
       return;
     }
     event.preventDefault();
@@ -115,6 +116,8 @@ export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
   }
 
   function stopCrop(event: PointerEvent<HTMLDivElement>) {
+    if (interactionRef.current?.pointerId !== event.pointerId) return;
+    interactionRef.current = null;
     if (layerRef.current?.hasPointerCapture(event.pointerId)) {
       layerRef.current.releasePointerCapture(event.pointerId);
     }
@@ -124,41 +127,18 @@ export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
   }
 
   useEffect(() => {
-    setCrop(defaultCrop);
-  }, [src]);
-
-  useEffect(() => {
     return () => {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
   }, []);
 
-  function applyCrop() {
-    const image = imageRef.current;
-    if (!image) {
-      return;
-    }
-
-    const naturalWidth = image.naturalWidth;
-    const naturalHeight = image.naturalHeight;
-    const sourceX = Math.round(crop.x * naturalWidth);
-    const sourceY = Math.round(crop.y * naturalHeight);
-    const sourceWidth = Math.max(1, Math.round(crop.width * naturalWidth));
-    const sourceHeight = Math.max(1, Math.round(crop.height * naturalHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = sourceWidth;
-    canvas.height = sourceHeight;
-    getCanvasContext(canvas).drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
-    onApply(canvasToPngDataUrl(canvas));
-  }
-
   return (
     <div className="image-crop-tool">
       <div className="image-crop-stage">
-        <div className="image-crop-canvas">
-          <img alt="" draggable={false} ref={imageRef} src={src} />
-          <div className="image-crop-layer" onPointerCancel={stopCrop} onPointerDown={startCreate} onPointerMove={updateCrop} onPointerUp={stopCrop} ref={layerRef}>
+        <div className="image-crop-canvas" style={{ "--image-editor-aspect": aspectRatio } as CSSProperties}>
+          <img alt="" crossOrigin="anonymous" draggable={false} ref={imageRef} src={src} />
+          <div className="image-crop-layer" onLostPointerCapture={stopCrop} onPointerCancel={stopCrop} onPointerDown={startCreate} onPointerMove={updateCrop} onPointerUp={stopCrop} ref={layerRef}>
             <div
               className="image-crop-rect"
               onPointerDown={startMove}
@@ -184,9 +164,6 @@ export function ImageCropTool({ src, onApply }: ImageCropToolProps) {
           </div>
         </div>
       </div>
-      <button className="primary-btn image-editor-apply" onClick={applyCrop} type="button">
-        Применить
-      </button>
     </div>
   );
 }

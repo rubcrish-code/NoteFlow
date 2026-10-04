@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 
 import type { Editor } from "@tiptap/react";
 import type { NoteAttachment } from "../../app/types";
 import { Icon, type IconName } from "../../shared/Icon";
+import { DatePicker, todayIsoDate, type DatePickerHandle } from "../../shared/DatePicker";
+import { attachmentErrorMessage, attachmentLimitLabel, getAttachmentPolicy, imageFormatsLabel, type AttachmentPolicy } from "../../services/attachmentPolicy";
 import type { CalloutVariant } from "./customExtensions";
+import { CalloutColorPalette } from "./CalloutColorPalette";
 
 type SimpleBlockCommand =
   | "callout"
@@ -14,6 +17,7 @@ interface BlockInsertMenuProps {
   editTarget: EditorInsertTarget | null;
   editor: Editor | null;
   onClose: () => void;
+  onCreateDrawing?: () => void;
   onPickAndStoreAttachment: (kind: "file" | "image") => Promise<{ attachment: NoteAttachment; sizeLabel: string } | null>;
   onToast: (message: string) => void;
   selection: EditorInsertSelection | null;
@@ -40,19 +44,8 @@ const blockMenuItems: BlockMenuItem[] = [
   { command: "divider", icon: "divider", title: "Разделитель", description: "Горизонтальная линия" },
 ];
 
-const calloutVariants: Array<{ label: string; value: CalloutVariant }> = [
-  { label: "Info", value: "info" },
-  { label: "Tip", value: "tip" },
-  { label: "Warning", value: "warning" },
-  { label: "Important", value: "important" },
-];
-
 function getTodayIsoDate() {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const day = String(today.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return todayIsoDate();
 }
 
 function formatFileSize(size: number) {
@@ -65,10 +58,32 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} МБ`;
 }
 
-export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAttachment, onToast, selection }: BlockInsertMenuProps) {
+export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, onPickAndStoreAttachment, onToast, selection }: BlockInsertMenuProps) {
   const [dateDraft, setDateDraft] = useState(editTarget?.kind === "date" ? editTarget.value : getTodayIsoDate());
   const [insertError, setInsertError] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const calendarOpenRef = useRef(false);
+  calendarOpenRef.current = calendarOpen;
+  const [calloutOpen, setCalloutOpen] = useState(false);
+  const calloutOpenRef = useRef(false);
+  calloutOpenRef.current = calloutOpen;
+  const calloutAnchorRef = useRef<HTMLButtonElement>(null);
+  const datePickerRef = useRef<DatePickerHandle>(null);
+  const [mediaKind, setMediaKind] = useState<"image" | "file" | null>(null);
+  const [policy, setPolicy] = useState<AttachmentPolicy | null>(null);
+  const [policyError, setPolicyError] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const uploadingRef = useRef(false);
+  const originalDocumentRef = useRef(editor?.state.doc);
+
+  useEffect(() => {
+    if (!mediaKind || policy) return;
+    let active = true;
+    setPolicyError(false);
+    void getAttachmentPolicy().then((value) => { if (active) setPolicy(value); }).catch(() => { if (active) setPolicyError(true); });
+    return () => { active = false; };
+  }, [mediaKind, policy]);
 
   useEffect(() => {
     if (editTarget?.kind === "date") {
@@ -80,6 +95,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
+      if (uploadingRef.current || (target instanceof Element && target.closest("[data-date-picker], .date-caption-popover, .callout-color-palette"))) return;
       if (target instanceof Node && menuRef.current && !menuRef.current.contains(target)) {
         onClose();
       }
@@ -87,6 +103,9 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (calendarOpenRef.current) { event.stopPropagation(); datePickerRef.current?.dismissTopLayer(); return; }
+        if (calloutOpenRef.current) { event.stopPropagation(); setCalloutOpen(false); calloutAnchorRef.current?.focus(); return; }
+        if (uploadingRef.current) return;
         event.stopPropagation();
         onClose();
       }
@@ -105,12 +124,11 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
       return;
     }
 
-    const chain = editor.chain().focus();
+    if (command === "callout") { setCalloutOpen((open) => !open); return; }
+    const chain = restoreInsertionSelection();
+    if (!chain) return;
     if (command === "table") {
       chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
-    }
-    if (command === "callout") {
-      chain.insertCallout({ variant: "info" }).run();
     }
     if (command === "details") {
       chain.insertDetailsBlock().run();
@@ -123,15 +141,17 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
   }
 
   async function insertImage() {
-    if (!editor) {
+    if (!editor || uploadingRef.current) {
       return;
     }
 
+    uploadingRef.current = true; setUploading(true); setInsertError("");
     try {
       const stored = await onPickAndStoreAttachment("image");
       if (!stored?.attachment.assetUri) {
         return;
       }
+      if (editor.isDestroyed || !originalDocumentRef.current?.eq(editor.state.doc)) throw new Error("document changed");
       const imageAttrs = {
         alt: stored.attachment.originalName,
         attachmentId: stored.attachment.id,
@@ -140,32 +160,29 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
         src: stored.attachment.assetUri,
         title: stored.attachment.originalName,
       };
-      editor
-        .chain()
-        .focus()
-        .setImage(imageAttrs)
+      restoreInsertionSelection()
+        ?.setImage(imageAttrs)
         .run();
       onToast("Изображение сохранено во вложениях");
       onClose();
-    } catch {
-      onToast("Не удалось сохранить изображение");
-    }
+    } catch (error) { setInsertError(attachmentErrorMessage(error, "image", policy)); }
+    finally { uploadingRef.current = false; setUploading(false); }
   }
 
   async function insertFile() {
-    if (!editor) {
+    if (!editor || uploadingRef.current) {
       return;
     }
 
+    uploadingRef.current = true; setUploading(true); setInsertError("");
     try {
       const stored = await onPickAndStoreAttachment("file");
       if (!stored) {
         return;
       }
-      editor
-        .chain()
-        .focus()
-        .insertFileAttachment({
+      if (editor.isDestroyed || !originalDocumentRef.current?.eq(editor.state.doc)) throw new Error("document changed");
+      restoreInsertionSelection()
+        ?.insertFileAttachment({
           name: stored.attachment.originalName,
           size: stored.sizeLabel || formatFileSize(stored.attachment.sizeBytes),
           storageId: stored.attachment.id,
@@ -174,9 +191,8 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
         .run();
       onToast("Файл сохранён во вложениях");
       onClose();
-    } catch {
-      onToast("Не удалось сохранить файл");
-    }
+    } catch (error) { setInsertError(attachmentErrorMessage(error, "file", policy)); }
+    finally { uploadingRef.current = false; setUploading(false); }
   }
 
   function restoreInsertionSelection() {
@@ -223,7 +239,9 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
     if (!editor) {
       return;
     }
-    editor.chain().focus().insertCallout({ variant }).run();
+    const chain = restoreInsertionSelection();
+    if (editor.isActive("callout")) chain?.updateAttributes("callout", { variant }).run();
+    else chain?.insertCallout({ variant }).run();
     onClose();
   }
 
@@ -241,7 +259,9 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
 
       <div className="block-menu-grid">
         {blockMenuItems.map((item) => (
-          <button className="block-menu-item" key={item.command} onClick={() => runSimpleCommand(item.command)} type="button">
+          <button className="block-menu-item" key={item.command} ref={item.command === "callout" ? calloutAnchorRef : undefined}
+            aria-expanded={item.command === "callout" ? calloutOpen : undefined} aria-haspopup={item.command === "callout" ? "menu" : undefined}
+            onClick={() => runSimpleCommand(item.command)} type="button">
             <Icon name={item.icon} />
             <span>
               <b>{item.title}</b>
@@ -252,37 +272,37 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onPickAndStoreAtt
       </div>
 
       <div className="block-menu-tools">
-        <button className="block-menu-item" onClick={() => void insertImage()} type="button">
+        <button className="block-menu-item" onClick={() => setMediaKind(mediaKind === "image" ? null : "image")} type="button">
           <Icon name="image" />
           <span>
             <b>Изображение</b>
             <small>Сохраняется локально во вложениях заметки</small>
           </span>
         </button>
-        <button className="block-menu-item" onClick={() => void insertFile()} type="button">
+        <button className="block-menu-item" onClick={() => setMediaKind(mediaKind === "file" ? null : "file")} type="button">
           <Icon name="attach" />
           <span>
             <b>Файл</b>
             <small>Открывается из локального хранилища NoteFlow</small>
           </span>
         </button>
+        {onCreateDrawing ? <button className="block-menu-item" onClick={onCreateDrawing} type="button"><Icon name="image" /><span><b>Создать рисунок</b><small>Пустой холст</small></span></button> : null}
       </div>
 
-      <div className="block-callout-variants">
-        <div className="block-menu-section-title">Вариант выноски</div>
-        {calloutVariants.map((variant) => (
-          <button className={`callout-variant-btn ${variant.value}`} key={variant.value} onClick={() => insertCalloutVariant(variant.value)} type="button">
-            {variant.label}
-          </button>
-        ))}
-      </div>
+      {mediaKind ? <div className="block-media-requirements">
+        {policy ? <>
+          <p>{mediaKind === "image" ? `Форматы: ${imageFormatsLabel(policy)}` : "Можно добавить файл любого типа."}</p>
+          <p>Максимальный размер: {attachmentLimitLabel(mediaKind === "image" ? policy.maxImageBytes : policy.maxFileBytes)}. Файл не должен быть пустым.</p>
+          <button className="primary-btn" disabled={uploading} onClick={() => void (mediaKind === "image" ? insertImage() : insertFile())} type="button">{uploading ? "Добавляем…" : "Выбрать файл"}</button>
+        </> : policyError ? <><p role="alert">Не удалось загрузить требования к файлу.</p><button className="secondary-btn" onClick={() => { setMediaKind(null); }} type="button">Назад</button></> : <p role="status">Загружаем требования…</p>}
+      </div> : null}
+
+      <CalloutColorPalette anchorRef={calloutAnchorRef} isOpen={calloutOpen} onClose={() => setCalloutOpen(false)}
+        value={(editor?.getAttributes("callout").variant as CalloutVariant | undefined) ?? "info"} onChoose={insertCalloutVariant} />
 
       {!editTarget || editTarget.kind === "date" ? (
         <div className="block-menu-inline">
-          <label>
-            Дата
-            <input onChange={(event) => setDateDraft(event.currentTarget.value)} type="date" value={dateDraft} />
-          </label>
+          <DatePicker ref={datePickerRef} isOpen={calendarOpen} onOpenChange={setCalendarOpen} onChange={setDateDraft} value={dateDraft} />
           <button className="secondary-btn" disabled={!dateDraft.trim()} onClick={insertDate} onMouseDown={preserveEditorSelection} type="button">
             {editTarget?.kind === "date" ? "Сохранить дату" : "Вставить дату"}
           </button>

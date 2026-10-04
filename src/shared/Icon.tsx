@@ -5,6 +5,8 @@ export type IconName =
   | "alignLeft"
   | "alignRight"
   | "archive"
+  | "annotationText"
+  | "annotationArrow"
   | "attach"
   | "back"
   | "bold"
@@ -26,6 +28,7 @@ export type IconName =
   | "focus"
   | "forward"
   | "gear"
+  | "hand"
   | "highlight"
   | "image"
   | "italic"
@@ -36,10 +39,12 @@ export type IconName =
   | "noteLink"
   | "ol"
   | "person"
+  | "pen"
   | "pin"
   | "plus"
   | "quote"
   | "redo"
+  | "rectangle"
   | "search"
   | "send"
   | "strike"
@@ -60,6 +65,16 @@ interface IconProps extends SVGProps<SVGSVGElement> {
 
 export function Icon({ name, ...props }: IconProps) {
   switch (name) {
+    case "hand":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><path d="M8 13V6a1.5 1.5 0 0 1 3 0v6-8a1.5 1.5 0 0 1 3 0v8-6a1.5 1.5 0 0 1 3 0v6-3a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-3l-4-6a1.5 1.5 0 0 1 2-2l2 2Z" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+    case "annotationArrow":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><path d="M4 12h16m-6-6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+    case "pen":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><path d="m4 16 12-12 4 4L8 20H4v-4Zm9-9 4 4" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+    case "rectangle":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><rect x="4" y="6" width="16" height="12" rx="1" /></svg>;
+    case "annotationText":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><path d="M5 7V4h14v3M12 4v16M8 20h8" strokeLinecap="round" strokeLinejoin="round" /></svg>;
     case "alignCenter":
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" {...props}>

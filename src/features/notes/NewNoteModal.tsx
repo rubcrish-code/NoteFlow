@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ModalShell } from "../../shared/ModalShell";
-import { formatDisplayDate, NoteDatePicker, todayIsoDate } from "./NoteDatePicker";
+import { formatDisplayDate, DatePicker as NoteDatePicker, todayIsoDate, type DatePickerHandle } from "../../shared/DatePicker";
 
 interface NewNoteModalProps {
   isOpen: boolean;
@@ -14,6 +14,7 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const dateTriggerRef = useRef<HTMLButtonElement>(null);
+  const datePickerRef = useRef<DatePickerHandle>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -32,8 +33,8 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
     if (!isDatePickerOpen) {
       return false;
     }
-    setIsDatePickerOpen(false);
-    window.requestAnimationFrame(() => dateTriggerRef.current?.focus());
+    if (datePickerRef.current) datePickerRef.current.dismissTopLayer();
+    else { setIsDatePickerOpen(false); window.requestAnimationFrame(() => dateTriggerRef.current?.focus()); }
     return true;
   }, [isDatePickerOpen]);
 
@@ -67,7 +68,7 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
         </label>
         <label>
           Дата заметки
-          <NoteDatePicker isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} triggerRef={dateTriggerRef} value={noteDate} />
+          <NoteDatePicker ref={datePickerRef} isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} triggerRef={dateTriggerRef} value={noteDate} />
           <span className="date-picker-readable">Выбрана дата: {formatDisplayDate(noteDate)}</span>
         </label>
       </form>

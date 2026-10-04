@@ -5846,6 +5846,63 @@
   justify-content: space-between;
 }
 
+.image-editor-shell {
+  --image-editor-stage-height: min(52vh, max(64px, calc(100vh - 340px)));
+  width: min(980px, calc(100vw - 32px));
+}
+
+.image-editor-body { min-width: 0; }
+.image-editor-primary-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.image-editor-shell .image-editor-footer { flex-wrap: wrap; justify-content: space-between; }
+.image-editor-footer button { min-height: 36px; }
+.image-editor-workspace { border: 0; padding: 0; margin: 12px 0 0; min-width: 0; }
+.image-editor-workspace:disabled { pointer-events: none; }
+.image-editor-error { color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
+.image-annotation-surface { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.image-annotation-text-entry {
+  position: absolute; left: var(--annotation-text-x); top: var(--annotation-text-y);
+  display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; padding: 4px;
+  background: var(--panel); border: 1px solid var(--field-border); border-radius: 8px; line-height: normal;
+}
+.image-annotation-text-entry input { width: 140px; min-width: 0; max-width: 100%; }
+.image-annotation-text-entry button { min-height: 28px; font-size: 12px; }
+.image-editor-segmented .image-drawing-tool { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; }
+.image-drawing-tool svg { width: 18px; height: 18px; }
+.block-media-requirements { padding: 12px; border-top: 1px solid var(--field-border); font-size: 13px; color: var(--tsoft); }
+.block-media-requirements p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.image-annotation-surface canvas[data-tool="move"] { cursor: grab; }
+.image-annotation-surface canvas[data-dragging="true"] { cursor: grabbing; }
+.drawing-stroke-range input { accent-color: var(--drawing-color); }
+.drawing-stroke-range output { min-width: 2ch; font-variant-numeric: tabular-nums; text-align: right; }
+.date-picker-month-year { display: flex; gap: var(--space-1); min-width: 0; flex: 1; }
+.date-picker-nav .date-picker-caption-trigger { width: auto; min-width: 0; display: inline-flex; align-items: center; justify-content: space-between; gap: var(--space-1); padding: 0 var(--space-2); line-height: 1.2; }
+.date-picker-month-year button:first-child { flex: 1; }
+.date-picker-caption-label { min-width: 0; white-space: nowrap; }
+.date-picker-nav .date-picker-caption-trigger svg { display: block; flex: 0 0 auto; margin: 0; width: 16px; height: 16px; }
+.date-caption-popover { padding: var(--space-3); z-index: 1400; }
+.calendar-caption-title { color: var(--text-secondary); font-size: 12px; font-weight: 600; margin-bottom: var(--space-2); }
+.calendar-caption-grid { display: grid; gap: var(--space-1); }
+.calendar-caption-grid.months { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.calendar-caption-grid.years { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.calendar-caption-grid button { background: transparent; color: var(--text-primary); border: 1px solid transparent; border-radius: 8px; min-height: 36px; padding: var(--space-1); font: inherit; font-size: 12px; }
+.calendar-caption-grid button:hover { background: var(--surface-hover); }
+.calendar-caption-grid button[aria-pressed="true"] { color: var(--accent); background: var(--asoft); border-color: color-mix(in srgb, var(--accent) 24%, transparent); }
+.calendar-year-navigation { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); font-size: 12px; }
+.calendar-year-navigation svg, .calendar-year-search svg { width: 16px; height: 16px; }
+.calendar-year-navigation button { padding: var(--space-2); min-height: 32px; width: 32px; }
+.calendar-year-search { display: flex; gap: var(--space-2); margin-bottom: var(--space-2); }
+.calendar-year-search input { min-width: 0; width: 100%; font: inherit; font-size: 13px; padding: var(--space-2); color: var(--text-primary); background: var(--surface-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-control); }
+.calendar-year-search button { flex: 0 0 auto; padding: var(--space-2); }
+.callout-color-palette { padding: var(--space-3); }
+.callout-palette-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.callout-palette-grid .callout-preview { display: flex; align-items: center; gap: var(--space-1); min-height: 38px; padding: var(--space-2); border-radius: 8px; color: var(--text-primary); font-size: 12px; font-weight: 500; border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent); background: var(--asoft); }
+.callout-preview svg, .callout-check-space { flex: 0 0 auto; width: 14px; height: 14px; }
+.callout-palette-grid .callout-preview.tip { background: color-mix(in srgb, var(--tag-green) 76%, var(--panel)); border-color: color-mix(in srgb, var(--tag-green-t) 28%, transparent); }
+.callout-palette-grid .callout-preview.warning { background: color-mix(in srgb, var(--tag-amber) 78%, var(--panel)); border-color: color-mix(in srgb, var(--tag-amber-t) 28%, transparent); }
+.callout-palette-grid .callout-preview.important { background: color-mix(in srgb, var(--tag-pink) 72%, var(--panel)); border-color: color-mix(in srgb, var(--tag-pink-t) 30%, transparent); }
+.callout-palette-grid .callout-preview:hover { filter: brightness(0.97); }
+.callout-palette-grid .callout-preview[aria-checked="true"] { box-shadow: inset 0 0 0 1px currentColor; }
+
 .image-editor-head b {
   display: block;
   font-size: 16px;
@@ -6099,10 +6156,22 @@
 
 .image-annotation-stage canvas {
   display: block;
-  max-height: min(62vh, 660px);
+  height: auto;
+  width: 100%;
+  max-height: none;
   max-width: 100%;
   touch-action: none;
 }
+
+.image-editor-shell .image-annotation-stage,
+.image-editor-shell .image-crop-stage { max-height: none; overflow: visible; }
+.image-editor-shell .image-annotation-surface,
+.image-editor-shell .image-crop-canvas {
+  width: min(100%, calc(var(--image-editor-stage-height) * var(--image-editor-aspect)));
+  min-width: 0;
+  max-height: none;
+}
+.image-editor-shell .image-crop-canvas img { width: 100%; height: auto; max-height: none; }
 
 .image-editor-apply {
   justify-self: end;
