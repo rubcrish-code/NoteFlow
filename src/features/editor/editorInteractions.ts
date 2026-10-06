@@ -19,7 +19,15 @@ export const EditorIndent = Extension.create({
       const editor = this.editor;
       if (editor.isActive("table")) return false;
       if (editor.isActive("taskItem") || editor.isActive("listItem")) {
-        const type = editor.isActive("taskItem") ? "taskItem" : "listItem";
+        let type = editor.isActive("taskItem") ? "taskItem" : "listItem";
+        const { $from } = editor.state.selection;
+        for (let depth = $from.depth; depth > 0; depth--) {
+          const name = $from.node(depth).type.name;
+          if (name === "taskItem" || name === "listItem") {
+            type = name;
+            break;
+          }
+        }
         if (outdent) editor.commands.liftListItem(type);
         else editor.commands.sinkListItem(type);
         return true;

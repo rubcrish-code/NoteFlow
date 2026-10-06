@@ -87,6 +87,10 @@ export function EditorContextMenu({ editor, onToast }: { editor: Editor | null; 
       {mode ? <EditorCommandPopover key={mode} mode={mode} initialText={selectedText} initialHref={String(editor.getAttributes("link").href ?? "")}
         currentColor={editor.getAttributes(mode === "color" ? "textStyle" : "highlight").color as string | undefined}
         onClose={() => setMode(null)} onSubmit={(value) => { if (restoreSelection()) applyEditorFormattingValue(editor, value); close(); }} /> : <>
+        {(["cut", "copy", "paste"] as const).map((action) => <button role="menuitem" type="button" key={action}
+          disabled={action === "paste" ? !navigator.clipboard?.readText : !navigator.clipboard?.writeText || editor.state.selection.empty}
+          onClick={() => void clipboard(action)}>{action === "copy" ? "Копировать" : action === "cut" ? "Вырезать" : "Вставить"}</button>)}
+        <span className="toolbar-overflow-separator" role="separator" />
         {actions.map((action, index) => <div key={action.id}>
           {index > 0 && actions[index - 1].group !== action.group ? <span className="toolbar-overflow-separator" role="separator" /> : null}
           <button onMouseDown={(event) => event.preventDefault()} onClick={() => command(action.id)} role="menuitem" type="button" data-context-action={action.id}>
@@ -95,10 +99,6 @@ export function EditorContextMenu({ editor, onToast }: { editor: Editor | null; 
           </button>
         </div>)}
         {editor.isActive("link") ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) editor.chain().focus().extendMarkRange("link").unsetLink().run(); close(); }}>Убрать ссылку</button> : null}
-        <span className="toolbar-overflow-separator" role="separator" />
-        {(["copy", "cut", "paste"] as const).map((action) => <button role="menuitem" type="button" key={action}
-          disabled={action === "paste" ? !navigator.clipboard?.readText : !navigator.clipboard?.writeText || editor.state.selection.empty}
-          onClick={() => void clipboard(action)}>{action === "copy" ? "Копировать" : action === "cut" ? "Вырезать" : "Вставить"}</button>)}
       </>}
     </MenuPopover>
   </>, document.body);

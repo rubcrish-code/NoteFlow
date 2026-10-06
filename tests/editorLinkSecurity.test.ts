@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
-import { handleEditorLinkClick } from "../src/features/editor/editorLinkClick";
+import { classifyEditorLink, handleEditorLinkClick } from "../src/features/editor/editorLinkClick";
 import { safeExternalLinkHref } from "../src/shared/safeLinkHref";
 
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost" });
@@ -33,11 +33,18 @@ function clickLink(href: string, options: MouseEventInit) {
 }
 
 describe("editor external links", () => {
+  it("classifies anchors, safe external HTTP(S) and unsupported links at one boundary", () => {
+    assert.deepEqual(classifyEditorLink(" #раздел "), { kind: "internal-anchor", href: "#раздел" });
+    assert.deepEqual(classifyEditorLink("https://example.com"), { kind: "external-http", href: "https://example.com/" });
+    for (const href of ["javascript:alert(1)", "mailto:test@example.com", "//example.com", "#bad\nanchor", ""]) {
+      assert.deepEqual(classifyEditorLink(href), { kind: "blocked" });
+    }
+  });
   it("opens only safe HTTP(S) links on Ctrl/Cmd+Click while ordinary click remains editable", () => {
     assert.deepEqual(clickLink("https://example.com/page", { ctrlKey: true }).opened, ["https://example.com/page"]);
     assert.deepEqual(clickLink("http://example.com", { metaKey: true }).opened, ["http://example.com/"]);
     assert.equal(clickLink("https://example.com", {}).handled, false);
-    assert.equal(clickLink("https://example.com", {}).defaultPrevented, false);
+    assert.equal(clickLink("https://example.com", {}).defaultPrevented, true);
   });
 
   it("blocks unsafe schemes and URL credentials before opener", () => {

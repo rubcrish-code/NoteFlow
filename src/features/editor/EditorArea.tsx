@@ -296,11 +296,13 @@ export function EditorArea({
   const editor = useEditor({
     content: note.editorDocument,
     editorProps: {
-      handleClick: (_view, _pos, event) => handleEditorLinkClick(event, (url) => {
-        void openUrl(url).catch(() => onToast("Не удалось открыть ссылку"));
-      }, (anchor) => {
-        if (!scrollToNoteHeading(_view, anchor)) onToast("Заголовок по этой ссылке не найден.");
-      }),
+      handleDOMEvents: {
+        click: (view, event) => handleEditorLinkClick(event, (url) => {
+          void openUrl(url).catch(() => onToast("Не удалось открыть ссылку"));
+        }, (anchor) => {
+          if (!scrollToNoteHeading(view, anchor)) onToast("Заголовок по этой ссылке не найден.");
+        }),
+      },
       handleClickOn: (_view, _pos, node, _nodePos, event, direct) => {
         if (!direct) {
           return false;

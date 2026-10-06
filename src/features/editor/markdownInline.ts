@@ -30,6 +30,7 @@ function convertTokens(tokens: Token[], marks: EditorMark[] = []): EditorNode[] 
     }
     // Custom tokens are handled above; remaining tokens are Marked's built-in union.
     const token = raw as MarkedToken;
+    if (token.type === "checkbox") return [];
     if (token.type === "html" && /^<br\s*\/?\s*>$/i.test(token.raw)) return [{ type: "hardBreak" }];
     if (token.type === "strong" || token.type === "em" || token.type === "del" || token.type === "link") {
       const mark: EditorMark = token.type === "link" ? { type: "link", attrs: { href: token.href } }
@@ -68,7 +69,8 @@ function convertListGroup(token: import("marked").Tokens.List, parseBlocks: (sou
       content: item.tokens.flatMap((raw): EditorNode[] => {
         const child = raw as MarkedToken;
         if (child.type === "list") return convertMarkdownList(child, parseBlocks);
-        if (child.type === "text" || child.type === "paragraph") return [{ type: "paragraph", content: parseMarkdownInline(child.text) }];
+        // Loose GFM items put the checkbox inside paragraph tokens; text still contains its raw marker.
+        if (child.type === "text" || child.type === "paragraph") return [{ type: "paragraph", content: child.tokens ? convertTokens(child.tokens) : parseMarkdownInline(child.text) }];
         if (child.type === "space" || child.type === "checkbox") return [];
         return parseBlocks(child.raw);
       }),

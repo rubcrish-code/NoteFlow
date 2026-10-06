@@ -12,13 +12,14 @@ import { serializeEditorDocumentForStorage, buildEditorDocumentFromStoredNoteCon
 import { markdownToTiptapDoc } from "../src/features/editor/markdownService";
 import { applyEditorFormattingValue, runEditorFormattingCommand } from "../src/features/editor/editorFormattingCommands";
 import type { EditorToolbarActionId } from "../src/features/editor/editorToolbarLayout";
+import { scrollToNoteHeading } from "../src/features/editor/headingAnchors";
 
 // Only synthetic fixtures run here; an executable sentinel avoids a false XSS pass from disabled scripts.
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost", pretendToBeVisual: true, runScripts: "dangerously" });
 const globals = new Map<string, PropertyDescriptor | undefined>();
 for (const [key, value] of Object.entries({
   window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
-  HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node,
+  HTMLElement: dom.window.HTMLElement, HTMLInputElement: dom.window.HTMLInputElement, Element: dom.window.Element, Node: dom.window.Node,
   MouseEvent: dom.window.MouseEvent, KeyboardEvent: dom.window.KeyboardEvent,
   MutationObserver: dom.window.MutationObserver, DOMParser: dom.window.DOMParser,
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
@@ -67,6 +68,61 @@ function tab(editor: Editor, shiftKey = false) {
 }
 
 describe("Phase C actual editor behavior", () => {
+  const mixedLists = [
+    { name: "loose bullet and task siblings", source: "- обычный\n- второй\n\n- [ ] задача\n- [x] готово", tasks: ["задача", "готово"] },
+    { name: "bullet to nested task", source: "- обычный\n  - [ ] задача A\n  - [x] задача B\n- конец", tasks: ["задача A", "задача B"] },
+    { name: "task to nested bullet", source: "- [ ] задача A\n  - обычный\n  - второй\n- [x] задача B", tasks: ["задача A", "задача B"] },
+    { name: "numbered to nested task", source: "3. обычный\n   - [ ] задача A\n   - [x] задача B\n4. конец", tasks: ["задача A", "задача B"] },
+    { name: "task to nested numbered", source: "- [ ] задача A\n  3. обычный\n  4. второй\n- [x] задача B", tasks: ["задача A", "задача B"] },
+    { name: "loose formatted tasks with links", source: "- обычный\n\n- [ ] **задача A**\n- [x] _задача B_ [ссылка](https://example.com/)", tasks: ["задача A", "задача B ссылка"] },
+    { name: "multiple mixed nesting levels", source: "- обычный\n  - [ ] задача A\n    2. второй\n       - [x] задача B", tasks: ["задача A", "задача B"] },
+  ];
+  for (const fixture of mixedLists) it(`keeps ${fixture.name} canonical over three storage/reopen cycles`, () => {
+    const editor = editorFor(markdownToTiptapDoc(fixture.source));
+    const taskTexts: string[] = [];
+    editor.state.doc.descendants((node) => { if (node.type.name === "taskItem") taskTexts.push(node.firstChild!.textContent); });
+    assert.deepEqual(taskTexts, fixture.tasks);
+    const document = editor.getJSON() as EditorDocument;
+    const listStructure = (doc: EditorDocument) => doc.content?.filter((node) => ["bulletList", "orderedList", "taskList"].includes(node.type));
+    const initial = serializeEditorDocumentForStorage(document);
+    for (let cycle = 0; cycle < 3; cycle++) {
+      editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
+      assert.deepEqual(listStructure(editor.getJSON() as EditorDocument), listStructure(document), `document cycle ${cycle}`);
+      const stored = serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument);
+      assert.equal(stored.contentMarkdown, initial.contentMarkdown, `Markdown cycle ${cycle}`);
+      assert.equal(stored.plainText, initial.plainText);
+      assert.doesNotMatch(stored.contentMarkdown, /\[[ x]\] \[[ x]\]/);
+    }
+  });
+  for (const fixture of mixedLists.slice(1, 3)) it(`persists Tab/Shift+Tab in ${fixture.name}`, () => {
+    const editor = editorFor(markdownToTiptapDoc(fixture.source));
+    const text = fixture.name.startsWith("bullet") ? "задача B" : "второй";
+    const nodeType = fixture.name.startsWith("bullet") ? "taskItem" : "listItem";
+    const before = serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown;
+    let position = 0;
+    editor.state.doc.descendants((node, pos) => { if (node.isText && node.text === text) position = pos; });
+    editor.commands.setTextSelection(position + 1);
+    assert.equal(tab(editor).defaultPrevented, true);
+    assert.ok(editor.state.selection.$from.depth > 4);
+    editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
+    position = 0;
+    editor.state.doc.descendants((node, pos) => { if (node.isText && node.text === text) position = pos; });
+    editor.commands.setTextSelection(position + 1);
+    assert.equal(editor.state.selection.$from.node(-1).type.name, nodeType);
+    assert.equal(tab(editor, true).defaultPrevented, true);
+    editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
+    assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, before);
+  });
+  it("retains literal checkbox-looking text outside structural task tokens", () => {
+    const source = "Обычный текст [ ] и [x].\n\n- обычный\n\n- [ ] \\[ \\] намеренный текст\n- [x] код `[x]`";
+    const editor = editorFor(markdownToTiptapDoc(source));
+    assert.match(editor.getText(), /Обычный текст \[ \] и \[x\]/);
+    assert.match(editor.getText(), /\[ \] намеренный текст/);
+    assert.match(editor.getText(), /код \[x\]/);
+    const stored = serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument);
+    editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
+    assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, stored.contentMarkdown);
+  });
   it("reopens a rich Markdown-first document after the patched Tiptap update", () => {
     const editor = editorFor(markdownToTiptapDoc("# Раздел\n\n**_Сочетание_** и [Внутри](#раздел)\n\n- [ ] Проверка\n- [x] Готово\n\n| А | Б |\n| --- | --- |\n| 1 | 2 |\n\n:::details Подробнее\nТекст внутри\n:::\n\n:::tip\nПодсказка\n:::\n\n---\n\n![Диаграмма](noteflow-image://diagram)"));
     const before = editor.getJSON() as EditorDocument;
@@ -281,6 +337,75 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const editor = (container.querySelector(".tiptap") as HTMLElement & { editor: Editor }).editor;
     return { props, editor, container, render };
   }
+  for (const modifier of [{}, { ctrlKey: true }, { metaKey: true }]) it(`cancels the real DOM anchor click before native opener: ${JSON.stringify(modifier)}`, async () => {
+    const { props, editor, render } = await mount();
+    let saves = 0;
+    props.onEditorChange = () => saves++;
+    props.note = noteWith("# Раздел один\n\nтекст\n\n## Раздел два\n\nещё текст\n\n[Перейти](#раздел-два)");
+    props.documentReloadGeneration++;
+    await render();
+    const anchor = editor.view.dom.querySelector<HTMLAnchorElement>("a")!;
+    const documentBefore = editor.getJSON();
+    const selectionBefore = editor.state.selection.toJSON();
+    const scrolled: string[] = [];
+    const previous = dom.window.HTMLElement.prototype.scrollIntoView;
+    dom.window.HTMLElement.prototype.scrollIntoView = function () { scrolled.push(this.id); };
+    let nativeOpens = 0;
+    const nativeListener = (event: MouseEvent) => {
+      // The native opener's window-level listener sees the DOM click, not ProseMirror's mouseup.
+      if (!event.defaultPrevented && event.button === 0 && (anchor.target === "_blank" || event.ctrlKey)) nativeOpens++;
+    };
+    window.addEventListener("click", nativeListener);
+    try {
+      const event = new dom.window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...modifier });
+      await act(async () => { anchor.dispatchEvent(event); });
+      assert.equal(event.defaultPrevented, true);
+      assert.equal(nativeOpens, 0);
+      assert.deepEqual(scrolled, ["раздел-два"]);
+      assert.deepEqual(editor.getJSON(), documentBefore);
+      assert.deepEqual(editor.state.selection.toJSON(), selectionBefore);
+      assert.equal(saves, 0);
+      await act(async () => { anchor.click(); anchor.click(); });
+      assert.equal(scrolled.length, 3);
+      assert.equal(nativeOpens, 0);
+      anchor.setAttribute("href", "#missing");
+      const missing = new dom.window.MouseEvent("click", { bubbles: true, cancelable: true });
+      await act(async () => { anchor.dispatchEvent(missing); });
+      assert.equal(missing.defaultPrevented, true);
+      assert.equal(nativeOpens, 0);
+    } finally {
+      window.removeEventListener("click", nativeListener);
+      dom.window.HTMLElement.prototype.scrollIntoView = previous;
+    }
+  });
+  it("routes duplicate heading anchors to the exact generated TOC target", async () => {
+    const { props, editor, render } = await mount();
+    props.note = noteWith("# Раздел\n\n## Раздел\n\n[Второй](#раздел-1)");
+    props.documentReloadGeneration++;
+    await render();
+    let target = "";
+    const previous = dom.window.HTMLElement.prototype.scrollIntoView;
+    dom.window.HTMLElement.prototype.scrollIntoView = function () { target = this.id; };
+    try {
+      await act(async () => { editor.view.dom.querySelector<HTMLAnchorElement>("a")!.click(); });
+      assert.equal(target, "раздел-1");
+      assert.equal(scrollToNoteHeading(editor.view, "#%invalid"), false);
+    } finally { dom.window.HTMLElement.prototype.scrollIntoView = previous; }
+  });
+  for (const href of ["https://example.com/", "http://example.com/", "javascript:alert(1)"]) it(`keeps live editor external-link policy for ${href}`, async () => {
+    const { editor } = await mount();
+    await act(async () => { editor.commands.setContent(markdownToTiptapDoc("[Ссылка](https://example.com/)")); });
+    const anchor = editor.view.dom.querySelector<HTMLAnchorElement>("a")!;
+    anchor.setAttribute("href", href);
+    const opened: unknown[] = [];
+    mockIPC((command, args) => { if (command === "plugin:opener|open_url") opened.push(args?.url); return []; });
+    for (const modifier of [{}, { ctrlKey: true }, { metaKey: true }]) {
+      const event = new dom.window.MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
+      await act(async () => { anchor.dispatchEvent(event); });
+      assert.equal(event.defaultPrevented, true);
+    }
+    assert.deepEqual(opened, href.startsWith("http") ? [href, href] : []);
+  });
   async function paste(editor: Editor, text: string, html = "") {
     const event = new dom.window.Event("paste", { bubbles: true, cancelable: true });
     Object.defineProperty(event, "clipboardData", { value: {
@@ -290,6 +415,33 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     await act(async () => { editor.commands.selectAll(); editor.view.dom.dispatchEvent(event); });
     return event;
   }
+  it("pastes mixed Markdown, toggles tasks and saves canonical state without a caret resync", async () => {
+    const { props, editor, container, render } = await mount();
+    let saved: ReturnType<typeof serializeEditorDocumentForStorage> | undefined;
+    props.onEditorChange = (_id, document) => { saved = serializeEditorDocumentForStorage(document); };
+    await render();
+    await paste(editor, "- обычный\n\n- [ ] задача A\n- [x] задача B");
+    assert.equal(editor.view.dom.querySelectorAll('input[type="checkbox"]').length, 2);
+    assert.doesNotMatch(editor.getText(), /\[[ x]\]/);
+    const element = container.querySelector(".tiptap");
+    await act(async () => { editor.view.dom.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+    assert.ok(saved);
+    assert.match(saved.contentMarkdown, /- \[x\] задача A/);
+    let position = 0;
+    editor.state.doc.descendants((node, pos) => { if (node.isText && node.text === "задача A") position = pos; });
+    await act(async () => { editor.commands.setTextSelection(position + 3); editor.commands.insertContent("!"); });
+    const selection = editor.state.selection.toJSON();
+    props.note = { ...props.note, contentVersion: 2, editorDocument: saved.editorDocument, contentMarkdown: saved.contentMarkdown };
+    await render();
+    assert.equal(container.querySelector(".tiptap"), element);
+    assert.deepEqual(editor.state.selection.toJSON(), selection);
+    const markdown = saved.contentMarkdown;
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await act(async () => { editor.commands.setContent(reload(editor.getJSON() as EditorDocument)); });
+      assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, markdown);
+      assert.deepEqual([...editor.view.dom.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].map((input) => input.checked), [true, true]);
+    }
+  });
   it("rejects executable clipboard HTML and slice context without breaking the live editor", { timeout: 5_000 }, async () => {
     const sentinel = "__NOTEFLOW_XSS_TEST__";
     const probe = document.createElement("button");
@@ -382,10 +534,74 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const selection = editor.state.selection.toJSON();
     await act(async () => editor.view.dom.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 900, clientY: 600 })));
     const menu = document.querySelector('[aria-label="Форматирование текста"]'); assert.ok(menu);
-    await act(async () => (menu.querySelector('[data-context-action="bold"]') as HTMLButtonElement).click());
+    const children = Array.from(menu.children);
+    assert.deepEqual(children.slice(0, 3).map((child) => child.textContent), ["Вырезать", "Копировать", "Вставить"]);
+    assert.equal(children[3].getAttribute("role"), "separator");
+    assert.ok(children[4].querySelector("[data-context-action]"));
+    assert.deepEqual(editor.state.selection.toJSON(), selection);
+    const escape = new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => document.dispatchEvent(escape));
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(document.querySelector('[aria-label="Форматирование текста"]'), null);
+    assert.deepEqual(editor.state.selection.toJSON(), selection);
+    await act(async () => editor.view.dom.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+    const reopened = document.querySelector('[aria-label="Форматирование текста"]')!;
+    await act(async () => (reopened.querySelector('[data-context-action="bold"]') as HTMLButtonElement).click());
     assert.deepEqual(editor.state.selection.toJSON(), selection); assert.equal(editor.isActive("bold"), true); assert.equal(document.querySelector('[aria-label="Форматирование текста"]'), null);
     const input = container.querySelector("input")!;
     const event = new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }); input.dispatchEvent(event);
     assert.equal(event.defaultPrevented, false); assert.equal(document.querySelector('[aria-label="Форматирование текста"]'), null);
+  });
+  for (const label of ["Вырезать", "Копировать", "Вставить"]) it(`reuses the existing context-menu clipboard behavior: ${label}`, async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writes: string[] = []; let reads = 0;
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async (text: string) => { writes.push(text); },
+      readText: async () => { reads++; return "**Буфер**"; },
+    } });
+    try {
+      const { editor } = await mount();
+      await act(async () => editor.commands.setTextSelection({ from: 1, to: 6 }));
+      const before = editor.getJSON(); const selection = editor.state.selection.toJSON();
+      await act(async () => editor.view.dom.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.editor-context-menu [role="menuitem"]'));
+      const button = buttons.find((item) => item.textContent === label)!;
+      assert.equal(button.disabled, false);
+      await act(async () => button.click());
+      assert.equal(document.querySelector(".editor-context-menu"), null);
+      assert.deepEqual(writes, label === "Вставить" ? [] : ["Перва"]);
+      assert.equal(reads, label === "Вставить" ? 1 : 0);
+      if (label === "Копировать") {
+        assert.deepEqual(editor.getJSON(), before);
+        assert.deepEqual(editor.state.selection.toJSON(), selection);
+      } else if (label === "Вырезать") assert.ok(editor.getText().startsWith("я строка"));
+      else {
+        assert.equal(editor.getText(), "Буфер\n\nя строка\n\nПоследняя строка");
+        assert.equal(editor.view.dom.querySelector("strong")?.textContent, "Буфер");
+      }
+    } finally {
+      if (descriptor) Object.defineProperty(navigator, "clipboard", descriptor);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+  it("preserves context-menu availability for empty selection and missing clipboard API", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    try {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      const { editor } = await mount();
+      await act(async () => editor.view.dom.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      const editButtons = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.editor-context-menu [role="menuitem"]')).slice(0, 3);
+      assert.deepEqual(editButtons().map((button) => button.disabled), [true, true, true]);
+      await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => {}, readText: async () => "" } });
+      await act(async () => {
+        editor.commands.setTextSelection(1);
+        editor.view.dom.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      assert.deepEqual(editButtons().map((button) => button.disabled), [true, true, false]);
+    } finally {
+      if (descriptor) Object.defineProperty(navigator, "clipboard", descriptor);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
   });
 });
