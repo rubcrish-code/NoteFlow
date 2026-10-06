@@ -1,6 +1,6 @@
-# NoteFlow 1.0.0-rc.1 — second-PC smoke
+# NoteFlow 1.0.0-rc.3 — second-PC smoke
 
-Closed RC only. Use a separate Windows PC or disposable VM and a **new QA profile**. Do not install over a real NoteFlow profile. Recommended installer: NSIS setup. Record Windows build, installer filename, SHA-256, WebView2 version and each result as PASS / FAIL / NOT RUN. Do not treat untested steps as passed. This short smoke does not replace the deferred full VM installer matrix.
+Release Candidate only. Use a separate Windows PC or disposable VM and a **new QA profile**. Do not install over a valuable NoteFlow profile. Recommended installer: NSIS setup. Record Windows build, installer filename, SHA-256, WebView2 version and each result as PASS / FAIL / NOT RUN. Final RC3 user smoke confirmed second-PC lifecycle and NSIS/MSI coexistence for the accepted candidate; this reusable checklist does not invent missing Windows-version or full VM-matrix results.
 
 1. Download the NSIS setup from the intended GitHub RC release when it is published.
 2. Optionally compare its SHA-256 with `SHA256SUMS.txt` using `Get-FileHash -Algorithm SHA256`.
@@ -24,4 +24,4 @@ Closed RC only. Use a separate Windows PC or disposable VM and a **new QA profil
 20. Reinstall the same NSIS build.
 21. Confirm the marker note, project, tag and image are still present. Record any lost data as FAIL.
 
-Record outcomes and screenshots without including note content or secrets. MSI is optional and **not** assumed interchangeable with NSIS; its cross-family lifecycle still requires separate VM testing. Before final public 1.0, complete the full clean/reinstall/upgrade/uninstall and backup-restore matrix, Start Menu/shortcut checks, SmartScreen and Windows 10 if claimed.
+Record outcomes and screenshots without including note content or secrets. MSI is optional; record cross-family installation locations, shortcuts, launched executable and preservation of the other installation/profile after uninstall. Do not infer interchangeability on every machine from the accepted coexistence smoke. Before final public 1.0, complete the detailed lifecycle/backup-restore matrix, Start Menu/shortcut checks, signing and Windows 10 validation if claimed.
