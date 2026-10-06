@@ -3,8 +3,9 @@ import { after, afterEach, describe, it } from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement as h, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { Editor } from "@tiptap/core";
+import { Editor, Node as TiptapNode } from "@tiptap/core";
 import { CellSelection, TableMap } from "@tiptap/pm/tables";
+import type { Slice } from "@tiptap/pm/model";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import type { EditorDocument, Note } from "../src/app/types";
 import { serializeEditorDocumentForStorage, buildEditorDocumentFromStoredNoteContent } from "../src/features/editor/editorContentSerializer";
@@ -12,7 +13,8 @@ import { markdownToTiptapDoc } from "../src/features/editor/markdownService";
 import { applyEditorFormattingValue, runEditorFormattingCommand } from "../src/features/editor/editorFormattingCommands";
 import type { EditorToolbarActionId } from "../src/features/editor/editorToolbarLayout";
 
-const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost", pretendToBeVisual: true });
+// Only synthetic fixtures run here; an executable sentinel avoids a false XSS pass from disabled scripts.
+const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost", pretendToBeVisual: true, runScripts: "dangerously" });
 const globals = new Map<string, PropertyDescriptor | undefined>();
 for (const [key, value] of Object.entries({
   window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -65,6 +67,25 @@ function tab(editor: Editor, shiftKey = false) {
 }
 
 describe("Phase C actual editor behavior", () => {
+  it("reopens a rich Markdown-first document after the patched Tiptap update", () => {
+    const editor = editorFor(markdownToTiptapDoc("# Раздел\n\n**_Сочетание_** и [Внутри](#раздел)\n\n- [ ] Проверка\n- [x] Готово\n\n| А | Б |\n| --- | --- |\n| 1 | 2 |\n\n:::details Подробнее\nТекст внутри\n:::\n\n:::tip\nПодсказка\n:::\n\n---\n\n![Диаграмма](noteflow-image://diagram)"));
+    const before = editor.getJSON() as EditorDocument;
+    const stored = serializeEditorDocumentForStorage(before);
+    editor.commands.setContent(reload(before));
+    const after = serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument);
+    assert.equal(after.contentMarkdown, stored.contentMarkdown);
+    assert.equal(after.plainText, stored.plainText);
+    assert.ok(editor.view.dom.querySelector("h1"));
+    assert.ok(editor.view.dom.querySelector("strong em, em strong"));
+    assert.equal(editor.view.dom.querySelector('a[href="#раздел"]')?.textContent, "Внутри");
+    assert.equal(editor.view.dom.querySelectorAll('li[data-type="taskItem"]').length, 2);
+    assert.equal(editor.view.dom.querySelectorAll("tr").length, 2);
+    assert.equal(editor.view.dom.querySelectorAll("th, td").length, 4);
+    assert.ok(editor.view.dom.querySelector(".details-nodeview"));
+    assert.ok(editor.view.dom.querySelector(".callout-tip"));
+    assert.ok(editor.view.dom.querySelector("hr"));
+    assert.equal(editor.getJSON().content?.find((node) => node.type === "image")?.attrs?.alt, "Диаграмма");
+  });
   it("keeps multiple paragraphs, nested code and quotes inside list items on reopen", () => {
     const editor = editorFor(markdownToTiptapDoc("- First\n\n  Second paragraph\n\n  > Quote inside list\n\n  ```js\n  const value = 42;\n  ```\n\n- Last"));
     assert.equal(editor.view.dom.querySelectorAll("li").length, 2);
@@ -260,6 +281,77 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const editor = (container.querySelector(".tiptap") as HTMLElement & { editor: Editor }).editor;
     return { props, editor, container, render };
   }
+  async function paste(editor: Editor, text: string, html = "") {
+    const event = new dom.window.Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: {
+      files: [], items: [], types: html ? ["text/plain", "text/html"] : ["text/plain"],
+      getData: (type: string) => type === "text/html" ? html : type === "text/plain" ? text : "",
+    } });
+    await act(async () => { editor.commands.selectAll(); editor.view.dom.dispatchEvent(event); });
+    return event;
+  }
+  it("rejects executable clipboard HTML and slice context without breaking the live editor", { timeout: 5_000 }, async () => {
+    const sentinel = "__NOTEFLOW_XSS_TEST__";
+    const probe = document.createElement("button");
+    probe.setAttribute("onclick", `window.${sentinel} = true`);
+    probe.click();
+    assert.equal(Reflect.get(dom.window, sentinel), true, "The isolated DOM must actually execute a benign handler");
+    Reflect.deleteProperty(dom.window, sentinel);
+    const { editor } = await mount();
+    const html = `<p data-pm-slice='0 0 ["blockquote",{"onerror":"window.${sentinel} = true"}]'>Безопасный текст</p>`
+      + `<img src="data:," onerror="window.${sentinel} = true">`
+      + `<script>window.${sentinel} = true</script>`;
+    await paste(editor, "Безопасный текст", html);
+    assert.match(editor.getText(), /Безопасный текст/);
+    assert.equal(editor.view.dom.querySelector("script, [onerror], [onclick]"), null);
+    assert.equal(Reflect.get(dom.window, sentinel), undefined);
+    const stored = serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument);
+    assert.doesNotMatch(stored.contentMarkdown, /__NOTEFLOW_XSS_TEST__|onerror|<script/);
+    await act(async () => { editor.commands.insertContent(" Продолжение"); });
+    assert.match(editor.getText(), /Продолжение/);
+    assert.equal(Reflect.get(dom.window, sentinel), undefined);
+  });
+  for (const fixture of [
+    { name: "plain text", text: "Обычная строка", selector: "p" },
+    { name: "formatted HTML", text: "Жирный и курсив", html: "<p><strong>Жирный</strong> и <em>курсив</em></p>", selector: "strong", extra: "em" },
+    { name: "Markdown", text: "# Сразу заголовок\n\n**Жирный**", selector: "h1", extra: "strong" },
+    { name: "link", text: "Ссылка", html: '<p><a href="https://example.com/">Ссылка</a></p>', selector: 'a[href="https://example.com/"]' },
+    { name: "list", text: "Первый Второй", html: "<ul><li><p>Первый</p></li><li><p>Второй</p></li></ul>", selector: "ul li" },
+    { name: "table", text: "Ячейка", html: "<table><tbody><tr><th><p>А</p></th><th><p>Б</p></th></tr><tr><td><p>Ячейка</p></td><td><p>Значение</p></td></tr></tbody></table>", selector: "table td" },
+  ]) it(`pastes ${fixture.name} through the mounted NoteFlow editor`, { timeout: 5_000 }, async () => {
+    const { editor } = await mount();
+    const event = await paste(editor, fixture.text, fixture.html);
+    assert.equal(event.defaultPrevented, true);
+    assert.ok(editor.view.dom.querySelector(fixture.selector));
+    if (fixture.extra) assert.ok(editor.view.dom.querySelector(fixture.extra));
+    assert.match(editor.getText(), fixture.name === "Markdown" ? /Сразу заголовок/ : new RegExp(fixture.text.split(" ")[0]));
+    const stored = serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument);
+    await act(async () => { editor.commands.setContent(reload(editor.getJSON() as EditorDocument)); });
+    assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, stored.contentMarkdown);
+  });
+  it("validates attributes reconstructed from clipboard slice context", { timeout: 5_000 }, () => {
+    // Test-only validator probes the advisory's exact context reconstruction boundary.
+    const contextNode = TiptapNode.create({
+      name: "securityContext", group: "block", content: "block+",
+      addAttributes: () => ({ label: { default: "safe", validate: "string" } }),
+      parseHTML: () => [{ tag: "section[data-security-context]" }],
+      renderHTML: ({ node }) => ["section", { "data-security-context": node.attrs.label }, 0],
+    });
+    const element = document.createElement("div"); document.body.append(element);
+    const editor = new Editor({ element, extensions: [...createEditorExtensions({ onEditImage() {}, onToast() {}, onOpenAttachment: async () => {}, onRevealAttachment: async () => {} }), contextNode], content: "<p></p>" });
+    editors.push(editor);
+    let pasted: Slice | undefined;
+    editor.view.setProps({ handlePaste: (_view, _event, slice) => { pasted = slice; return true; } });
+    const event = new dom.window.Event("paste", { bubbles: true, cancelable: true }) as ClipboardEvent;
+    assert.equal(editor.view.pasteHTML(`<p data-pm-slice='0 0 ["securityContext",{"label":["img",{"onerror":"window.__NOTEFLOW_XSS_TEST__ = true"}]}]'>Текст</p>`, event), true);
+    assert.equal(pasted?.content.firstChild?.type.name, "paragraph");
+    assert.equal(pasted?.content.firstChild?.textContent, "Текст");
+    assert.equal(editor.view.dom.querySelector("section[data-security-context], [onerror]"), null);
+    assert.equal(Reflect.get(dom.window, "__NOTEFLOW_XSS_TEST__"), undefined);
+    assert.equal(editor.view.pasteHTML(`<p data-pm-slice='0 0 ["securityContext",{"label":"valid"}]'>Текст</p>`, event), true);
+    assert.equal(pasted?.content.firstChild?.type.name, "securityContext");
+    assert.equal(pasted?.content.firstChild?.attrs.label, "valid");
+  });
   it("does not reload a newer live document or move selection on a lossy save acknowledgement", async () => {
     const { props, editor, container, render } = await mount(); const element = container.querySelector(".tiptap");
     await act(async () => { editor.commands.setTextSelection({ from: 2, to: 5 }); editor.commands.setBold(); });
