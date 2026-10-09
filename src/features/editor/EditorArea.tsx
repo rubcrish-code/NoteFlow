@@ -35,6 +35,12 @@ import { shouldReloadEditorDocument, type EditorDocumentLoadToken } from "./edit
 import { handleEditorLinkClick } from "./editorLinkClick";
 import { EditorIndent, NoteFlowLink } from "./editorInteractions";
 import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
+import { isTauri } from "@tauri-apps/api/core";
+import { readEditorClipboard, importClipboardFiles, type EditorClipboardContent } from "../../services/clipboardService";
+import { filterClipboardHtml, pasteClipboardIntoEditor } from "./editorPaste";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { storeAttachmentFromPath } from "../../services/dataService";
+import { insertNativeDrop, nativeDropPoint } from "./editorNativeDrop";
 import { NoteFlowTable, NoteFlowTableCell, NoteFlowTableHeader, NoteFlowTableView, TableToolsAnchor } from "./tableExtensions";
 import { NoteFlowTaskItem } from "./taskExtensions";
 import { useEditorPageLayout } from "./useEditorPageLayout";
@@ -270,6 +276,9 @@ export function EditorArea({
   const editorRef = useRef<Editor | null>(null);
   const [exportNoteId, setExportNoteId] = useState<string | null>(null);
   const aiRequestIdRef = useRef(0);
+  const clipboardPasteIdRef = useRef(0);
+  const clipboardBusyRef = useRef(false);
+  const nativeDropBusyRef = useRef(false);
   const isMountedRef = useRef(false);
   const loadedDocumentTokenRef = useRef<EditorDocumentLoadToken | null>(null);
   const noteIdRef = useRef(note.id);
@@ -296,6 +305,15 @@ export function EditorArea({
   const editor = useEditor({
     content: note.editorDocument,
     editorProps: {
+      transformPastedHTML: filterClipboardHtml,
+      handleKeyDown: (_view, event) => {
+        if (!isTauri() || event.key.toLowerCase() !== "v" || !(event.ctrlKey || event.metaKey) || event.altKey) return false;
+        const currentEditor = editorRef.current;
+        if (!currentEditor) return false;
+        event.preventDefault();
+        if (!event.repeat) void pasteClipboard(event.shiftKey, true);
+        return true;
+      },
       handleDOMEvents: {
         click: (view, event) => handleEditorLinkClick(event, (url) => {
           void openUrl(url).catch(() => onToast("Не удалось открыть ссылку"));
@@ -333,7 +351,14 @@ export function EditorArea({
         const text = event.clipboardData?.getData("text/plain") ?? "";
         const currentEditor = editorRef.current;
 
-        if (!currentEditor || !isMarkdownLike(text)) {
+        const files = Array.from(event.clipboardData?.files ?? []);
+        if (currentEditor && files.length) {
+          event.preventDefault();
+          void pasteClipboard(false, true, isTauri() ? undefined : () => importClipboardFiles(noteIdRef.current, files));
+          return true;
+        }
+
+        if (!currentEditor || event.clipboardData?.getData("text/html") || currentEditor.isActive("codeBlock") || !isMarkdownLike(text)) {
           return false;
         }
 
@@ -358,9 +383,49 @@ export function EditorArea({
     },
   });
 
+  async function pasteClipboard(plainTextOnly = false, requireFocus = false, read?: () => Promise<EditorClipboardContent>) {
+    const currentEditor = editorRef.current;
+    if (!currentEditor || clipboardBusyRef.current || (requireFocus && !currentEditor.view.hasFocus())) return false;
+    clipboardBusyRef.current = true;
+    const requestId = ++clipboardPasteIdRef.current;
+    const noteId = noteIdRef.current;
+    const generation = loadedDocumentTokenRef.current?.reloadGeneration;
+    try {
+      return await pasteClipboardIntoEditor(currentEditor, read ?? (() => readEditorClipboard(noteId, plainTextOnly)),
+        () => isMountedRef.current && requestId === clipboardPasteIdRef.current && noteId === noteIdRef.current && generation === loadedDocumentTokenRef.current?.reloadGeneration && (!requireFocus || currentEditor.view.hasFocus()), onToast, plainTextOnly);
+    } catch { onToast("Не удалось прочитать буфер обмена. Повторите вставку."); return false; }
+    finally { clipboardBusyRef.current = false; }
+  }
+
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
+
+  useEffect(() => {
+    if (!editor || !isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview().onDragDropEvent((event) => {
+      if (disposed || event.payload.type !== "drop" || nativeDropBusyRef.current || editor.isDestroyed) return;
+      const point = nativeDropPoint(event.payload.position, window.devicePixelRatio, editor.view.dom.getBoundingClientRect());
+      if (!point) return;
+      const target = document.elementFromPoint(point.left, point.top);
+      if (!target || !editor.view.dom.contains(target)) return;
+      const position = editor.view.posAtCoords(point)?.pos;
+      if (position === undefined) return;
+      const noteId = noteIdRef.current;
+      const generation = loadedDocumentTokenRef.current?.reloadGeneration;
+      nativeDropBusyRef.current = true;
+      void insertNativeDrop(editor, event.payload.paths, position,
+        (path, kind) => storeAttachmentFromPath(noteId, path, kind),
+        () => !disposed && noteId === noteIdRef.current && generation === loadedDocumentTokenRef.current?.reloadGeneration,
+      ).then((inserted) => { if (inserted) onToast("Файлы добавлены в заметку"); })
+        .catch(() => onToast("Не удалось добавить файлы. Проверьте формат, размер и доступность файлов."))
+        .finally(() => { nativeDropBusyRef.current = false; });
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(() => { if (!disposed) onToast("Перенос файлов недоступен. Используйте меню вставки."); });
+    return () => { disposed = true; unlisten?.(); };
+  }, [editor, onToast]);
 
   useEffect(() => {
     if (!editor) return undefined;
@@ -777,7 +842,7 @@ export function EditorArea({
             <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
               <TableToolsPopover editor={editor} onToast={onToast} />
               <EditorContent editor={editor} />
-              <EditorContextMenu editor={editor} onToast={onToast} />
+              <EditorContextMenu key={`${note.id}:${documentReloadGeneration}`} editor={editor} onToast={onToast} onPaste={() => pasteClipboard()} />
               {isEmptyNote ? <NewNoteHelper /> : null}
             </div>
           </div>

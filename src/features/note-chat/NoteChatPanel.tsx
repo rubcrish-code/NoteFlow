@@ -1,15 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ChatMessage, Note } from "../../app/types";
 import {
   acceptNoteAiPrivacy,
-  createNoteAiContext,
   getNoteAiStatus,
   listNoteChatMessages,
-  runNoteAi,
-  saveNoteChatMessage,
   type NoteAiStatus,
   type PersistedNoteChatMessage,
 } from "../../services/noteAiService";
+import { noteChatJobs, noteChatDrafts, sendNoteChatInBackground } from "../../services/noteChatBackground";
 import { Icon } from "../../shared/Icon";
 import { ChatComposer } from "../../shared/ChatComposer";
 import { ResizeHandle } from "../../shared/ResizeHandle";
@@ -45,16 +43,17 @@ interface ClipboardWriter {
 
 export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onResetWidth, onToast, selectedText: editorSelectedText }: NoteChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState("");
+  const draft = useSyncExternalStore(noteChatDrafts.subscribe, () => noteChatDrafts.get(note.id));
+  const setDraft = (text: string) => noteChatDrafts.set(note.id, text);
   const [aiStatus, setAiStatus] = useState<NoteAiStatus | null>(null);
   const [isStatusLoading, setIsStatusLoading] = useState(true);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
-  const [isSending, setIsSending] = useState(false);
+  const job = useSyncExternalStore(noteChatJobs.subscribe, () => noteChatJobs.get(note.id));
+  const isSending = noteChatJobs.busy(note.id);
   const [isAcceptingPrivacy, setIsAcceptingPrivacy] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const noteIdRef = useRef(note.id);
-  const requestIdRef = useRef(0);
   const statusRequestIdRef = useRef(0);
   const historyRequestIdRef = useRef(0);
   const isMountedRef = useRef(false);
@@ -78,8 +77,11 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
 
   useEffect(() => {
     void refreshStatus();
-    void loadHistory(note.id);
   }, [note.id]);
+
+  useEffect(() => {
+    void loadHistory(note.id);
+  }, [note.id, job?.userMessageId, job?.result?.id]);
 
   useEffect(() => {
     const scrollArea = messagesScrollRef.current;
@@ -90,7 +92,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
       scrollArea.scrollTop = scrollArea.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [isHistoryLoading, messages, note.id]);
+  }, [isHistoryLoading, messages, note.id, job?.text]);
 
   async function loadHistory(noteId: string) {
     const requestId = ++historyRequestIdRef.current;
@@ -169,6 +171,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
     }
 
     const status = aiStatus ?? (await refreshStatus());
+    if (!isMountedRef.current || noteIdRef.current !== note.id) return;
     if (!status?.hasProvider) {
       onToast("Сначала выберите default LLM provider в настройках моделей");
       return;
@@ -182,73 +185,8 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
       return;
     }
 
-    const requestId = ++requestIdRef.current;
-    const noteIdAtRequest = note.id;
-    const timestamp = Date.now();
-    const pendingUserId = `u-pending-${timestamp}`;
-    const assistantId = `a-pending-${timestamp}`;
     const selectedText = editorSelectedText?.trim() || getSelectedTextFromWindow();
-    setIsSending(true);
-    updateCurrentMessages(noteIdAtRequest, (currentMessages) => [
-      ...currentMessages,
-      { id: pendingUserId, role: "user", text: trimmedDraft },
-      {
-        id: assistantId,
-        role: "assistant",
-        status: "loading",
-        text: "ИИ думает…",
-      },
-    ]);
-    setDraft("");
-
-    try {
-      const savedUserMessage = await saveNoteChatMessage(noteIdAtRequest, "user", trimmedDraft);
-      updateCurrentMessages(noteIdAtRequest, (currentMessages) =>
-        currentMessages.map((message) => (message.id === pendingUserId ? chatMessageFromPersisted(savedUserMessage) : message)),
-      );
-
-      const result = await runNoteAi({
-        kind: "chat",
-        scope: selectedText ? "selection" : "note",
-        question: trimmedDraft,
-        context: createNoteAiContext(note, selectedText),
-      });
-      const savedAssistantMessage = await saveNoteChatMessage(noteIdAtRequest, "assistant", result.response);
-
-      if (!isMountedRef.current || requestId !== requestIdRef.current || noteIdRef.current !== noteIdAtRequest) {
-        return;
-      }
-      setMessages((currentMessages) =>
-        currentMessages.map((message) => (message.id === assistantId ? chatMessageFromPersisted(savedAssistantMessage) : message)),
-      );
-    } catch (error) {
-      if (!isMountedRef.current || requestId !== requestIdRef.current || noteIdRef.current !== noteIdAtRequest) {
-        return;
-      }
-      setMessages((currentMessages) =>
-        currentMessages.map((message) =>
-          message.id === assistantId
-            ? {
-                id: assistantId,
-                role: "assistant",
-                status: "error",
-                text: safeErrorMessage(error),
-              }
-            : message,
-        ),
-      );
-    } finally {
-      if (isMountedRef.current && requestId === requestIdRef.current) {
-        setIsSending(false);
-      }
-    }
-  }
-
-  function updateCurrentMessages(noteId: string, updater: (currentMessages: ChatMessage[]) => ChatMessage[]) {
-    if (!isMountedRef.current || noteIdRef.current !== noteId) {
-      return;
-    }
-    setMessages(updater);
+    await sendNoteChatInBackground(note, trimmedDraft, selectedText);
   }
 
   function clearCopyFeedbackTimer() {
@@ -378,6 +316,8 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
             </div>
           ),
         )}
+        {isSending ? <div className="bub-a loading" aria-live="polite">{job?.text ? <ChatMarkdown content={job.text} /> : <><span className="button-spinner" /><span>ИИ думает…</span></>}</div> : null}
+        {job?.phase === "error" || job?.phase === "stopped" ? <div className="bub-a error" role="alert">{job.error}</div> : null}
         {messages.length === 0 ? (
           <div className="note-chat-suggestions">
             {suggestedPrompts.map((prompt) => (
@@ -396,6 +336,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
           isSubmitting={isSending}
           onChange={setDraft}
           onSubmit={() => void handleSend()}
+          onStop={() => void noteChatJobs.stop(note.id)}
           placeholder="Спросить по заметке…"
           value={draft}
         />

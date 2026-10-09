@@ -59,16 +59,17 @@ describe("current note AI contract", () => {
   });
 
   it("implements a real note chat with loading, privacy and stale-result guards", () => {
-    assert.match(noteChatSource, /runNoteAi/);
+    const background = readFileSync("src/services/noteChatBackground.ts", "utf8");
+    assert.match(background, /runNoteAi/);
     assert.match(noteChatSource, /getNoteAiStatus/);
     assert.match(noteChatSource, /acceptNoteAiPrivacy/);
-    assert.match(noteChatSource, /createNoteAiContext/);
+    assert.match(background, /createNoteAiContext/);
     assert.match(noteChatSource, /editorSelectedText/);
-    assert.match(noteChatSource, /requestIdRef/);
+    assert.match(background, /job\.check\(\)/);
     assert.match(noteChatSource, /statusRequestIdRef/);
     assert.match(noteChatSource, /noteIdRef/);
-    assert.match(noteChatSource, /status: "loading"/);
-    assert.match(noteChatSource, /status: "error"/);
+    assert.match(noteChatSource, /noteChatJobs\.busy/);
+    assert.match(noteChatSource, /job\?\.phase === "error"/);
     assert.match(noteChatSource, /note-chat-empty/);
     assert.match(noteChatSource, /messages\.length === 0 \? \([\s\S]*note-chat-suggestions/);
     assert.doesNotMatch(noteChatSource, /noteChatSeed/);
@@ -77,11 +78,11 @@ describe("current note AI contract", () => {
 
   it("persists current-note chat history in SQLite and restores it per note", () => {
     assert.match(noteChatSource, /listNoteChatMessages/);
-    assert.match(noteChatSource, /saveNoteChatMessage/);
+    assert.match(readFileSync("src/services/noteChatBackground.ts", "utf8"), /saveNoteChatMessage/);
     assert.match(noteChatSource, /loadHistory\(note\.id\)/);
     assert.match(noteChatSource, /chatMessageFromPersisted/);
     assert.match(noteChatSource, /historyRequestIdRef/);
-    assert.match(noteChatSource, /updateCurrentMessages/);
+    assert.match(noteChatSource, /useSyncExternalStore\(noteChatJobs\.subscribe/);
     assert.doesNotMatch(noteChatSource, /messagesByNote/);
     assert.doesNotMatch(noteChatSource, /initialMessages/);
     assert.doesNotMatch(noteChatSource, /welcome-/);

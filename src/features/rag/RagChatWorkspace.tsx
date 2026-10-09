@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import * as embeddingService from "../../services/embeddingService";
 import type { EmbeddingIndexStatus, EmbeddingProfile, SemanticSearchResult } from "../../services/embeddingService";
 import { acceptNoteAiPrivacy, getNoteAiStatus, type NoteAiStatus } from "../../services/noteAiService";
 import * as ragChatService from "../../services/ragChatService";
-import { RagGenerationError, type RagChat, type RagChatMessage, type RagMessageSource } from "../../services/ragChatService";
+import { type RagChat, type RagChatMessage, type RagMessageSource } from "../../services/ragChatService";
 import { Icon } from "../../shared/Icon";
 import { formatDisplayDate } from "../../shared/displayDate";
 import { ChatComposer } from "../../shared/ChatComposer";
@@ -13,13 +13,13 @@ import { formatRussianCount, FRAGMENT_COUNT_FORMS } from "../../shared/russianPl
 import { ChatMarkdown } from "../note-chat/ChatMarkdown";
 import { SettingsModalShell } from "../settings/ModelSettingsUi";
 import { ragAnswerForClipboard } from "./ragCitations";
-import { isRagGenerationCurrent, shouldApplyRagGenerationToVisibleChat } from "./ragGenerationGuards";
-import { retrieveForRagQuestion } from "./ragQueryRouting";
+import { ensureProvisionalRagChat, ragJobs, sendRagInBackground } from "../../services/ragBackground";
 import { listProjects } from "../../services/dataService";
 import type { ProjectCard } from "../../app/types";
 import { ProjectScopeSelector } from "./ProjectScopeSelector";
 import { isRagHistoryOverlayMode, resolveRagPanelVisibility, transitionRagOverlays, type RagLayoutMode } from "./ragResponsiveLayout";
 import { useRagOverlayBounds } from "./useRagOverlayBounds";
+import { ragDrafts } from "./ragDrafts";
 
 interface RagChatWorkspaceProps {
   conversationWidth: number;
@@ -42,28 +42,6 @@ type PendingDialog =
   | { kind: "rename"; chat: RagChat }
   | null;
 
-type GenerationPhase = "idle" | "retrieving" | "generating" | "error";
-
-interface GenerationState {
-  phase: GenerationPhase;
-  requestId: number;
-  chatId: string;
-  userMessageId: string;
-  question: string;
-  message: string;
-  retryable: boolean;
-}
-
-const idleGeneration: GenerationState = {
-  phase: "idle",
-  requestId: 0,
-  chatId: "",
-  userMessageId: "",
-  question: "",
-  message: "",
-  retryable: false,
-};
-
 export function RagChatWorkspace({
   conversationWidth,
   dataReloadGeneration,
@@ -80,9 +58,11 @@ export function RagChatWorkspace({
   sourcesWidth,
 }: RagChatWorkspaceProps) {
   const [chats, setChats] = useState<RagChat[]>([]);
-  const [activeChatId, setActiveChatId] = useState("");
+  const activeChatId = useSyncExternalStore(ragDrafts.subscribe, ragDrafts.activeId);
+  const setActiveChatId = (value: string | ((current: string) => string)) => ragDrafts.setActive(value);
   const [messages, setMessages] = useState<RagChatMessage[]>([]);
-  const [draft, setDraft] = useState("");
+  const draft = useSyncExternalStore(ragDrafts.subscribe, () => ragDrafts.get(activeChatId));
+  const setDraft = (value: string) => ragDrafts.set(activeChatId, value);
   const [profiles, setProfiles] = useState<EmbeddingProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [indexStatuses, setIndexStatuses] = useState<Record<string, EmbeddingIndexStatus>>({});
@@ -92,7 +72,9 @@ export function RagChatWorkspace({
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [scopeBusy, setScopeBusy] = useState(false);
   const scopeBusyRef = useRef(false);
-  const [generation, setGeneration] = useState<GenerationState>(idleGeneration);
+  const job = useSyncExternalStore(ragJobs.subscribe, () => ragJobs.get(activeChatId));
+  const generationBusy = ragJobs.busy(activeChatId);
+  const visibleGeneration = { phase: job?.phase ?? "idle", message: job?.error ?? "", retryable: Boolean(job?.userMessageId) };
   const [activeSources, setActiveSources] = useState<RagMessageSource[]>([]);
   const [preferredHistoryCollapsed, setPreferredHistoryCollapsed] = useState(false);
   const [historyOverlayOpen, setHistoryOverlayOpen] = useState(false);
@@ -104,12 +86,9 @@ export function RagChatWorkspace({
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [pendingPrivacyQuestion, setPendingPrivacyQuestion] = useState("");
   const historyRequestIdRef = useRef(0);
-  const generationRequestIdRef = useRef(0);
-  const generationBusyRef = useRef(false);
   const onToastRef = useRef(onToast);
   onToastRef.current = onToast;
   const activeChatIdRef = useRef("");
-  const deletedChatIdsRef = useRef(new Set<string>());
   const messagesRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -185,8 +164,6 @@ export function RagChatWorkspace({
     && (selectedProfile.locality === "local" || selectedProfile.hasCloudConsent)
     && (selectedIndexStatus?.status === "current" || (selectedIndexStatus?.indexedChunks ?? 0) > 0),
   );
-  const generationBusy = generation.phase === "retrieving" || generation.phase === "generating";
-  const visibleGeneration = generation.chatId === activeChatId ? generation : idleGeneration;
 
   const refreshModelStatuses = useCallback(async (isCurrent: () => boolean = () => true) => {
     const [embeddingProfiles, aiStatus] = await Promise.all([
@@ -227,6 +204,7 @@ export function RagChatWorkspace({
 
   useEffect(() => {
     let cancelled = false;
+    ragDrafts.reconcileGeneration(dataReloadGeneration);
     void Promise.all([refreshChats(), refreshModelStatuses(() => !cancelled), listProjects().then((items) => { if (!cancelled) setProjects(items); })])
       .catch((error) => {
         if (!cancelled) onToastRef.current(`Не удалось загрузить ИИ-чат по базе: ${errorText(error)}`);
@@ -237,8 +215,6 @@ export function RagChatWorkspace({
     return () => {
       cancelled = true;
       historyRequestIdRef.current += 1;
-      generationRequestIdRef.current += 1;
-      generationBusyRef.current = false;
     };
   }, [dataReloadGeneration, refreshChats, refreshModelStatuses]);
 
@@ -262,6 +238,7 @@ export function RagChatWorkspace({
       if (!chat) {
         const created = await ragChatService.createRagChat("Новый чат");
         chat = created;
+        ragDrafts.transferNewChat(created.id);
         setChats((current) => [created, ...current]);
         activeChatIdRef.current = created.id;
         setActiveChatId(created.id);
@@ -286,8 +263,14 @@ export function RagChatWorkspace({
     void ragChatService.listRagChatMessages(activeChatId)
       .then((history) => {
         if (historyRequestIdRef.current !== requestId) return;
-        setMessages(history);
-        setActiveSources(latestSources(history));
+        const answer = ragJobs.get(activeChatId)?.result?.assistantMessage;
+        const currentJob = ragJobs.get(activeChatId);
+        const user: RagChatMessage | null = currentJob?.userMessageId && !history.some((message) => message.id === currentJob.userMessageId)
+          ? { id: currentJob.userMessageId, chatId: activeChatId, role: "user", content: currentJob.question, sources: [], createdAt: "" } : null;
+        const withUser = user ? [...history, user] : history;
+        const currentHistory = answer && !withUser.some((message) => message.id === answer.id) ? [...withUser, answer] : withUser;
+        setMessages(currentHistory);
+        setActiveSources(latestSources(currentHistory));
       })
       .catch((error) => {
         if (historyRequestIdRef.current === requestId) {
@@ -299,7 +282,13 @@ export function RagChatWorkspace({
       .finally(() => {
         if (historyRequestIdRef.current === requestId) setIsHistoryLoading(false);
       });
-  }, [activeChatId, dataReloadGeneration]);
+  }, [activeChatId, dataReloadGeneration, job?.userMessageId, job?.result?.assistantMessage.id]);
+
+  useEffect(() => {
+    if (!job?.result) return;
+    setActiveSources(job.result.assistantMessage.sources);
+    void refreshChats().catch(() => {});
+  }, [job?.result, refreshChats]);
 
   useEffect(() => {
     const scrollArea = messagesRef.current;
@@ -308,7 +297,7 @@ export function RagChatWorkspace({
       scrollArea.scrollTop = scrollArea.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages, isHistoryLoading, generation.phase]);
+  }, [messages, isHistoryLoading, job?.phase, job?.text]);
 
   async function createChat() {
     try {
@@ -318,7 +307,6 @@ export function RagChatWorkspace({
       setActiveChatId(chat.id);
       setMessages([]);
       setActiveSources([]);
-      setDraft("");
     } catch (error) {
       onToast(`Не удалось создать чат: ${errorText(error)}`);
     }
@@ -326,7 +314,7 @@ export function RagChatWorkspace({
 
   async function sendQuestion() {
     const question = draft.trim();
-    if (!question || generationBusyRef.current || scopeBusyRef.current) return;
+    if (!question || ragJobs.busy(activeChatId) || scopeBusyRef.current) return;
     if (activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone) {
       onToast("Выберите хотя бы один проект или заметки вне проектов.");
       return;
@@ -353,135 +341,27 @@ export function RagChatWorkspace({
   }
 
   async function submitQuestion(question: string) {
-    if (generationBusyRef.current || scopeBusyRef.current) return;
-    generationBusyRef.current = true;
-    const requestId = ++generationRequestIdRef.current;
-
+    if (ragJobs.busy(activeChatId) || scopeBusyRef.current) return;
     let chat = activeChat;
     try {
       if (!chat) {
-        const createdChat = await ragChatService.createRagChat();
+        const createdChat = await ensureProvisionalRagChat();
         chat = createdChat;
+        ragDrafts.transferNewChat(createdChat.id);
         activeChatIdRef.current = createdChat.id;
         setChats((current) => [createdChat, ...current]);
         setActiveChatId(createdChat.id);
       }
-      const chatId = chat.id;
-      setGeneration({
-        ...idleGeneration,
-        phase: "retrieving",
-        requestId,
-        chatId,
-        question,
-      });
-      const userMessage = await ragChatService.saveRagChatMessage(chatId, "user", question);
-      setDraft("");
-      if (activeChatIdRef.current === chatId) {
-        setMessages((current) => [...current, userMessage]);
-      }
-      setGeneration((current) => current.requestId === requestId
-        ? { ...current, userMessageId: userMessage.id }
-        : current);
-      if (chat.title === "Новый чат") {
-        const renamed = await ragChatService.renameRagChat(chatId, titleFromQuestion(question));
-        chat = renamed;
-        setChats((current) => current.map((item) => item.id === renamed.id ? renamed : item));
-      }
-      const results = await retrieveForRagQuestion(
-        { chatId, userMessageId: userMessage.id, profileId: selectedProfile?.id ?? null, canRetrieve },
-        { plan: ragChatService.planRagQuestion, hybridSearch: retrieveRagSources },
-      );
-      const request = { chatId, requestId };
-      if (!isRagGenerationCurrent(request, generationRequestIdRef.current, deletedChatIdsRef.current)) return;
-      setGeneration((current) => current.requestId === requestId
-        ? { ...current, phase: "generating" }
-        : current);
-      const generated = await ragChatService.runRagGeneration(chatId, userMessage.id, results);
-      if (!isRagGenerationCurrent(request, generationRequestIdRef.current, deletedChatIdsRef.current)) return;
-      if (shouldApplyRagGenerationToVisibleChat(
-        request,
-        generationRequestIdRef.current,
-        activeChatIdRef.current,
-        deletedChatIdsRef.current,
-      )) {
-        setMessages((current) => [...current, generated.assistantMessage]);
-        setActiveSources(generated.assistantMessage.sources);
-        if (generated.assistantMessage.sources.length > 0) openSources();
-      }
-      await refreshChats();
-      setGeneration(idleGeneration);
-    } catch (error) {
-      if (generationRequestIdRef.current === requestId && chat) {
-        const failedChatId = chat.id;
-        const normalized = error instanceof RagGenerationError
-          ? error
-          : new RagGenerationError("generation_error", "Не удалось выполнить запрос по базе заметок.", true);
-        setGeneration((current) => ({
-          phase: "error",
-          requestId,
-          chatId: failedChatId,
-          userMessageId: current.requestId === requestId ? current.userMessageId : "",
-          question,
-          message: normalized.message,
-          retryable: normalized.retryable && Boolean(current.userMessageId),
-        }));
-      } else if (generationRequestIdRef.current === requestId) {
-        onToast("Не удалось создать чат. Повторите попытку.");
-      }
-    } finally {
-      if (generationRequestIdRef.current === requestId) generationBusyRef.current = false;
+      await sendRagInBackground(chat, question, selectedProfile?.id ?? null, canRetrieve);
+    } catch {
+      ragDrafts.recoverIfEmpty(chat?.id ?? activeChatId, question);
+      onToast("Не удалось создать чат. Повторите попытку.");
     }
   }
 
   async function retryGeneration() {
-    if (
-      generation.phase !== "error"
-      || !generation.retryable
-      || !generation.userMessageId
-      || generationBusyRef.current
-    ) return;
-    const failed = generation;
-    const requestId = ++generationRequestIdRef.current;
-    generationBusyRef.current = true;
-    setGeneration({ ...failed, phase: "retrieving", requestId, message: "" });
-    try {
-      const results = await retrieveForRagQuestion(
-        { chatId: failed.chatId, userMessageId: failed.userMessageId, profileId: selectedProfile?.id ?? null, canRetrieve },
-        { plan: ragChatService.planRagQuestion, hybridSearch: retrieveRagSources },
-      );
-      const request = { chatId: failed.chatId, requestId };
-      if (!isRagGenerationCurrent(request, generationRequestIdRef.current, deletedChatIdsRef.current)) return;
-      setGeneration((current) => current.requestId === requestId ? { ...current, phase: "generating" } : current);
-      const generated = await ragChatService.runRagGeneration(failed.chatId, failed.userMessageId, results);
-      if (!isRagGenerationCurrent(request, generationRequestIdRef.current, deletedChatIdsRef.current)) return;
-      if (shouldApplyRagGenerationToVisibleChat(
-        request,
-        generationRequestIdRef.current,
-        activeChatIdRef.current,
-        deletedChatIdsRef.current,
-      )) {
-        setMessages((current) => [...current, generated.assistantMessage]);
-        setActiveSources(generated.assistantMessage.sources);
-        if (generated.assistantMessage.sources.length > 0) openSources();
-      }
-      await refreshChats();
-      setGeneration(idleGeneration);
-    } catch (error) {
-      if (generationRequestIdRef.current === requestId) {
-        const normalized = error instanceof RagGenerationError
-          ? error
-          : new RagGenerationError("generation_error", "Не удалось выполнить запрос по базе заметок.", true);
-        setGeneration({
-          ...failed,
-          phase: "error",
-          requestId,
-          message: normalized.message,
-          retryable: normalized.retryable,
-        });
-      }
-    } finally {
-      if (generationRequestIdRef.current === requestId) generationBusyRef.current = false;
-    }
+    if (!activeChat || !job || job.phase !== "error" || !job.userMessageId || ragJobs.busy(activeChatId)) return;
+    await sendRagInBackground(activeChat, job.question, selectedProfile?.id ?? null, canRetrieve, job.userMessageId);
   }
 
   async function confirmPrivacyAndSend() {
@@ -513,12 +393,8 @@ export function RagChatWorkspace({
     try {
       const deletedId = pendingDialog.chat.id;
       await ragChatService.deleteRagChat(deletedId);
-      deletedChatIdsRef.current.add(deletedId);
-      if (generation.chatId === deletedId && generationBusy) {
-        generationRequestIdRef.current += 1;
-        generationBusyRef.current = false;
-        setGeneration(idleGeneration);
-      }
+      ragDrafts.delete(deletedId);
+      ragJobs.forget(deletedId);
       const remaining = chats.filter((chat) => chat.id !== deletedId);
       setChats(remaining);
       if (activeChatId === deletedId) {
@@ -705,8 +581,10 @@ export function RagChatWorkspace({
               <div className="rag-answer loading"><span className="button-spinner" /> Ищу по базе…</div>
             ) : null}
             {visibleGeneration.phase === "generating" ? (
-              <div className="rag-answer loading"><span className="button-spinner" /> Формирую ответ…</div>
+              <div className="rag-answer loading" aria-live="polite">{job?.text ? <ChatMarkdown content={job.text} /> : <><span className="button-spinner" /> Формирую ответ…</>}</div>
             ) : null}
+            {visibleGeneration.phase === "stopping" ? <div className="rag-answer loading">Останавливаем…</div> : null}
+            {visibleGeneration.phase === "stopped" ? <div className="rag-answer">Запрос ИИ остановлен</div> : null}
             {visibleGeneration.phase === "error" ? (
               <div className="rag-answer error" role="alert">
                 <span>{visibleGeneration.message}</span>
@@ -727,6 +605,7 @@ export function RagChatWorkspace({
             isSubmitting={generationBusy}
             onChange={setDraft}
             onSubmit={() => void sendQuestion()}
+            onStop={() => void ragJobs.stop(activeChatId)}
             placeholder={!generatorStatus?.hasProvider || !generatorStatus.model
                 ? "Сначала подключите модель ответа"
                 : activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone ? "Выберите область поиска"
@@ -862,31 +741,6 @@ function latestSources(messages: RagChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === "assistant")?.sources ?? [];
 }
 
-async function retrieveRagSources(profileId: string, plan: ragChatService.RagQueryPlan) {
-  try {
-    return await embeddingService.hybridSearch({
-      includeArchived: false,
-      includeNeighbors: true,
-      profileId,
-      projectId: plan.projectId ?? undefined,
-      projectIds: plan.projectIds ?? null,
-      includeStandalone: plan.includeStandalone ?? false,
-      tagId: plan.tagId ?? undefined,
-      query: plan.searchQuery,
-    });
-  } catch {
-    throw new RagGenerationError(
-      "retrieval_error",
-      "Не удалось выполнить поиск по базе заметок. Повторите запрос.",
-      true,
-    );
-  }
-}
-
-function titleFromQuestion(question: string) {
-  const normalized = question.replace(/\s+/g, " ").trim();
-  return normalized.length > 58 ? `${normalized.slice(0, 57).trimEnd()}…` : normalized;
-}
 
 function formatChatDate(value: string) {
   return formatDisplayDate(value);

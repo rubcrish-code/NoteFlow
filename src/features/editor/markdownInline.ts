@@ -38,7 +38,13 @@ function convertTokens(tokens: Token[], marks: EditorMark[] = []): EditorNode[] 
       return convertTokens(token.tokens, [...marks, mark]);
     }
     if (token.type === "br") return [{ type: "hardBreak" }];
-    const text = "text" in token ? token.text : token.raw;
+    const rawText = "text" in token ? token.text : token.raw;
+    const text = token.type === "text" ? rawText.replace(/&#(\d{1,7});/g, (match, code: string) => {
+      const value = Number(code);
+      if (value > 0x10ffff) return match;
+      const char = String.fromCodePoint(value);
+      return /\s/u.test(char) ? char : match;
+    }).replace(/\n/g, " ") : rawText;
     const nextMarks = token.type === "codespan" ? [...marks, { type: "code" }] : marks;
     return text ? [{ type: "text", text, ...(nextMarks.length ? { marks: nextMarks } : {}) }] : [];
   });

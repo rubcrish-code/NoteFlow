@@ -337,13 +337,13 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
       continue;
     }
 
-    const paragraphLines = [line.trim()];
+    const paragraphLines = [line];
     index += 1;
     while (index < lines.length && !isSpecialBlockStart(lines, index)) {
-      paragraphLines.push(lines[index].trim());
+      paragraphLines.push(lines[index]);
       index += 1;
     }
-    content.push(paragraph(paragraphLines.join(" ")));
+    content.push(paragraph(paragraphLines.join("\n").trim()));
   }
 
   return { type: "doc", content: content.length > 0 ? content : [paragraph()] };
@@ -354,58 +354,104 @@ export function parseInlineMarkdown(text: string): EditorNode[] {
 }
 
 function inlineToMarkdown(nodes: EditorNode[] | undefined) {
-  return (nodes ?? [])
-    .map((node) => {
-      if (node.type === "hardBreak") return "  \n";
-      if (node.type !== "text") {
-        return tiptapJsonToMarkdown({ type: "doc", content: [node] }).trim();
-      }
+  const projection = projectInlineMarkdown(nodes ?? []);
+  return projection.markdown;
+}
 
-      const marks = node.marks ?? [];
-      if (marks.some((mark) => mark.type === "code")) {
-        const text = node.text ?? "";
-        const fence = "`".repeat(Math.max(1, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length + 1)));
-        const padding = text.startsWith("`") || text.endsWith("`") ? " " : "";
-        return `${fence}${padding}${text}${padding}${fence}`;
-      }
-      return marks.reduce((value, mark) => {
-        if (mark.type === "bold") {
-          return `**${value}**`;
-        }
-        if (mark.type === "italic") {
-          return `_${value}_`;
-        }
-        if (mark.type === "strike") {
-          return `~~${value}~~`;
-        }
-        if (mark.type === "code") {
-          return `\`${value}\``;
-        }
-        if (mark.type === "highlight") {
-          return `==${value}==`;
-        }
-        if (mark.type === "underline") {
-          return value;
-        }
-        if (mark.type === "superscript") {
-          return value;
-        }
-        if (mark.type === "subscript") {
-          return value;
-        }
-        if (mark.type === "textStyle") {
-          return value;
-        }
-        if (mark.type === "fontFormat") {
-          return value;
-        }
-        if (mark.type === "link") {
-          return `[${value}](${String(mark.attrs?.href ?? "")})`;
-        }
-        return value;
-      }, node.text ?? "");
-    })
-    .join("");
+// Markdown cannot express every ProseMirror range (for example emphasis on intraword punctuation).
+// Only those ranges use the existing appearance sidecar; their text still comes from Markdown.
+export function inlineNeedsFormattingSidecar(nodes: EditorNode[]) {
+  return projectInlineMarkdown(nodes).needsSidecar;
+}
+
+function projectInlineMarkdown(nodes: EditorNode[]) {
+  const markdown = renderInlineMarkdown(nodes);
+  if (nodes.some((node) => node.type !== "text" && node.type !== "hardBreak")) return { markdown, needsSidecar: false };
+  const canonicalRuns = (content: EditorNode[]) => {
+    const runs: Array<{ text: string; marks: string }> = [];
+    for (const node of content) {
+      const text = node.type === "hardBreak" ? "\n" : node.text ?? "";
+      const marks = (node.marks ?? []).filter((mark) => ["bold", "italic", "strike", "highlight", "code", "link"].includes(mark.type));
+      const key = marks.some((mark) => mark.type === "code") ? "code"
+        : marks.map((mark) => mark.type === "link" ? `link:${String(mark.attrs?.href ?? "")}` : mark.type).sort().join("|");
+      const last = runs[runs.length - 1];
+      if (last?.marks === key) last.text += text;
+      else if (text) runs.push({ text, marks: key });
+    }
+    return runs;
+  };
+  const parsed = parseInlineMarkdown(markdown);
+  const original = canonicalRuns(nodes);
+  if (JSON.stringify(original) === JSON.stringify(canonicalRuns(parsed))) return { markdown, needsSidecar: false };
+  return { markdown: renderInlineMarkdown(nodes.map((node) => ({ ...node, marks: [] }))), needsSidecar: true };
+}
+
+function renderInlineMarkdown(nodes: EditorNode[]) {
+  const order = ["link", "italic", "bold", "strike", "highlight", "code"];
+  const runs: Array<{ text: string; marks: EditorMark[]; atom?: EditorNode }> = [];
+  for (const node of nodes ?? []) {
+    if (node.type !== "text") {
+      runs.push({ text: "", marks: [], atom: node });
+      continue;
+    }
+    if (!node.text) continue;
+    const marks = node.marks?.some((mark) => mark.type === "code") ? [{ type: "code" }]
+      : (node.marks ?? []).filter((mark) => order.includes(mark.type)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
+    const last = runs[runs.length - 1];
+    // Sidecar-only marks must not interrupt a shared Markdown span.
+    if (last && !last.atom && sameInlineMarks(last.marks, marks)) last.text += node.text;
+    else runs.push({ text: node.text, marks });
+  }
+  let active: EditorMark[] = [];
+  let output = "";
+  const delimiter = (mark: EditorMark, opening: boolean) => {
+    if (mark.type === "link") return opening ? "[" : `](${String(mark.attrs?.href ?? "").replace(/[\\()]/g, "\\$&")})`;
+    return mark.type === "bold" ? "**" : mark.type === "italic" ? "*" : mark.type === "strike" ? "~~" : "==";
+  };
+  const transition = (marks: EditorMark[]) => {
+    // Retain shared outer marks even when ranges cross in ProseMirror.
+    const next = [...active.filter((mark) => marks.some((item) => sameInlineMark(mark, item))),
+      ...marks.filter((mark) => !active.some((item) => sameInlineMark(mark, item)))];
+    let keep = 0;
+    while (keep < Math.min(active.length, next.length) && sameInlineMark(active[keep], next[keep])) keep++;
+    for (let index = active.length - 1; index >= keep; index--) output += delimiter(active[index], false);
+    for (let index = keep; index < next.length; index++) output += delimiter(next[index], true);
+    active = next;
+  };
+  for (const run of runs) {
+    if (run.atom) {
+      transition([]);
+      output += run.atom.type === "hardBreak" ? (run === runs[runs.length - 1] ? "<br>" : "  \n")
+        : tiptapJsonToMarkdown({ type: "doc", content: [run.atom] }).trim();
+    } else if (run.marks.some((mark) => mark.type === "code")) {
+      transition([]);
+      const fence = "`".repeat(Math.max(1, ...Array.from(run.text.matchAll(/`+/g), (match) => match[0].length + 1)));
+      const padding = run.text.startsWith("`") || run.text.endsWith("`") || (/^ | $/.test(run.text) && /\S/.test(run.text)) ? " " : "";
+      output += `${fence}${padding}${run.text}${padding}${fence}`;
+    } else {
+      const [, leading, text, trailing] = /^(\s*)([\s\S]*?)(\s*)$/.exec(run.text)!;
+      if (leading) { transition([]); output += escapeInlineText(leading); }
+      if (text) { transition(run.marks); output += escapeInlineText(text); }
+      if (trailing) { transition([]); output += escapeInlineText(trailing); }
+    }
+  }
+  transition([]);
+  // Encode edge whitespace so block parsing cannot treat it as indentation or discard it.
+  return output.replace(/^\s+|\s+$/g, (space) => [...space].map((char) => `&#${char.charCodeAt(0)};`).join(""));
+}
+
+function sameInlineMark(a: EditorMark, b: EditorMark) {
+  return a.type === b.type && (a.type !== "link" || a.attrs?.href === b.attrs?.href);
+}
+
+function sameInlineMarks(a: EditorMark[], b: EditorMark[]) {
+  return a.length === b.length && a.every((mark, index) => sameInlineMark(mark, b[index]));
+}
+
+function escapeInlineText(text: string) {
+  return text.replace(/[\\`*_{}\[\]<>~=&]/g, "\\$&")
+    .replace(/^([#+-])(?=\s|$)|^(-)(?=--+$)/, "\\$&")
+    .replace(/^(\d+)([.)])(?=\s)/, "$1\\$2");
 }
 
 function nodeText(node: EditorNode | undefined): string {

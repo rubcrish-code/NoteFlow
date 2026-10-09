@@ -1,5 +1,7 @@
 import { invoke } from "./safeInvoke";
 import type { Note } from "../app/types";
+import { streamArguments, type AiRequestControl } from "./aiBackground";
+import { isTauri } from "@tauri-apps/api/core";
 
 export const NOTE_AI_TIMEOUT_MS = 45_000;
 
@@ -161,10 +163,13 @@ function timeoutError(message: string) {
   return new Error(message);
 }
 
-function withInvokeTimeout<T>(request: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+function withInvokeTimeout<T>(request: Promise<T>, timeoutMs: number, message: string, onTimeout?: () => void): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((_, reject) => {
-    timeoutId = setTimeout(() => reject(timeoutError(message)), timeoutMs);
+    timeoutId = setTimeout(() => {
+      onTimeout?.();
+      reject(timeoutError(message));
+    }, timeoutMs);
   });
 
   return Promise.race([request, timeout]).finally(() => {
@@ -199,12 +204,15 @@ export async function saveNoteChatMessage(noteId: string, role: NoteChatRole, co
   );
 }
 
-export async function runNoteAi(request: NoteAiRequest) {
+export async function runNoteAi(request: NoteAiRequest, control?: AiRequestControl) {
   return mapResponse(
     await withInvokeTimeout(
-      invoke<NoteAiResponseDto>("run_note_ai", { request }),
+      control && isTauri() ? invoke<NoteAiResponseDto>("run_note_ai_stream", { request, ...streamArguments(control) }) : invoke<NoteAiResponseDto>("run_note_ai", { request }),
       NOTE_AI_TIMEOUT_MS,
       "Timeout: AI-запрос по текущей заметке не завершился за 45 секунд. Проверьте, доступна ли модель.",
+      control && isTauri() ? () => {
+        void invoke<void>("cancel_ai_operation", { requestId: control.requestId }).catch(() => undefined);
+      } : undefined,
     ),
   );
 }

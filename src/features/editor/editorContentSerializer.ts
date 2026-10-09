@@ -4,6 +4,7 @@ import {
   tiptapJsonToHtml,
   tiptapJsonToMarkdown,
   tiptapJsonToPlainText,
+  inlineNeedsFormattingSidecar,
   type EditorDocument,
   type EditorMark,
   type EditorNode,
@@ -274,6 +275,12 @@ function extractBlockEntries(document: EditorDocument): SidecarNodeEntry[] {
 
 function extractTextMarkEntries(document: EditorDocument): SidecarTextMarkEntry[] {
   const entries: SidecarTextMarkEntry[] = [];
+  const appearanceOnly = new Set<EditorNode>();
+  visitNodes(document, (node) => {
+    if (node.content?.some((child) => child.type === "text") && inlineNeedsFormattingSidecar(node.content)) {
+      node.content.forEach((child) => { if (child.type === "text") appearanceOnly.add(child); });
+    }
+  });
   let offset = 0;
   visitNodes(document, (node) => {
     if (node.type !== "text") {
@@ -281,7 +288,9 @@ function extractTextMarkEntries(document: EditorDocument): SidecarTextMarkEntry[
     }
 
     const text = node.text ?? "";
-    const marks = (node.marks ?? []).filter((mark) => isSidecarTextMark(mark) || node.marks?.some((item) => item.type === "code")).map(cloneMark);
+    // CommonMark expels enclosing whitespace from emphasis; preserve its appearance by range.
+    const preserveBoundaryMarks = /^\s|\s$/.test(text);
+    const marks = (node.marks ?? []).filter((mark) => isSidecarTextMark(mark) || preserveBoundaryMarks || appearanceOnly.has(node) || node.marks?.some((item) => item.type === "code")).map(cloneMark);
     if (text.length > 0 && marks.length > 0) {
       entries.push({ end: offset + text.length, marks, start: offset });
     }

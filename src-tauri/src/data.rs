@@ -284,6 +284,15 @@ pub struct AttachmentStoreResultDto {
     pub size_label: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorClipboardResult {
+    pub text: String,
+    pub html: String,
+    pub attachments: Vec<AttachmentStoreResultDto>,
+    pub failed_files: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataLocationDto {
@@ -3149,6 +3158,99 @@ impl DataStore {
             self.delete_note_permanently(item_id)?;
         }
         Ok(())
+    }
+
+    fn import_clipboard_payload(
+        &mut self,
+        note_id: Option<String>,
+        plain_text_only: bool,
+        payload: crate::clipboard::ClipboardPayload,
+    ) -> DataResult<EditorClipboardResult> {
+        let has_assets = !payload.files.is_empty() || payload.image.is_some();
+        let mut result = EditorClipboardResult {
+            text: if has_assets {
+                String::new()
+            } else {
+                payload.text
+            },
+            html: if has_assets || plain_text_only {
+                String::new()
+            } else {
+                payload.html
+            },
+            attachments: vec![],
+            failed_files: 0,
+        };
+        if !has_assets || plain_text_only {
+            return Ok(result);
+        }
+        let note_id = note_id
+            .ok_or_else(|| DataError::InvalidInput("Откройте заметку для вставки файлов".into()))?;
+        self.get_note(&note_id)?;
+        if payload.files.len() > crate::clipboard::MAX_CLIPBOARD_FILES {
+            return Err(DataError::InvalidInput(
+                "Вставляйте не больше 32 файлов за один раз".into(),
+            ));
+        }
+        let mut seen = HashSet::new();
+        for path in payload.files {
+            #[cfg(windows)]
+            let key = path.to_string_lossy().to_lowercase();
+            #[cfg(not(windows))]
+            let key = path.clone();
+            if !seen.insert(key) {
+                continue;
+            }
+            let is_local = path.is_absolute() && !path.components().any(|component| {
+                matches!(component, std::path::Component::ParentDir)
+                || matches!(component, std::path::Component::Prefix(prefix) if matches!(prefix.kind(), std::path::Prefix::UNC(..) | std::path::Prefix::VerbatimUNC(..) | std::path::Prefix::DeviceNS(..)))
+            });
+            if !is_local {
+                result.failed_files += 1;
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            let is_image = matches!(
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("png" | "jpg" | "jpeg" | "webp")
+            );
+            if name.is_empty() {
+                result.failed_files += 1;
+                continue;
+            }
+            match self.store_attachment_from_path(StoreAttachmentPathRequest {
+                note_id: note_id.clone(),
+                kind: if is_image { "image" } else { "file" }.into(),
+                source_path: path.to_string_lossy().into_owned(),
+                original_attachment_id: None,
+                edit_metadata: None,
+            }) {
+                Ok(attachment) => result.attachments.push(attachment),
+                Err(_) => result.failed_files += 1,
+            }
+        }
+        if result.attachments.is_empty() && result.failed_files == 0 {
+            if let Some(bytes) = payload.image {
+                result
+                    .attachments
+                    .push(self.store_attachment(StoreAttachmentRequest {
+                        note_id,
+                        kind: "image".into(),
+                        original_name: "Изображение.png".into(),
+                        mime_type: "image/png".into(),
+                        original_attachment_id: None,
+                        edit_metadata: None,
+                        bytes,
+                    })?);
+            }
+        }
+        Ok(result)
     }
 
     fn store_attachment(
@@ -6891,6 +6993,28 @@ pub fn save_rag_chat_message(
 pub async fn run_note_ai(
     request: llm::NoteAiRequestDto,
     state: State<'_, AppState>,
+    operations: State<'_, crate::ai_operations::AiOperations>,
+) -> Result<llm::NoteAiResponseDto, PublicCommandError> {
+    run_note_ai_impl(request, None, None, operations, state).await
+}
+
+#[tauri::command]
+pub async fn run_note_ai_stream(
+    request: llm::NoteAiRequestDto,
+    request_id: String,
+    on_delta: tauri::ipc::Channel<crate::ai_operations::StreamChunk>,
+    state: State<'_, AppState>,
+    operations: State<'_, crate::ai_operations::AiOperations>,
+) -> Result<llm::NoteAiResponseDto, PublicCommandError> {
+    run_note_ai_impl(request, Some(request_id), Some(on_delta), operations, state).await
+}
+
+async fn run_note_ai_impl(
+    request: llm::NoteAiRequestDto,
+    request_id: Option<String>,
+    on_delta: Option<tauri::ipc::Channel<crate::ai_operations::StreamChunk>>,
+    operations: State<'_, crate::ai_operations::AiOperations>,
+    state: State<'_, AppState>,
 ) -> Result<llm::NoteAiResponseDto, PublicCommandError> {
     let provider = state
         .with_store(|store| {
@@ -6907,19 +7031,59 @@ pub async fn run_note_ai(
         })
         .map_err(command_error)?;
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let token = if let Some(id) = request_id.as_deref() {
+        operations.begin(id).map_err(command_error)?
+    } else {
+        Arc::new(std::sync::atomic::AtomicBool::new(false))
+    };
+    let streaming = request_id.is_some();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let storage = llm::SystemSecretStorage;
-        let http = llm::CurlHttpClient;
+        let http = crate::llm_transport::ControlledHttpClient {
+            token,
+            streaming,
+            observer: Arc::new(move |chunk| {
+                if let Some(channel) = &on_delta {
+                    let _ = channel.send(chunk);
+                }
+            }),
+        };
         llm::run_note_ai_request(&provider, &storage, &http, request)
     })
-    .await
-    .map_err(|_| PublicCommandError::interrupted())?
-    .map_err(command_error)
+    .await;
+    if let Some(id) = request_id {
+        operations.finish(&id);
+    }
+    result
+        .map_err(|_| PublicCommandError::interrupted())?
+        .map_err(command_error)
 }
 
 #[tauri::command]
 pub async fn run_rag_generation(
     request: rag::RagGenerationRequest,
+    state: State<'_, AppState>,
+    operations: State<'_, crate::ai_operations::AiOperations>,
+) -> Result<rag::RagGenerationResultDto, rag::RagGenerationCommandError> {
+    run_rag_generation_impl(request, None, None, operations, state).await
+}
+
+#[tauri::command]
+pub async fn run_rag_generation_stream(
+    request: rag::RagGenerationRequest,
+    request_id: String,
+    on_delta: tauri::ipc::Channel<crate::ai_operations::StreamChunk>,
+    state: State<'_, AppState>,
+    operations: State<'_, crate::ai_operations::AiOperations>,
+) -> Result<rag::RagGenerationResultDto, rag::RagGenerationCommandError> {
+    run_rag_generation_impl(request, Some(request_id), Some(on_delta), operations, state).await
+}
+
+async fn run_rag_generation_impl(
+    request: rag::RagGenerationRequest,
+    request_id: Option<String>,
+    on_delta: Option<tauri::ipc::Channel<crate::ai_operations::StreamChunk>>,
+    operations: State<'_, crate::ai_operations::AiOperations>,
     state: State<'_, AppState>,
 ) -> Result<rag::RagGenerationResultDto, rag::RagGenerationCommandError> {
     let (database_path, provider) = state
@@ -6938,19 +7102,39 @@ pub async fn run_rag_generation(
         })
         .map_err(rag::RagGenerationCommandError::from_data_error)?;
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let token = if let Some(id) = request_id.as_deref() {
+        operations
+            .begin(id)
+            .map_err(rag::RagGenerationCommandError::from_data_error)?
+    } else {
+        Arc::new(std::sync::atomic::AtomicBool::new(false))
+    };
+    let streaming = request_id.is_some();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let mut conn = open_background_connection(&database_path)?;
         let storage = llm::SystemSecretStorage;
-        let http = llm::CurlHttpClient;
+        let http = crate::llm_transport::ControlledHttpClient {
+            token,
+            streaming,
+            observer: Arc::new(move |chunk| {
+                if let Some(channel) = &on_delta {
+                    let _ = channel.send(chunk);
+                }
+            }),
+        };
         rag::generate_grounded_answer(&mut conn, &provider, &storage, &http, request)
     })
-    .await
-    .map_err(|_| {
-        rag::RagGenerationCommandError::from_data_error(DataError::State(
-            "Фоновая RAG generation не завершена".to_string(),
-        ))
-    })?
-    .map_err(rag::RagGenerationCommandError::from_data_error)
+    .await;
+    if let Some(id) = request_id {
+        operations.finish(&id);
+    }
+    result
+        .map_err(|_| {
+            rag::RagGenerationCommandError::from_data_error(DataError::State(
+                "Фоновая RAG generation не завершена".to_string(),
+            ))
+        })?
+        .map_err(rag::RagGenerationCommandError::from_data_error)
 }
 
 #[tauri::command]
@@ -7791,6 +7975,23 @@ pub fn delete_archive_item(
 }
 
 #[tauri::command]
+pub async fn read_editor_clipboard(
+    note_id: Option<String>,
+    plain_text_only: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<EditorClipboardResult, PublicCommandError> {
+    let payload = tauri::async_runtime::spawn_blocking(crate::clipboard::read_content)
+        .await
+        .map_err(|_| command_error(DataError::State("Не удалось прочитать буфер обмена".into())))?
+        .map_err(|message| command_error(DataError::InvalidInput(message)))?;
+    with_store_blocking(Arc::clone(&state.store), move |store| {
+        store.import_clipboard_payload(note_id, plain_text_only.unwrap_or(false), payload)
+    })
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
 pub fn store_attachment(
     request: StoreAttachmentRequest,
     state: State<'_, AppState>,
@@ -7801,13 +8002,15 @@ pub fn store_attachment(
 }
 
 #[tauri::command]
-pub fn store_attachment_from_path(
+pub async fn store_attachment_from_path(
     request: StoreAttachmentPathRequest,
     state: State<'_, AppState>,
 ) -> Result<AttachmentStoreResultDto, PublicCommandError> {
-    state
-        .with_store(|store| store.store_attachment_from_path(request))
-        .map_err(command_error)
+    with_store_blocking(Arc::clone(&state.store), move |store| {
+        store.store_attachment_from_path(request)
+    })
+    .await
+    .map_err(command_error)
 }
 
 #[tauri::command]
@@ -8033,6 +8236,36 @@ pub async fn write_note_export_file(
 }
 
 #[tauri::command]
+pub async fn write_image_file(
+    path: String,
+    bytes: Vec<u8>,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
+    let destination = PathBuf::from(path);
+    let checked = destination.clone();
+    with_store_blocking(Arc::clone(&state.store), move |store| {
+        crate::document_export::validate_destination(&checked, "png", &store.base_dir)
+    })
+    .await
+    .map_err(command_error)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        crate::clipboard::decode_png(&bytes).map_err(DataError::InvalidInput)?;
+        crate::document_export::atomic_write(
+            &destination,
+            |file| {
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+    })
+    .await
+    .map_err(|_| command_error(DataError::State("Не удалось сохранить изображение".into())))?
+    .map_err(command_error)
+}
+
+#[tauri::command]
 pub async fn create_backup_at_path(
     path: String,
     state: State<'_, AppState>,
@@ -8083,6 +8316,275 @@ mod tests {
 
     fn temp_store_dir() -> PathBuf {
         std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn rc4_clipboard_files_preserve_order_deduplicate_and_survive_source_delete_backup_restart() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("QA store");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Clipboard QA".into(),
+                note_date: "2026-10-09".into(),
+            })
+            .expect("note");
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 40, 60, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .expect("PNG");
+        let mut jpeg = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(2, 2, image::Rgb([30, 50, 70]))
+            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+            .expect("JPEG");
+        let fixtures = [
+            ("Фото.png", png.into_inner()),
+            ("Фото.jpg", jpeg.into_inner()),
+            ("Документ.pdf", b"%PDF-1.4 synthetic".to_vec()),
+            ("Документ.docx", b"PK\x03\x04synthetic docx".to_vec()),
+            ("Текст.txt", "Русский 🙂".as_bytes().to_vec()),
+        ];
+        let mut paths = Vec::new();
+        for (name, bytes) in &fixtures {
+            let path = dir.join(name);
+            fs::write(&path, bytes).expect("source");
+            paths.push(path);
+        }
+        paths.push(paths[0].clone());
+        let result = store
+            .import_clipboard_payload(
+                Some(note.id.clone()),
+                false,
+                crate::clipboard::ClipboardPayload {
+                    files: paths.clone(),
+                    text: "file:///private/path".into(),
+                    html: "<img src='https://example.test/private'>".into(),
+                    image: Some(test_png_bytes(1)),
+                },
+            )
+            .expect("import batch");
+        assert_eq!(result.failed_files, 0);
+        assert_eq!(result.attachments.len(), fixtures.len());
+        assert!(result.text.is_empty() && result.html.is_empty());
+        for (index, imported) in result.attachments.iter().enumerate() {
+            assert_eq!(imported.attachment.original_name, fixtures[index].0);
+            assert_eq!(
+                imported.attachment.kind,
+                if index < 2 { "image" } else { "file" }
+            );
+            assert_eq!(
+                fs::read(
+                    store
+                        .resolve_attachment_path(&imported.attachment.id)
+                        .expect("managed path")
+                )
+                .expect("managed bytes"),
+                fixtures[index].1
+            );
+        }
+        let attachment = &result.attachments[0].attachment;
+        let mut nodes = Vec::new();
+        let mut markdown = Vec::new();
+        for imported in &result.attachments {
+            let asset = &imported.attachment;
+            if asset.kind == "image" {
+                nodes.push(image_document(asset, "left")["content"][0].clone());
+                markdown.push(format!(
+                    "![{}]({})",
+                    asset.original_name,
+                    asset.asset_uri.as_deref().expect("image URI")
+                ));
+            } else {
+                nodes.push(json!({ "type": "fileAttachment", "attrs": { "storageId": asset.id, "name": asset.original_name, "size": imported.size_label, "type": asset.mime_type } }));
+                markdown.push(format!(
+                    "[file:{}](noteflow-file://{})",
+                    asset.original_name, asset.id
+                ));
+            }
+        }
+        let saved = store
+            .update_note_content(persistence_request(
+                &note.id,
+                0,
+                &markdown.join("\n\n"),
+                json!({ "type": "doc", "content": nodes }),
+                vec![],
+            ))
+            .expect("save paste batch");
+        for path in paths.iter().take(fixtures.len()) {
+            fs::remove_file(path).expect("delete source");
+        }
+        let backup = fs::read(store.create_backup().expect("backup").path).expect("archive");
+        drop(store);
+        let reopened = DataStore::open(dir).expect("restart");
+        assert_eq!(
+            reopened
+                .get_note(&note.id)
+                .expect("reopened note")
+                .content_markdown,
+            saved.content_markdown
+        );
+        assert_eq!(
+            fs::read(
+                reopened
+                    .resolve_attachment_path(&attachment.id)
+                    .expect("reopened image")
+            )
+            .expect("bytes"),
+            fixtures[0].1
+        );
+        let mut restored = DataStore::open(temp_store_dir()).expect("restore profile");
+        restored
+            .import_backup(ImportBackupRequest {
+                file_name: "clipboard.zip".into(),
+                bytes: backup,
+            })
+            .expect("restore");
+        assert_eq!(
+            fs::read(
+                restored
+                    .resolve_attachment_path(&attachment.id)
+                    .expect("restored image")
+            )
+            .expect("bytes"),
+            fixtures[0].1
+        );
+        for (index, imported) in result.attachments.iter().enumerate() {
+            assert_eq!(
+                fs::read(
+                    reopened
+                        .resolve_attachment_path(&imported.attachment.id)
+                        .expect("reopened attachment")
+                )
+                .expect("bytes"),
+                fixtures[index].1
+            );
+            assert_eq!(
+                fs::read(
+                    restored
+                        .resolve_attachment_path(&imported.attachment.id)
+                        .expect("restored attachment")
+                )
+                .expect("bytes"),
+                fixtures[index].1
+            );
+        }
+    }
+
+    #[test]
+    fn rc4_clipboard_partial_failure_keeps_success_and_rejects_paths_directories_spoofs_limits() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("QA store");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Partial batch".into(),
+                note_date: "2026-10-09".into(),
+            })
+            .expect("note");
+        let good = dir.join("Текст.txt");
+        fs::write(&good, "Русский 🙂").expect("source");
+        let spoof = dir.join("spoof.png");
+        fs::write(&spoof, "private invalid image").expect("spoof");
+        let large = dir.join("large.png");
+        write_sized_test_file(&large, 26 * 1024 * 1024, true);
+        let result = store
+            .import_clipboard_payload(
+                Some(note.id.clone()),
+                false,
+                crate::clipboard::ClipboardPayload {
+                    files: vec![
+                        good,
+                        dir.clone(),
+                        spoof,
+                        large,
+                        dir.join("missing.pdf"),
+                        PathBuf::from("relative.txt"),
+                        dir.join("../outside.txt"),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .expect("partial batch");
+        assert_eq!(result.attachments.len(), 1);
+        assert_eq!(result.failed_files, 6);
+        assert_eq!(result.attachments[0].attachment.original_name, "Текст.txt");
+        assert!(store
+            .import_clipboard_payload(
+                Some(note.id.clone()),
+                false,
+                crate::clipboard::ClipboardPayload {
+                    files: vec![dir.clone(); 33],
+                    ..Default::default()
+                }
+            )
+            .is_err());
+        let error = store
+            .import_clipboard_payload(
+                Some("deleted-note".into()),
+                false,
+                crate::clipboard::ClipboardPayload {
+                    files: vec![dir],
+                    ..Default::default()
+                },
+            )
+            .err()
+            .expect("missing note");
+        assert!(!error.to_string().contains("private"));
+        assert!(store
+            .get_note(&note.id)
+            .expect("note unchanged")
+            .content_markdown
+            .is_empty());
+    }
+
+    #[test]
+    fn rc4_clipboard_bitmap_uses_managed_pipeline_and_plain_text_only_does_not_import_assets() {
+        let mut store = DataStore::open(temp_store_dir()).expect("QA store");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Bitmap".into(),
+                note_date: "2026-10-09".into(),
+            })
+            .expect("note");
+        let result = store
+            .import_clipboard_payload(
+                Some(note.id.clone()),
+                false,
+                crate::clipboard::ClipboardPayload {
+                    image: Some(test_png_bytes(24)),
+                    html: "duplicate representation".into(),
+                    text: "duplicate".into(),
+                    ..Default::default()
+                },
+            )
+            .expect("bitmap");
+        assert_eq!(result.attachments.len(), 1);
+        assert_eq!(result.attachments[0].attachment.kind, "image");
+        assert!(result.text.is_empty() && result.html.is_empty());
+        let plain = store
+            .import_clipboard_payload(
+                None,
+                true,
+                crate::clipboard::ClipboardPayload {
+                    image: Some(test_png_bytes(24)),
+                    text: "private path".into(),
+                    ..Default::default()
+                },
+            )
+            .expect("plain only");
+        assert!(plain.attachments.is_empty() && plain.text.is_empty());
+        let text = store
+            .import_clipboard_payload(
+                None,
+                false,
+                crate::clipboard::ClipboardPayload {
+                    text: "Текст 🙂".into(),
+                    html: "<p><b>Текст 🙂</b></p>".into(),
+                    ..Default::default()
+                },
+            )
+            .expect("text");
+        assert_eq!(text.text, "Текст 🙂");
+        assert!(text.html.contains("<b>"));
     }
 
     fn bulk_delete_fixture(dir: PathBuf) -> (DataStore, NoteDto, String) {
@@ -12424,6 +12926,576 @@ mod tests {
             content_sidecars: sidecars,
             plain_text: markdown.to_string(),
         }
+    }
+
+    #[test]
+    #[ignore = "explicit live RC4 AI QA; read-only provider metadata and synthetic temporary notes only"]
+    fn rc4_live_ai_integration() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let local_model = std::env::var("NOTEFLOW_RC4_LOCAL_CHAT").ok();
+        let source = local_model.is_none().then(|| {
+            let path = std::env::var("NOTEFLOW_BRIDGE_SMOKE_DB")
+                .expect("explicit read-only provider database");
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("read-only metadata")
+        });
+        let mut provider = if let Some(model) = &local_model {
+            llm::LlmProviderRecord {
+                id: "rc4-local-qa".into(),
+                name: "RC4 local QA".into(),
+                provider_type: "ollama".into(),
+                base_url: "http://127.0.0.1:11434".into(),
+                api_key_ref: None,
+                chat_model: model.clone(),
+                embedding_model: "".into(),
+                models_endpoint: "/api/tags".into(),
+                chat_endpoint: "/api/generate".into(),
+                embeddings_endpoint: "/api/embed".into(),
+                timeout_ms: 120000,
+                context_size: 4096,
+                temperature: 0.0,
+                streaming_enabled: true,
+                custom_headers_json: "{}".into(),
+                is_default: true,
+                last_status: "unknown".into(),
+                status_message: None,
+                last_checked_at: None,
+                created_at: now_iso(),
+                updated_at: now_iso(),
+            }
+        } else {
+            let source = source.as_ref().expect("Bridge metadata connection");
+            let provider_id: String = source.query_row("SELECT id FROM llm_providers WHERE base_url LIKE '%bridge-back.admlr.lipetsk.ru%' ORDER BY is_default DESC, updated_at DESC LIMIT 1", [], |row| row.get(0)).expect("Bridge metadata");
+            llm::get_provider_record(source, &provider_id).expect("provider metadata")
+        };
+        let storage = llm::SystemSecretStorage;
+        let models = llm::list_models_for_provider(&provider, &storage, &llm::CurlHttpClient)
+            .expect("real discovery");
+        let mut successes = 0;
+        for model in &models.models {
+            if local_model
+                .as_ref()
+                .is_some_and(|selected| selected != model)
+            {
+                continue;
+            }
+            if models
+                .options
+                .iter()
+                .find(|option| &option.id == model)
+                .is_some_and(|option| option.supports_chat == Some(false))
+            {
+                continue;
+            }
+            provider.chat_model = model.clone();
+            for streaming in [false, true] {
+                let chunks = Arc::new(AtomicUsize::new(0));
+                let observed = Arc::clone(&chunks);
+                let http = crate::llm_transport::ControlledHttpClient {
+                    token: Arc::new(AtomicBool::new(false)),
+                    streaming,
+                    observer: Arc::new(move |chunk| {
+                        if !chunk.text.is_empty() {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }),
+                };
+                let result = llm::run_chat_completion(&provider, &storage, &http, &llm::ChatCompletionRequest {
+                    system: "Respond briefly, without reasoning.".into(),
+                    messages: vec![llm::ChatCompletionMessage { role: "user".into(), content: "Synthetic NoteFlow QA. Confirm that the connection works in one short sentence.".into() }],
+                    max_output_tokens: 1024, operation_label: "RC4 synthetic live QA",
+                });
+                eprintln!(
+                    "RC4 chat model={} streaming={} success={} content_chunks={}",
+                    model,
+                    streaming,
+                    result.is_ok(),
+                    chunks.load(Ordering::SeqCst)
+                );
+                if let Ok(response) = result {
+                    assert!(!response.content.trim().is_empty());
+                    successes += 1;
+                }
+            }
+        }
+        if successes == 0 {
+            eprintln!("RC4 Bridge generation unavailable; continuing embedding diagnostics without a fabricated answer");
+        }
+        let mut store = DataStore::open(temp_store_dir()).expect("synthetic QA profile");
+        let a = create_note_with_content(
+            &mut store,
+            "QA Falcon",
+            "Проект Сокол: сервер расположен в Казани. Запуск 12 октября.",
+        );
+        let b = create_note_with_content(
+            &mut store,
+            "QA Cedar",
+            "Проект Кедр: сервер расположен в Томске. Запуск 14 ноября.",
+        );
+        let standalone = create_note_with_content(
+            &mut store,
+            "QA Standalone",
+            "Личная заметка: резервный сервер расположен в Самаре.",
+        );
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "QA Project".into(),
+                description: "".into(),
+            })
+            .expect("QA project");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: a.id.clone(),
+                project_title: project.title.clone(),
+            })
+            .expect("scope");
+        store
+            .create_project(CreateProjectRequest {
+                title: "QA Other".into(),
+                description: "".into(),
+            })
+            .expect("second project");
+        store
+            .move_note_to_project(MoveNoteRequest {
+                note_id: b.id.clone(),
+                project_title: "QA Other".into(),
+            })
+            .expect("other scope");
+        let backups = if local_model.is_some() {
+            let model =
+                std::env::var("NOTEFLOW_RC4_LOCAL_EMBED").expect("discovered embedding model");
+            assert!(
+                models.models.contains(&model),
+                "Local embedding model must be discovered"
+            );
+            embedding::save_profile(
+                &mut store.conn,
+                &storage,
+                embedding::SaveEmbeddingProfileRequest {
+                    id: None,
+                    name: "RC4 local embedding QA".into(),
+                    provider_type: "ollama".into(),
+                    base_url: "http://127.0.0.1:11434".into(),
+                    embeddings_endpoint: "/api/embed".into(),
+                    model,
+                    batch_size: 8,
+                    timeout_seconds: 120,
+                    locality: "local".into(),
+                    api_key: None,
+                    delete_api_key: false,
+                    enabled: true,
+                },
+            )
+            .expect("synthetic local embedding profile");
+            embedding::collect_profile_backups(&store.conn).expect("local metadata")
+        } else {
+            embedding::collect_profile_backups(source.as_ref().expect("Bridge metadata"))
+                .expect("embedding metadata")
+        };
+        if local_model.is_none() {
+            embedding::import_profile_backups(&store.conn, &backups)
+                .expect("temporary profile metadata");
+        }
+        let mut retrieval_profile = None;
+        for backup in backups.iter().filter(|profile| profile.enabled) {
+            let mut profile =
+                embedding::get_profile(source.as_ref().unwrap_or(&store.conn), &backup.id)
+                    .expect("embedding metadata");
+            profile.cloud_consent_at = Some(now_iso());
+            store
+                .conn
+                .execute(
+                    "UPDATE embedding_profiles SET api_key_ref=?1, cloud_consent_at=?2 WHERE id=?3",
+                    params![profile.api_key_ref, profile.cloud_consent_at, profile.id],
+                )
+                .expect("QA consent only");
+            let test = embedding::test_profile(&profile, &storage, &llm::CurlHttpClient);
+            eprintln!(
+                "RC4 embedding model={} endpoint={} status={} dimensions={:?} error={:?}",
+                profile.model,
+                profile.embeddings_endpoint,
+                test.status,
+                test.dimensions,
+                test.error_code
+            );
+            if test.status != "success" {
+                continue;
+            }
+            let indexed = embedding::update_index(
+                &mut store.conn,
+                &profile,
+                &storage,
+                &llm::CurlHttpClient,
+                Arc::new(AtomicBool::new(false)),
+                false,
+            )
+            .expect("synthetic index");
+            eprintln!(
+                "RC4 index model={} indexed={} failed={}",
+                profile.model, indexed.indexed_chunks, indexed.failed_chunks
+            );
+            if indexed.indexed_chunks > 0 && retrieval_profile.is_none() {
+                retrieval_profile = Some(profile);
+            }
+        }
+        let retrieval_ready = retrieval_profile.is_some();
+        if let Some(profile) = retrieval_profile.filter(|_| successes > 0) {
+            for (scope, ids, include_standalone) in [
+                ("all", None, false),
+                ("project", Some(vec![project.id.clone()]), false),
+                ("standalone", Some(vec![]), true),
+            ] {
+                let results = embedding::hybrid_search(
+                    &store.conn,
+                    &profile,
+                    &storage,
+                    &llm::CurlHttpClient,
+                    &embedding::SemanticSearchRequest {
+                        query: "Где расположен сервер?".into(),
+                        profile_id: profile.id.clone(),
+                        project_id: None,
+                        project_ids: ids.clone(),
+                        include_standalone,
+                        tag_id: None,
+                        include_archived: false,
+                        favorites_only: false,
+                        limit: 10,
+                        candidate_limit: 40,
+                        per_note_limit: 3,
+                        include_neighbors: true,
+                    },
+                )
+                .expect("real scoped retrieval");
+                assert!(!results.is_empty(), "Synthetic retrieval empty");
+                if scope == "project" {
+                    assert!(results.iter().all(|source| source.note_id == a.id));
+                }
+                if scope == "standalone" {
+                    assert!(results.iter().all(|source| source.note_id == standalone.id));
+                }
+                let chat = store
+                    .create_rag_chat(CreateRagChatRequest {
+                        title: Some(format!("RC4 {scope} QA")),
+                    })
+                    .expect("temporary chat");
+                store
+                    .set_rag_chat_projects(&chat.id, ids, include_standalone)
+                    .expect("persisted scope");
+                let user = store
+                    .save_rag_chat_message(SaveRagChatMessageRequest {
+                        chat_id: chat.id.clone(),
+                        role: "user".into(),
+                        content: "Где расположен сервер?".into(),
+                        sources: json!([]),
+                    })
+                    .expect("synthetic question");
+                let http = crate::llm_transport::ControlledHttpClient {
+                    token: Arc::new(AtomicBool::new(false)),
+                    streaming: true,
+                    observer: Arc::new(|_| {}),
+                };
+                let answer = rag::generate_grounded_answer(
+                    &mut store.conn,
+                    &provider,
+                    &storage,
+                    &http,
+                    rag::RagGenerationRequest {
+                        chat_id: chat.id.clone(),
+                        user_message_id: user.id,
+                        retrieved_sources: results,
+                    },
+                )
+                .expect("live grounded generation");
+                eprintln!(
+                    "RC4 RAG scope={} sources={} status={} repaired={}",
+                    scope,
+                    answer.assistant_message.sources.len(),
+                    answer.answer_status,
+                    answer.repaired_citations
+                );
+                assert!(!answer.assistant_message.sources.is_empty());
+                assert!(
+                    store
+                        .list_rag_chat_messages(&chat.id)
+                        .expect("persisted history")
+                        .len()
+                        >= 2
+                );
+            }
+        } else {
+            eprintln!(
+                "RC4 retrieval live QA unavailable: no enabled embedding profile returned vectors"
+            );
+        }
+        {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let observed_cancel = Arc::clone(&cancel);
+            let http = crate::llm_transport::ControlledHttpClient {
+                token: Arc::clone(&cancel),
+                streaming: true,
+                observer: Arc::new(move |chunk| {
+                    if !chunk.text.is_empty() {
+                        observed_cancel.store(true, Ordering::SeqCst);
+                    }
+                }),
+            };
+            let started = std::time::Instant::now();
+            let stopped = llm::run_chat_completion(
+                &provider,
+                &storage,
+                &http,
+                &llm::ChatCompletionRequest {
+                    system: "Respond briefly, without reasoning.".into(),
+                    messages: vec![llm::ChatCompletionMessage {
+                        role: "user".into(),
+                        content: "Synthetic NoteFlow QA. Confirm that the connection works in one short sentence.".into(),
+                    }],
+                    max_output_tokens: 1024,
+                    operation_label: "RC4 real Stop QA",
+                },
+            );
+            assert!(
+                cancel.load(Ordering::SeqCst),
+                "At least one real chunk must arrive before Stop"
+            );
+            assert!(
+                stopped.is_err(),
+                "Stopped real transport must not return a final answer"
+            );
+            eprintln!(
+                "RC4 real Stop rejected final answer; elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
+        }
+
+        let question = "В каком городе расположен сервер проекта Сокол?";
+        store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: a.id.clone(),
+                role: "user".into(),
+                content: question.into(),
+            })
+            .expect("synthetic note question");
+        let note_answer = llm::run_note_ai_request(
+            &provider,
+            &storage,
+            &crate::llm_transport::ControlledHttpClient {
+                token: Arc::new(AtomicBool::new(false)),
+                streaming: true,
+                observer: Arc::new(|_| {}),
+            },
+            llm::NoteAiRequestDto {
+                kind: "chat".into(),
+                action_id: None,
+                scope: "note".into(),
+                question: Some(question.into()),
+                context: llm::NoteAiContextDto {
+                    note_id: a.id.clone(),
+                    title: a.title.clone(),
+                    note_date: a.created_at.clone(),
+                    project: project.title.clone(),
+                    tags: vec![],
+                    plain_text: a.plain_text.clone(),
+                    content_markdown: a.content_markdown.clone(),
+                    selected_text: None,
+                },
+            },
+        )
+        .expect("real note-scoped completion");
+        assert!(!note_answer.response.trim().is_empty());
+        store
+            .save_note_chat_message(SaveNoteChatMessageRequest {
+                note_id: a.id.clone(),
+                role: "assistant".into(),
+                content: note_answer.response,
+            })
+            .expect("synthetic note answer");
+        assert_eq!(
+            store
+                .list_note_chat_messages(&a.id)
+                .expect("note history")
+                .len(),
+            2
+        );
+        assert!(store
+            .list_note_chat_messages(&b.id)
+            .expect("other note history")
+            .is_empty());
+        eprintln!("RC4 real note chat persisted=true isolated=true");
+
+        let changed_markdown =
+            "Проект Сокол: сервер расположен в Казани. Запуск 12 октября. Добавлен резервный узел.";
+        store
+            .update_note_content(persistence_request(
+                &a.id,
+                a.content_version,
+                changed_markdown,
+                json!({"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": changed_markdown}]}]}),
+                vec![],
+            ))
+            .expect("synthetic autosave queues new index generation");
+        assert!(crate::auto_knowledge::queued_note_count(&store.conn).expect("queued changes") > 0);
+        assert!(crate::auto_knowledge::drain_local_queue(&mut store.conn)
+            .expect("real automatic worker local queue"));
+        assert!(crate::auto_knowledge::update_profiles(
+            &mut store.conn,
+            &Default::default(),
+            &storage,
+            &llm::CurlHttpClient,
+        )
+        .expect("real automatic worker embedding update"));
+        eprintln!("RC4 real automatic worker queue drained=true profiles_current=true");
+
+        if local_model.is_some() {
+            let chat = store
+                .create_rag_chat(CreateRagChatRequest {
+                    title: Some("RC4 Global Agent QA".into()),
+                })
+                .expect("QA global chat");
+            let user = store
+                .save_rag_chat_message(SaveRagChatMessageRequest {
+                    chat_id: chat.id.clone(),
+                    role: "user".into(),
+                    content: "Сколько заметок в базе?".into(),
+                    sources: json!([]),
+                })
+                .expect("QA global question");
+            let answer = rag::generate_grounded_answer(
+                &mut store.conn,
+                &provider,
+                &storage,
+                &llm::CurlHttpClient,
+                rag::RagGenerationRequest {
+                    chat_id: chat.id.clone(),
+                    user_message_id: user.id,
+                    retrieved_sources: vec![],
+                },
+            )
+            .expect("real SQLite Global Agent inventory");
+            assert!(answer.assistant_message.content.contains('3'));
+            eprintln!("RC4 Global Agent inventory count=3 persisted=true");
+        }
+        let dir = store.base_dir.clone();
+        drop(store);
+        let reopened = DataStore::open(dir.clone()).expect("QA restart persistence");
+        assert_eq!(reopened.list_notes(None, true).expect("QA notes").len(), 3);
+        assert_eq!(
+            reopened
+                .list_note_chat_messages(&a.id)
+                .expect("reopened note history")
+                .len(),
+            2
+        );
+        eprintln!("RC4 synthetic profile={}", dir.display());
+        assert!(
+            successes > 0,
+            "Live generation did not return a final answer; inspect HTTP/auth results above"
+        );
+        assert!(
+            retrieval_ready,
+            "No enabled embedding profile returned vectors; live retrieval was not validated"
+        );
+    }
+
+    #[test]
+    #[ignore = "explicit RC4 TypeScript serializer -> SQLite bridge; synthetic temp profile only"]
+    fn rc4_formatting_sqlite_bridge() {
+        let directory = PathBuf::from(
+            std::env::var_os("NOTEFLOW_RC4_FORMATTING_QA_DIR")
+                .expect("explicit synthetic directory"),
+        );
+        assert!(directory.starts_with(std::env::temp_dir()));
+        assert!(directory
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .starts_with("noteflow-rc4-formatting-"));
+        let inputs: Vec<UpdateNoteContentRequest> = serde_json::from_slice(
+            &fs::read(directory.join("serializer-inputs.json")).expect("synthetic input"),
+        )
+        .expect("typed serializer snapshots");
+        assert_eq!(inputs.len(), 10);
+        let mut store = DataStore::open(directory.clone()).expect("fresh temporary DB");
+        assert!(store.list_notes(None, true).expect("notes").is_empty());
+        store
+            .complete_first_run(CompleteFirstRunRequest {
+                profile_name: "RC4 Formatting QA".into(),
+            })
+            .expect("QA onboarding");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "RC4 Formatting Fixture".into(),
+                note_date: "2026-10-08".into(),
+            })
+            .expect("create");
+        store
+            .create_note(CreateNoteRequest {
+                title: "Navigation Fixture".into(),
+                note_date: "2026-10-08".into(),
+            })
+            .expect("second note");
+        let mut results = Vec::new();
+        for (cycle, mut request) in inputs.into_iter().enumerate() {
+            request.note_id = note.id.clone();
+            request.expected_content_version = cycle as i64;
+            let stale = UpdateNoteContentRequest {
+                note_id: request.note_id.clone(),
+                expected_content_version: request.expected_content_version,
+                content_json: request.content_json.clone(),
+                content_markdown: request.content_markdown.clone(),
+                content_html: request.content_html.clone(),
+                plain_text: request.plain_text.clone(),
+                content_sidecars: request.content_sidecars.clone(),
+            };
+            let saved = store.update_note_content(request).expect("atomic save");
+            assert_eq!(saved.content_version, cycle as i64 + 1);
+            drop(store);
+            store = DataStore::open(directory.clone()).expect("reopen SQLite");
+            let loaded = store.get_note(&note.id).expect("load authoritative note");
+            assert_eq!(loaded.content_json, stale.content_json);
+            assert_eq!(loaded.content_markdown, stale.content_markdown);
+            assert_eq!(loaded.plain_text, stale.plain_text);
+            assert_eq!(loaded.content_html, stale.content_html);
+            assert_eq!(
+                loaded.content_sidecars.len(),
+                stale.content_sidecars.len() + 1
+            );
+            assert_eq!(
+                loaded
+                    .content_sidecars
+                    .iter()
+                    .find(|item| item.kind == LEGACY_TIPTAP_SIDECAR_KIND)
+                    .expect("compatibility cache")
+                    .payload_json,
+                stale.content_json
+            );
+            for expected in &stale.content_sidecars {
+                let actual = loaded
+                    .content_sidecars
+                    .iter()
+                    .find(|item| item.kind == expected.kind)
+                    .expect("persisted appearance sidecar");
+                assert_eq!(actual.payload_json, expected.payload_json);
+                assert_eq!(actual.kind, expected.kind);
+                assert_eq!(actual.schema_version, expected.schema_version);
+            }
+            assert!(matches!(
+                store.update_note_content(stale),
+                Err(DataError::StaleWrite)
+            ));
+            assert_eq!(
+                store
+                    .get_note(&note.id)
+                    .expect("after stale write")
+                    .content_version,
+                loaded.content_version
+            );
+            results.push(loaded);
+        }
+        println!(
+            "RC4_SQLITE_RESULTS:{}",
+            serde_json::to_string(&results).expect("synthetic results")
+        );
     }
 
     fn note_revision_count(store: &DataStore, note_id: &str) -> i64 {

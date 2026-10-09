@@ -6,6 +6,7 @@ import { MenuPopover } from "../../shared/MenuPopover";
 import { ModalShell } from "../../shared/ModalShell";
 import { runtimeAssetUrl } from "../editor/assetUri";
 import type { ImageEditMode } from "./imageEditService";
+import { copyImage, saveImage } from "../../services/imageTransferService";
 import { getResizeCursor, resizeHandles, resizeImageBox, type ResizeHandle, type Size } from "./imageGeometry";
 
 export interface EditableImageAttributes {
@@ -108,6 +109,9 @@ function ImageNodeView(props: NodeViewProps) {
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
   const [isResetOpen, setIsResetOpen] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [transfer, setTransfer] = useState<"copy" | "save" | null>(null);
+  const transferBusy = useRef(false);
+  const mounted = useRef(true);
   const descriptionFormId = `image-description-${useId()}`;
   const attrs = readImageAttrs(props.node.attrs);
   const options = props.extension.options as EditableImageOptions;
@@ -115,7 +119,9 @@ function ImageNodeView(props: NodeViewProps) {
   const renderedHeight = draftSize?.height ?? attrs.height ?? null;
 
   useEffect(() => {
+    mounted.current = true;
     return () => {
+      mounted.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
@@ -231,6 +237,21 @@ function ImageNodeView(props: NodeViewProps) {
     updateImageAttrs({ alignment });
   }
 
+  async function transferImage(action: "copy" | "save") {
+    if (transferBusy.current) return;
+    transferBusy.current = true; setTransfer(action);
+    try {
+      const completed = action === "copy" ? (await copyImage(attrs.src), true) : await saveImage(attrs.src, attrs.title || attrs.alt || "Изображение");
+      if (completed) options.onToast?.(action === "copy" ? "Изображение скопировано" : "Изображение сохранено");
+      if (mounted.current) setIsMoreActionsOpen(false);
+    } catch {
+      options.onToast?.(action === "copy" ? "Не удалось скопировать изображение" : "Не удалось сохранить изображение");
+    } finally {
+      transferBusy.current = false;
+      if (mounted.current) setTransfer(null);
+    }
+  }
+
   const alignment = attrs.alignment ?? "left";
 
   return (
@@ -280,6 +301,8 @@ function ImageNodeView(props: NodeViewProps) {
             <button onClick={() => { setIsMoreActionsOpen(false); openEditor("draw"); }} role="menuitem" type="button">Рисовать</button>
             <button onClick={openDescription} role="menuitem" type="button">Описание изображения</button>
             <button disabled={!attrs.width && !attrs.height && (!attrs.originalSrc || attrs.originalSrc === attrs.src)} onClick={() => { setIsMoreActionsOpen(false); setIsResetOpen(true); }} role="menuitem" type="button">Сбросить изменения</button>
+            <button disabled={transfer !== null} onClick={() => void transferImage("copy")} role="menuitem" type="button">{transfer === "copy" ? "Копируем…" : "Копировать"}</button>
+            <button disabled={transfer !== null} onClick={() => void transferImage("save")} role="menuitem" type="button">{transfer === "save" ? "Сохраняем…" : "Сохранить…"}</button>
             <div className="nf-menu-separator" />
             <button className="danger" onClick={() => { setIsMoreActionsOpen(false); props.deleteNode(); }} role="menuitem" type="button">Удалить изображение</button>
           </MenuPopover>

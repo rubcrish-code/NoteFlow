@@ -110,16 +110,17 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
 
   it("restores messages and source state when a chat is selected or reloaded", () => {
     assert.match(workspaceSource, /ragChatService\.listRagChatMessages\(activeChatId\)/);
-    assert.match(workspaceSource, /setMessages\(history\)/);
-    assert.match(workspaceSource, /setActiveSources\(latestSources\(history\)\)/);
+    assert.match(workspaceSource, /setMessages\(currentHistory\)/);
+    assert.match(workspaceSource, /setActiveSources\(latestSources\(currentHistory\)\)/);
     assert.match(workspaceSource, /useEffect\(\(\) => \{[\s\S]*activeChatId/);
   });
 
   it("performs real hybrid retrieval and persists user, assistant and sources", () => {
-    assert.match(workspaceSource, /embeddingService\.hybridSearch/);
-    assert.match(workspaceSource, /includeNeighbors: true/);
-    assert.match(workspaceSource, /saveRagChatMessage\(chatId, "user", question\)/);
-    assert.match(workspaceSource, /runRagGeneration\(chatId, userMessage\.id, results\)/);
+    const background = readFileSync("src/services/ragBackground.ts", "utf8");
+    assert.match(background, /embedding\.hybridSearch/);
+    assert.match(background, /includeNeighbors: true/);
+    assert.match(background, /saveRagChatMessage\(chat\.id, "user", question\)/);
+    assert.match(background, /runRagGeneration\(chat\.id, userId, sources, job\.control\)/);
     assert.match(ragChatServiceSource, /sources: RagMessageSource\[\]/);
     assert.match(rustRagSource, /persist_assistant_message/);
     assert.match(rustRagSource, /sources_json/);
@@ -128,7 +129,7 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   it("generates grounded answers without the former 06C placeholder", () => {
     assert.match(workspaceSource, /Ищу по базе…/);
     assert.match(workspaceSource, /Формирую ответ…/);
-    assert.match(workspaceSource, /runRagGeneration/);
+    assert.match(workspaceSource, /sendRagInBackground/);
     assert.match(rustRagSource, /GROUNDED_SYSTEM_PROMPT/);
     assert.match(rustRagSource, /\[\[NO_EVIDENCE\]\]/);
     assert.doesNotMatch(workspaceSource, /Генерация ответа на основе найденных фрагментов будет подключена на следующем этапе/);

@@ -57,6 +57,42 @@ function editorFor() {
 }
 
 describe("Phase D intrinsic image document", () => {
+  it("RC4 transfers the current processed bitmap to native clipboard and native Save As", async () => {
+    const { mockIPC, clearMocks } = await import("@tauri-apps/api/mocks");
+    const { copyImage, saveImage } = await import("../src/services/imageTransferService");
+    const descriptors = new Map(["Image", "isTauri"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+    const originalToBlob = dom.window.HTMLCanvasElement.prototype.toBlob;
+    const sources: string[] = []; const requests: Array<{ command: string; args: Record<string, unknown> }> = [];
+    Object.defineProperty(globalThis, "isTauri", { configurable: true, value: true });
+    Object.defineProperty(globalThis, "Image", { configurable: true, value: class {
+      naturalWidth = 120; naturalHeight = 80; listeners = new Map<string, () => void>();
+      addEventListener(name: string, callback: () => void) { this.listeners.set(name, callback); }
+      set src(value: string) { sources.push(value); queueMicrotask(() => this.listeners.get("load")?.()); }
+    } });
+    dom.window.HTMLCanvasElement.prototype.toBlob = (callback) => callback(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
+    let cancel = false;
+    mockIPC((command, args) => {
+      requests.push({ command, args: args as Record<string, unknown> });
+      return command === "plugin:dialog|save" ? cancel ? null : "C:\\QA\\image.png" : undefined;
+    });
+    try {
+      await copyImage("data:image/png;base64,processed");
+      assert.equal(requests[0].command, "copy_image_clipboard");
+      assert.deepEqual(requests[0].args.bytes, [137, 80, 78, 71]);
+      assert.equal(await saveImage("data:image/png;base64,processed", "Фото.webp"), true);
+      assert.equal(requests[1].command, "plugin:dialog|save");
+      assert.equal((requests[1].args.options as { defaultPath: string }).defaultPath, "Фото.png");
+      assert.equal(requests[2].command, "write_image_file");
+      assert.deepEqual(sources, ["data:image/png;base64,processed", "data:image/png;base64,processed"]);
+      cancel = true; assert.equal(await saveImage("unused-original", "Фото"), false);
+      assert.equal(requests.length, 4); assert.equal(sources.length, 2);
+      mockIPC(() => { throw new Error("Clipboard busy"); });
+      await assert.rejects(copyImage("data:image/png;base64,processed"));
+    } finally {
+      clearMocks(); dom.window.HTMLCanvasElement.prototype.toBlob = originalToBlob;
+      for (const [key, descriptor] of descriptors) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }
+    }
+  });
   for (const scale of [0.5, 1, 1.6, 2]) it(`maps the pointer independently of display zoom ${scale}`, () => {
     assert.deepEqual(intrinsicPoint({ x: 10 + 600 * scale, y: 20 + 400 * scale }, { x: 10, y: 20, width: 1200 * scale, height: 800 * scale }, blankDrawingSize, fullImageCrop), { x: 600, y: 400 });
   });
@@ -372,7 +408,7 @@ describe("Phase D real TipTap insertion and sidecar roundtrip", () => {
     const loaded = buildEditorDocumentFromStoredNoteContent({ contentMarkdown: stored.contentMarkdown, plainText: stored.plainText, contentJson: { type: "doc", content: [] }, contentSidecars: stored.contentSidecars.map((sidecar) => ({ ...sidecar, createdAt: "", updatedAt: "" })) }, { warn: () => assert.fail("must load canonical content") });
     editor.commands.setContent(loaded.editorDocument); editor.commands.setTextSelection(2);
     assert.equal(editor.view.dom.querySelector('.callout-important') !== null, true);
-    assert.equal(editor.getText(), text.replace(/[ \t]+\n/g, "\n"));
+    assert.equal(editor.getText(), text);
   });
   it("inserts the selected calendar date at the captured cursor, not at the document end", async () => {
     const editor = editorFor();

@@ -395,6 +395,7 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
     if let Some(prepared) = &structured {
         if let Some(answer) = &prepared.direct_answer {
             let persistence_started = Instant::now();
+            http.check_cancelled()?;
             let snapshots = prepared
                 .sources
                 .iter()
@@ -432,6 +433,7 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
     }
 
     if context.sources.is_empty() {
+        http.check_cancelled()?;
         let persistence_started = Instant::now();
         let assistant_message = persist_assistant_message(
             conn,
@@ -540,6 +542,7 @@ pub fn generate_grounded_answer<S: SecretStorage, H: HttpClient>(
         "grounded"
     };
     let cleaned_content = strip_no_evidence_marker(&final_content);
+    http.check_cancelled()?;
     let cited_sources = cited_source_snapshots(&context.sources, &validation.valid_source_ids);
     let persistence_started = Instant::now();
     let assistant_message = persist_assistant_message(

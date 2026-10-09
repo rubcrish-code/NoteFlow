@@ -9,6 +9,7 @@ interface ChatComposerProps {
   isSubmitting?: boolean;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onStop?: () => void;
   placeholder: string;
   value: string;
 }
@@ -20,6 +21,7 @@ export function ChatComposer({
   isSubmitting = false,
   onChange,
   onSubmit,
+  onStop,
   placeholder,
   value,
 }: ChatComposerProps) {
@@ -69,14 +71,14 @@ export function ChatComposer({
         value={value}
       />
       <button
-        aria-label={state.submitLabel}
+        aria-label={isSubmitting && onStop ? "Остановить" : state.submitLabel}
         className="chat-composer-send"
-        disabled={!state.canSubmit}
-        onClick={onSubmit}
-        data-tooltip={disabled ? "Сначала подключите модель" : state.submitLabel}
+        disabled={isSubmitting && onStop ? false : !state.canSubmit}
+        onClick={isSubmitting && onStop ? onStop : onSubmit}
+        data-tooltip={isSubmitting && onStop ? "Остановить" : disabled ? "Сначала подключите модель" : state.submitLabel}
         type="button"
       >
-        {isSubmitting ? <span className="button-spinner" /> : <Icon name="send" />}
+        {isSubmitting && onStop ? <Icon name="x" /> : isSubmitting ? <span className="button-spinner" /> : <Icon name="send" />}
       </button>
     </div>
   );

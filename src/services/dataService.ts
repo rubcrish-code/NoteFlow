@@ -393,7 +393,7 @@ function mapExportResult(result: ExportResultDto): ExportResult {
   };
 }
 
-function mapAttachmentStoreResult(result: AttachmentStoreResultDto): AttachmentStoreResult {
+export function mapAttachmentStoreResult(result: AttachmentStoreResultDto): AttachmentStoreResult {
   return {
     attachment: mapAttachment(result.attachment),
     sizeLabel: result.sizeLabel,
@@ -670,6 +670,10 @@ export async function pickAndStoreAttachment(noteId: string, kind: "file" | "ima
   if (!sourcePath) {
     return null;
   }
+  return storeAttachmentFromPath(noteId, sourcePath, kind);
+}
+
+export async function storeAttachmentFromPath(noteId: string, sourcePath: string, kind: "file" | "image") {
   return mapAttachmentStoreResult(
     await invoke<AttachmentStoreResultDto>("store_attachment_from_path", {
       request: {

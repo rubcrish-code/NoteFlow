@@ -422,6 +422,9 @@ pub struct HttpResponse {
 
 pub trait HttpClient {
     fn send(&self, request: HttpRequest) -> DataResult<HttpResponse>;
+    fn check_cancelled(&self) -> DataResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2384,11 +2387,11 @@ fn privacy_notice(is_local: bool) -> String {
     }
 }
 
-fn escape_curl_config_value(value: &str) -> String {
+pub(crate) fn escape_curl_config_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn validate_request_header(name: &str, value: &str) -> DataResult<()> {
+pub(crate) fn validate_request_header(name: &str, value: &str) -> DataResult<()> {
     if name.is_empty()
         || !name
             .bytes()
@@ -2402,7 +2405,7 @@ fn validate_request_header(name: &str, value: &str) -> DataResult<()> {
     Ok(())
 }
 
-fn map_curl_error(stderr: &str) -> String {
+pub(crate) fn map_curl_error(stderr: &str) -> String {
     let lower = stderr.to_ascii_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
         "Timeout: провайдер не ответил вовремя".to_string()
@@ -2426,7 +2429,11 @@ fn curl_binary_name() -> &'static str {
     }
 }
 
-fn curl_command(url: &str, timeout_seconds: i64, connect_timeout_seconds: i64) -> Command {
+pub(crate) fn curl_command(
+    url: &str,
+    timeout_seconds: i64,
+    connect_timeout_seconds: i64,
+) -> Command {
     let mut command = Command::new(curl_binary_name());
     #[cfg(windows)]
     {
@@ -3101,6 +3108,201 @@ mod tests {
         );
         assert_eq!(result.status, STATUS_SUCCESS);
         assert!(!result.models.is_empty());
+    }
+
+    #[test]
+    #[ignore = "explicit Bridge authorization investigation; read-only metadata, synthetic inputs, no secret output"]
+    fn rc4_bridge_authorization_investigation() {
+        use base64::Engine;
+        struct AuditedHttp<'a, H> {
+            key: Option<&'a str>,
+            client: H,
+        }
+        impl<H: HttpClient> HttpClient for AuditedHttp<'_, H> {
+            fn send(&self, request: HttpRequest) -> DataResult<HttpResponse> {
+                let url = url::Url::parse(&request.url).expect("validated request URL");
+                assert_eq!(url.host_str(), Some("bridge-back.admlr.lipetsk.ru"));
+                assert!(matches!(
+                    url.path(),
+                    "/api/v1/models" | "/api/v1/chat/completions" | "/api/v1/embeddings"
+                ));
+                let authorization = request
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("Authorization"))
+                    .collect::<Vec<_>>();
+                let expected = self.key.map(|key| format!("Bearer {}", key.trim()));
+                let exact = authorization.len() == 1
+                    && expected
+                        .as_ref()
+                        .is_some_and(|value| authorization[0].1 == *value);
+                assert!(
+                    exact,
+                    "Request Authorization must equal the saved credential without revealing it"
+                );
+                let ua = request
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("User-Agent"));
+                assert!(ua.is_some_and(|(_, value)| value == OPENAI_COMPATIBLE_USER_AGENT));
+                if request.method == "POST" {
+                    assert!(request.body.as_ref().is_some_and(Value::is_object));
+                }
+                eprintln!("BRIDGE_AUTH method={} endpoint={} authorization_present=true bearer_matches_saved=true user_agent_compatible=true json_body={} input_stream_flag={}",
+                    request.method, url.path(), request.body.is_some(), request.body.as_ref().and_then(|body| body.get("stream")).and_then(Value::as_bool).unwrap_or(false));
+                let response = self.client.send(request)?;
+                let lower = response.body.to_ascii_lowercase();
+                let category = if lower.contains("expired") || lower.contains("expiration") {
+                    "expired_credential"
+                } else if lower.contains("insufficient")
+                    || lower.contains("permission")
+                    || lower.contains("scope")
+                {
+                    "permission_or_scope"
+                } else if lower.contains("invalid token")
+                    || lower.contains("invalid api key")
+                    || lower.contains("invalid_api_key")
+                {
+                    "invalid_credential"
+                } else if lower.contains("missing")
+                    && (lower.contains("token") || lower.contains("authorization"))
+                {
+                    "missing_authorization"
+                } else if lower.contains("unauthorized") || response.status == 401 {
+                    "unauthorized_unspecified"
+                } else {
+                    "no_specific_auth_reason"
+                };
+                eprintln!(
+                    "BRIDGE_AUTH endpoint={} status={} error_category={}",
+                    url.path(),
+                    response.status,
+                    category
+                );
+                Ok(response)
+            }
+        }
+        fn key_flags(key: Option<&str>) {
+            let trimmed = key.map(str::trim).unwrap_or_default();
+            let jwt_expired = trimmed
+                .split('.')
+                .nth(1)
+                .and_then(|part| {
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(part)
+                        .ok()
+                })
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .and_then(|claims| claims.get("exp").and_then(Value::as_i64))
+                .map(|exp| exp <= Utc::now().timestamp());
+            eprintln!("BRIDGE_AUTH credential_present={} outer_whitespace={} embedded_bearer_prefix={} internal_whitespace={} jwt_expired_hint={:?}",
+                !trimmed.is_empty(), key.is_some_and(|key| key != trimmed), trimmed.to_ascii_lowercase().starts_with("bearer "), trimmed.chars().any(char::is_whitespace), jwt_expired);
+        }
+        let path = std::env::var("NOTEFLOW_BRIDGE_SMOKE_DB")
+            .expect("explicit read-only provider database");
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("metadata read-only");
+        let id: String = conn.query_row("SELECT id FROM llm_providers WHERE base_url LIKE '%bridge-back.admlr.lipetsk.ru%' ORDER BY is_default DESC, updated_at DESC LIMIT 1", [], |row| row.get(0)).expect("Bridge profile metadata");
+        let provider = get_provider_record(&conn, &id).expect("Bridge provider");
+        let storage = SystemSecretStorage;
+        let key = provider
+            .api_key_ref
+            .as_deref()
+            .and_then(|reference| storage.get_secret(reference).expect("OS credential read"));
+        eprintln!(
+            "BRIDGE_AUTH build_debug_assertions={}",
+            cfg!(debug_assertions)
+        );
+        key_flags(key.as_deref());
+        let audit = AuditedHttp {
+            key: key.as_deref(),
+            client: CurlHttpClient,
+        };
+        let models =
+            list_models_for_provider(&provider, &storage, &audit).expect("discovery operation");
+        assert_eq!(models.status, STATUS_SUCCESS);
+        for model in &models.models {
+            if models
+                .options
+                .iter()
+                .find(|option| &option.id == model)
+                .is_some_and(|option| option.supports_chat == Some(false))
+            {
+                continue;
+            }
+            let mut selected = provider.clone();
+            selected.chat_model = model.clone();
+            for streaming in [false, true] {
+                let audit = AuditedHttp {
+                    key: key.as_deref(),
+                    client: crate::llm_transport::ControlledHttpClient {
+                        token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                        streaming,
+                        observer: std::sync::Arc::new(|_| {}),
+                    },
+                };
+                let result = run_chat_completion(
+                    &selected,
+                    &storage,
+                    &audit,
+                    &ChatCompletionRequest {
+                        system: "Synthetic NoteFlow QA. Respond briefly without reasoning.".into(),
+                        messages: vec![ChatCompletionMessage {
+                            role: "user".into(),
+                            content: "Confirm the connection in one sentence.".into(),
+                        }],
+                        max_output_tokens: 1024,
+                        operation_label: "RC4 authorization QA",
+                    },
+                );
+                eprintln!(
+                    "BRIDGE_AUTH model={} streaming={} generation_success={}",
+                    model,
+                    streaming,
+                    result.is_ok()
+                );
+            }
+        }
+        for backup in crate::embedding::collect_profile_backups(&conn)
+            .expect("embedding metadata")
+            .into_iter()
+            .filter(|profile| profile.base_url.contains("bridge-back.admlr.lipetsk.ru"))
+        {
+            let profile =
+                crate::embedding::get_profile(&conn, &backup.id).expect("embedding profile");
+            let embed_key = profile.api_key_ref.as_deref().and_then(|reference| {
+                storage
+                    .get_secret(reference)
+                    .expect("OS embedding credential read")
+            });
+            eprintln!(
+                "BRIDGE_AUTH embedding_credential_same_as_chat={}",
+                embed_key.as_deref() == key.as_deref()
+            );
+            key_flags(embed_key.as_deref());
+            let audit = AuditedHttp {
+                key: embed_key.as_deref(),
+                client: CurlHttpClient,
+            };
+            let result = crate::embedding::test_profile(&profile, &storage, &audit);
+            eprintln!(
+                "BRIDGE_AUTH embedding_model={} success={} error={:?}",
+                profile.model,
+                result.status == "success",
+                result.error_code
+            );
+        }
+        let anonymous = CurlHttpClient
+            .send(HttpRequest {
+                method: "GET".into(),
+                url: join_url(&provider.base_url, &provider.models_endpoint).expect("catalog URL"),
+                headers: vec![("User-Agent".into(), OPENAI_COMPATIBLE_USER_AGENT.into())],
+                body: None,
+                timeout_ms: 10000,
+            })
+            .expect("anonymous catalog probe");
+        eprintln!("BRIDGE_AUTH anonymous_models_status={}", anonymous.status);
+        eprintln!("BRIDGE_AUTH investigation_complete=true; diagnostic PASS is not generation acceptance PASS");
     }
 
     #[test]

@@ -1,11 +1,14 @@
+mod ai_operations;
 mod assets;
 mod auto_knowledge;
+mod clipboard;
 mod data;
 mod document_export;
 mod embedding;
 mod knowledge;
 mod knowledge_agent;
 mod llm;
+mod llm_transport;
 mod project_scope;
 mod provider_url;
 mod rag;
@@ -99,9 +102,17 @@ pub fn run() {
         .setup(|app| {
             let state = data::init_state(app)?;
             app.manage(state);
+            app.manage(ai_operations::AiOperations::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            data::read_editor_clipboard,
+            ai_operations::cancel_ai_operation,
+            data::run_note_ai_stream,
+            data::run_rag_generation_stream,
+            clipboard::write_editor_clipboard,
+            clipboard::copy_image_clipboard,
+            data::write_image_file,
             assets::get_attachment_policy,
             data::archive_note,
             data::archive_project,

@@ -3,6 +3,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, ProjectCard, SaveStatus, TagRow } from "./types";
 import * as dataService from "../services/dataService";
 import * as noteExportService from "../services/noteExportService";
+import { noteChatJobs, noteChatDrafts, forgetNoteChat } from "../services/noteChatBackground";
+import { ragJobs } from "../services/ragBackground";
 import type { NoteExportFormat } from "../features/export/exportDocument";
 import { exportAfterFlush } from "../features/export/savedExportFlow";
 import * as searchService from "../services/searchService";
@@ -851,6 +853,7 @@ export function AppShell() {
     void flushPendingSave()
       .then(() => (mode === "archive" ? dataService.archiveNote(noteId) : dataService.deleteNote(noteId)))
       .then(async () => {
+        if (mode === "delete") forgetNoteChat(noteId);
         const loadedNotes = await dataService.listNotes("");
         if (generation !== notesGenerationRef.current) return;
         setNotes(loadedNotes);
@@ -1058,7 +1061,10 @@ export function AppShell() {
   }
 
   async function deleteArchiveItem(item: ArchiveItem) {
+    const deletedNoteIds = item.kind === "Проект"
+      ? (await dataService.listArchivedProjectNotes(item.id)).map((note) => note.id) : [item.id];
     await dataService.deleteArchiveItem(item);
+    deletedNoteIds.forEach(forgetNoteChat);
     const loadedNotes = await dataService.listNotes("");
     setNotes(loadedNotes);
     setActiveNoteId((currentId) => loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? "");
@@ -1077,19 +1083,25 @@ export function AppShell() {
   }
 
   async function importBackup(file: File) {
-    const result = await restoreWorkspaceBackup<dataService.WorkspaceSnapshot, dataService.ImportBackupResult>({
-      applyWorkspace: (workspace) => applyWorkspaceSnapshot(workspace, true),
-      file,
-      flushPendingSave,
-      importBackup: dataService.importBackup,
-      invalidatePendingSaves: () => {
-        pendingSavesRef.current.clear();
-        saveSequenceRef.current += 1;
-      },
-      refreshExternalViews: () => setWorkspaceReloadGeneration((generation) => generation + 1),
-    });
-    showToast("Резервная копия восстановлена");
-    return result;
+    await Promise.all([noteChatJobs.stopAllAndWait(), ragJobs.stopAllAndWait()]);
+    try {
+      const result = await restoreWorkspaceBackup<dataService.WorkspaceSnapshot, dataService.ImportBackupResult>({
+        applyWorkspace: (workspace) => { noteChatDrafts.reset(); applyWorkspaceSnapshot(workspace, true); },
+        file,
+        flushPendingSave,
+        importBackup: dataService.importBackup,
+        invalidatePendingSaves: () => {
+          pendingSavesRef.current.clear();
+          saveSequenceRef.current += 1;
+        },
+        refreshExternalViews: () => setWorkspaceReloadGeneration((generation) => generation + 1),
+      });
+      showToast("Резервная копия восстановлена");
+      return result;
+    } finally {
+      noteChatJobs.resume();
+      ragJobs.resume();
+    }
   }
 
   async function deleteAllNotes() {
@@ -1101,6 +1113,8 @@ export function AppShell() {
     }
     try {
       const result = await pendingSavesRef.current.deleteAfterInFlight(dataService.deleteAllNotes);
+      noteChatJobs.reset();
+      noteChatDrafts.reset();
       notesGenerationRef.current += 1;
       searchRequestIdRef.current += 1;
       saveSequenceRef.current += 1;

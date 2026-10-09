@@ -1,5 +1,7 @@
 import { invoke } from "./safeInvoke";
 import type { SemanticSearchResult } from "./embeddingService";
+import { streamArguments, type AiRequestControl } from "./aiBackground";
+import { isTauri } from "@tauri-apps/api/core";
 
 export type RagChatRole = "assistant" | "user";
 
@@ -183,10 +185,12 @@ export async function runRagGeneration(
   chatId: string,
   userMessageId: string,
   retrievedSources: SemanticSearchResult[],
+  control?: AiRequestControl,
 ): Promise<RagGenerationResult> {
   try {
-    const dto = await invoke<RagGenerationResultDto>("run_rag_generation", {
+    const dto = await invoke<RagGenerationResultDto>(control && isTauri() ? "run_rag_generation_stream" : "run_rag_generation", {
       request: { chatId, userMessageId, retrievedSources },
+      ...streamArguments(control),
     });
     return {
       assistantMessage: mapRagChatMessage(dto.assistantMessage),

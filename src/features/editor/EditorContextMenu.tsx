@@ -8,11 +8,12 @@ import { Icon } from "../../shared/Icon";
 import { EDITOR_TOOLBAR_ACTIONS, type EditorToolbarActionId } from "./editorToolbarLayout";
 import { applyEditorFormattingValue, runEditorFormattingCommand } from "./editorFormattingCommands";
 import { EditorCommandPopover, type EditorCommandPopoverMode } from "./EditorCommandPopover";
-import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
+import { canReadEditorClipboard, canWriteEditorClipboard, readEditorClipboard, writeEditorClipboard } from "../../services/clipboardService";
+import { pasteEditorContent } from "./editorPaste";
 
 interface ContextTarget { x: number; y: number; bookmark: SelectionBookmark; document: DocumentNode }
 
-export function EditorContextMenu({ editor, onToast }: { editor: Editor | null; onToast: (text: string) => void }) {
+export function EditorContextMenu({ editor, onToast, onPaste }: { editor: Editor | null; onToast: (text: string) => void; onPaste?: () => Promise<boolean> }) {
   const [target, setTarget] = useState<ContextTarget | null>(null);
   const [mode, setMode] = useState<EditorCommandPopoverMode | null>(null);
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -65,12 +66,16 @@ export function EditorContextMenu({ editor, onToast }: { editor: Editor | null; 
     const { from, to } = editor.state.selection;
     try {
       if (action === "paste") {
-        const text = await navigator.clipboard.readText();
+        if (onPaste) {
+          const inserted = await onPaste();
+          if (inserted && !editor.isDestroyed) { close(); editor.view.focus(); }
+          return;
+        }
+        const content = await readEditorClipboard();
         if (token !== operationRef.current || !document.eq(editor.state.doc) || editor.isDestroyed) return;
-        if (isMarkdownLike(text)) editor.commands.insertContentAt({ from, to }, markdownToTiptapDoc(text).content ?? []);
-        else editor.commands.insertContentAt({ from, to }, { type: "text", text });
+        pasteEditorContent(editor, content);
       } else {
-        await navigator.clipboard.writeText(document.textBetween(from, to, "\n"));
+        await writeEditorClipboard(document.textBetween(from, to, "\n"));
         if (token !== operationRef.current || !document.eq(editor.state.doc) || editor.isDestroyed) return;
         if (action === "cut") editor.commands.deleteRange({ from, to });
       }
@@ -88,7 +93,7 @@ export function EditorContextMenu({ editor, onToast }: { editor: Editor | null; 
         currentColor={editor.getAttributes(mode === "color" ? "textStyle" : "highlight").color as string | undefined}
         onClose={() => setMode(null)} onSubmit={(value) => { if (restoreSelection()) applyEditorFormattingValue(editor, value); close(); }} /> : <>
         {(["cut", "copy", "paste"] as const).map((action) => <button role="menuitem" type="button" key={action}
-          disabled={action === "paste" ? !navigator.clipboard?.readText : !navigator.clipboard?.writeText || editor.state.selection.empty}
+          disabled={action === "paste" ? !canReadEditorClipboard() : !canWriteEditorClipboard() || editor.state.selection.empty}
           onClick={() => void clipboard(action)}>{action === "copy" ? "Копировать" : action === "cut" ? "Вырезать" : "Вставить"}</button>)}
         <span className="toolbar-overflow-separator" role="separator" />
         {actions.map((action, index) => <div key={action.id}>

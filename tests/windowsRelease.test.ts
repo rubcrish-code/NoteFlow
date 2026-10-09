@@ -27,8 +27,9 @@ describe("Windows release configuration", () => {
     assert.equal(config.identifier, "com.noteflow.desktop");
     assert.deepEqual(config.bundle.windows.wix.language, ["en-US", "ru-RU"]);
     assert.deepEqual(config.bundle.windows.nsis.languages, ["English", "Russian"]);
-    if (packageJson.version === "1.0.0-rc.1") {
-      assert.equal(config.bundle.windows.wix.version, "0.99.1");
+    const releaseCandidate = /^1\.0\.0-rc\.(\d+)$/.exec(packageJson.version);
+    if (releaseCandidate) {
+      assert.equal(config.bundle.windows.wix.version, `0.99.${releaseCandidate[1]}`);
     }
   });
 

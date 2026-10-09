@@ -13,6 +13,7 @@ import { markdownToTiptapDoc } from "../src/features/editor/markdownService";
 import { applyEditorFormattingValue, runEditorFormattingCommand } from "../src/features/editor/editorFormattingCommands";
 import type { EditorToolbarActionId } from "../src/features/editor/editorToolbarLayout";
 import { scrollToNoteHeading } from "../src/features/editor/headingAnchors";
+import { PendingNoteSaves } from "../src/app/noteAutosaveCoordinator";
 
 // Only synthetic fixtures run here; an executable sentinel avoids a false XSS pass from disabled scripts.
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost", pretendToBeVisual: true, runScripts: "dangerously" });
@@ -21,6 +22,7 @@ for (const [key, value] of Object.entries({
   window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
   HTMLElement: dom.window.HTMLElement, HTMLInputElement: dom.window.HTMLInputElement, Element: dom.window.Element, Node: dom.window.Node,
   MouseEvent: dom.window.MouseEvent, KeyboardEvent: dom.window.KeyboardEvent,
+  ClipboardEvent: dom.window.ClipboardEvent ?? dom.window.Event,
   MutationObserver: dom.window.MutationObserver, DOMParser: dom.window.DOMParser,
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
@@ -68,6 +70,213 @@ function tab(editor: Editor, shiftKey = false) {
 }
 
 describe("Phase C actual editor behavior", () => {
+  it("RC4 HTML-only clipboard never loads external/file/data image URLs and retains links/formatting", async () => {
+    const { pasteEditorContent, filterClipboardHtml } = await import("../src/features/editor/editorPaste");
+    const editor = editorFor("<p></p>");
+    const html = '<p><strong>Текст</strong> <a href="https://example.test/">Ссылка</a><img src="https://example.test/private.png" alt="Фото"><img src="file:///private.png"><img src="data:image/png;base64,iVBORw0KGgo="></p>';
+    assert.equal(pasteEditorContent(editor, { html, text: "Текст" }), true);
+    assert.equal(editor.view.dom.querySelector("img"), null);
+    assert.equal(editor.view.dom.querySelector("strong")?.textContent, "Текст");
+    assert.equal(editor.view.dom.querySelector("a")?.getAttribute("href"), "https://example.test/");
+    assert.ok(editor.getText().includes("Фото"));
+    const hash = "a".repeat(64);
+    const filtered = filterClipboardHtml(`<img src="noteflow-asset://${hash}" srcset="https://example.test/leak">`);
+    assert.ok(filtered.includes(`noteflow-asset://${hash}`)); assert.equal(filtered.includes("srcset"), false);
+  });
+  it("RC4 pastes one managed image/file batch at selection, prioritizes assets and preserves undo/reload", async () => {
+    const { pasteClipboardIntoEditor } = await import("../src/features/editor/editorPaste");
+    const editor = editorFor("<p>До выбранное после</p>");
+    editor.commands.setTextSelection({ from: 4, to: 13 }); const before = editor.getJSON();
+    const attachments = ["photo.png", "photo.jpg", "doc.pdf", "doc.docx"].map((name, i) => ({ sizeLabel: "1 KB", attachment: {
+      id: `qa-${i}`, noteId: "qa", kind: i < 2 ? "image" as const : "file" as const, originalName: name, storedName: name,
+      relativePath: "managed", assetUri: i < 2 ? `noteflow-asset://asset/${String(i + 1).repeat(64)}` : null,
+      mimeType: i < 2 ? "image/png" : "application/octet-stream", sizeBytes: 1024, createdAt: "",
+    } }));
+    const messages: string[] = [];
+    assert.equal(await pasteClipboardIntoEditor(editor, async () => ({ attachments, failedFiles: 1, text: "C:\\private\\file.png", html: "<p>Duplicate</p>" }), () => true, (message) => messages.push(message)), true);
+    assert.deepEqual(editor.getJSON().content?.filter((node) => ["image", "fileAttachment"].includes(node.type!)).map((node) => node.type), ["image", "image", "fileAttachment", "fileAttachment"]);
+    assert.equal(editor.getText().includes("выбранное"), false);
+    assert.equal(JSON.stringify(editor.getJSON()).includes("private"), false);
+    assert.equal(messages.length, 1);
+    const pasted = editor.getJSON() as EditorDocument;
+    editor.commands.undo(); assert.deepEqual(editor.getJSON(), before);
+    editor.commands.redo(); assert.deepEqual(editor.getJSON(), pasted);
+    assert.equal(serializeEditorDocumentForStorage(reload(pasted)).contentMarkdown, serializeEditorDocumentForStorage(pasted).contentMarkdown);
+  });
+  for (const stale of ["document", "selection", "note", "destroyed"] as const) it(`RC4 ignores asynchronous clipboard results after ${stale} change`, async () => {
+    const { pasteClipboardIntoEditor } = await import("../src/features/editor/editorPaste");
+    const editor = editorFor("<p>Содержимое</p>");
+    let current = true; let release!: (value: { text: string; html: string }) => void;
+    const pending = new Promise<{ text: string; html: string }>((resolve) => { release = resolve; });
+    const paste = pasteClipboardIntoEditor(editor, () => pending, () => current, () => {});
+    if (stale === "document") editor.commands.insertContent("Новое");
+    if (stale === "selection") editor.commands.setTextSelection(3);
+    if (stale === "note") current = false;
+    if (stale === "destroyed") editor.destroy();
+    const expected = editor.getJSON(); release({ text: "STALE", html: "" });
+    assert.equal(await paste, false); assert.deepEqual(editor.getJSON(), expected);
+  });
+  it("RC4 clipboard errors/empty batches leave the document intact and plain paste bypasses Markdown", async () => {
+    const { pasteClipboardIntoEditor } = await import("../src/features/editor/editorPaste");
+    const editor = editorFor("<p>До</p>"); const original = editor.getJSON(); const messages: string[] = []; let reads = 0;
+    assert.equal(await pasteClipboardIntoEditor(editor, async () => { reads++; return { text: "Wrong", html: "" }; }, () => false, () => {}), false);
+    assert.equal(reads, 0);
+    await assert.rejects(pasteClipboardIntoEditor(editor, async () => { throw new Error("read failed"); }, () => true, () => {}));
+    assert.equal(await pasteClipboardIntoEditor(editor, async () => ({ text: "", html: "", failedFiles: 2 }), () => true, (message) => messages.push(message)), false);
+    assert.deepEqual(editor.getJSON(), original); assert.equal(messages.length, 1);
+    assert.equal(await pasteClipboardIntoEditor(editor, async () => ({ text: "# Заголовок", html: "<h1>Заголовок</h1>" }), () => true, () => {}, true), true);
+    assert.equal(editor.view.dom.querySelector("h1"), null); assert.ok(editor.getText().includes("# Заголовок"));
+  });
+  it("RC4 maps physical drop positions at 100/160% and rejects outside/invalid drops", async () => {
+    const { nativeDropPoint, droppedFileKind } = await import("../src/features/editor/editorNativeDrop");
+    const bounds = { left: 100, top: 80, right: 700, bottom: 500 };
+    for (const scale of [1, 1.6, 2, 3.2]) {
+      assert.deepEqual(nativeDropPoint({ x: 200 * scale, y: 150 * scale }, scale, bounds), { left: 200, top: 150 });
+      assert.equal(nativeDropPoint({ x: 90 * scale, y: 150 * scale }, scale, bounds), null);
+    }
+    assert.equal(nativeDropPoint({ x: NaN, y: 150 }, 1, bounds), null);
+    assert.equal(nativeDropPoint({ x: 200, y: 150 }, 0, bounds), null);
+    for (const ext of ["PNG", "jpg", "jpeg", "webp"]) assert.equal(droppedFileKind(`C:\\QA\\photo.${ext}`), "image");
+    for (const ext of ["pdf", "docx", "xlsx", "txt", "zip"]) assert.equal(droppedFileKind(`C:\\QA\\file.${ext}`), "file");
+  });
+  it("RC4 inserts deduplicated managed files at the drop position with one undo and canonical reload", async () => {
+    const { insertNativeDrop } = await import("../src/features/editor/editorNativeDrop");
+    const editor = editorFor("<p>До</p><p>После</p>");
+    const before = editor.getJSON(); const calls: string[] = [];
+    const result = await insertNativeDrop(editor, ["photo.png", "file.pdf", "photo.png"], 4, async (path, kind) => {
+      calls.push(path);
+      return { sizeLabel: "1 KB", attachment: { id: path, noteId: "qa", kind, originalName: path,
+        storedName: path, relativePath: "managed", assetUri: kind === "image" ? "noteflow-asset://asset/qa" : null,
+        mimeType: kind === "image" ? "image/png" : "application/pdf", sizeBytes: 1024, createdAt: "" } };
+    }, () => true);
+    assert.equal(result, true); assert.deepEqual(calls, ["photo.png", "file.pdf"]);
+    const after = editor.getJSON() as EditorDocument;
+    assert.deepEqual(after.content?.map((node) => node.type), ["paragraph", "image", "fileAttachment", "paragraph"]);
+    editor.commands.undo(); assert.deepEqual(editor.getJSON(), before);
+    editor.commands.redo(); assert.deepEqual(editor.getJSON(), after);
+    assert.equal(serializeEditorDocumentForStorage(reload(after)).contentMarkdown, serializeEditorDocumentForStorage(after).contentMarkdown);
+  });
+  it("RC4 never inserts half a drop batch, a stale drop or more than the file limit", async () => {
+    const { insertNativeDrop, MAX_DROP_FILES } = await import("../src/features/editor/editorNativeDrop");
+    const editor = editorFor("<p>Документ</p>"); const before = editor.getJSON();
+    const stored = { sizeLabel: "1 KB", attachment: { id: "qa", noteId: "qa", kind: "file" as const, originalName: "a.txt",
+      storedName: "qa", relativePath: "managed", assetUri: null, mimeType: "text/plain", sizeBytes: 1, createdAt: "" } };
+    let calls = 0;
+    await assert.rejects(insertNativeDrop(editor, ["a.txt", "b.txt"], 0, async () => { if (++calls === 2) throw new Error("Disk full"); return stored; }, () => true));
+    assert.deepEqual(editor.getJSON(), before);
+    assert.equal(await insertNativeDrop(editor, ["a.txt"], 0, async () => stored, () => false), false);
+    assert.equal(await insertNativeDrop(editor, ["a.txt"], 0, async () => { editor.commands.insertContent("Новое"); return stored; }, () => true), false);
+    assert.equal(editor.getJSON().content?.some((node) => node.type === "fileAttachment"), false);
+    await assert.rejects(insertNativeDrop(editor, Array.from({ length: MAX_DROP_FILES + 1 }, (_, i) => `${i}.txt`), 0, async () => stored, () => true));
+    assert.equal(await insertNativeDrop(editor, [], 0, async () => stored, () => true), false);
+  });
+  for (const fixture of [
+    { name: "native plain Unicode", text: "Привет 🙂\nВторая строка", html: "", selector: "p", expected: "Привет 🙂" },
+    { name: "native rich text", text: "Жирный", html: "<p><strong>Жирный</strong> и <u>подчёркнутый</u></p>", selector: "strong", expected: "подчёркнутый" },
+    { name: "native lists", text: "Первый Второй", html: "<ul><li>Первый</li><li>Второй</li></ul>", selector: "ul li", expected: "Второй" },
+    { name: "native link", text: "Ссылка", html: '<p><a href="https://example.com/">Ссылка</a></p>', selector: "a", expected: "Ссылка" },
+    { name: "native table", text: "Ячейка", html: "<table><tr><th>А</th><th>Б</th></tr><tr><td>Ячейка</td><td>Текст</td></tr></table>", selector: "td", expected: "Ячейка" },
+    { name: "native Markdown", text: "# Заголовок\n\n**Жирный**", html: "", selector: "h1", expected: "Заголовок" },
+  ]) it(`RC4 routes ${fixture.name} through real editor paste and undo/redo`, async () => {
+    const { pasteEditorContent } = await import("../src/features/editor/editorPaste");
+    const editor = editorFor({ type: "doc", content: [{ type: "paragraph" }] });
+    const original = editor.getJSON();
+    assert.equal(pasteEditorContent(editor, fixture), true);
+    assert.ok(editor.view.dom.querySelector(fixture.selector));
+    assert.ok(editor.getText().includes(fixture.expected));
+    const pasted = editor.getJSON();
+    editor.commands.undo(); assert.deepEqual(editor.getJSON(), original);
+    editor.commands.redo(); assert.deepEqual(editor.getJSON(), pasted);
+    const stored = serializeEditorDocumentForStorage(pasted as EditorDocument);
+    editor.commands.setContent(reload(pasted as EditorDocument));
+    assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, stored.contentMarkdown);
+  });
+  it("RC4 native paste rejects empty content and does not execute unsafe HTML", async () => {
+    const { pasteEditorContent } = await import("../src/features/editor/editorPaste");
+    const editor = editorFor("<p>Исходный</p>");
+    const before = editor.getJSON();
+    assert.equal(pasteEditorContent(editor, { html: "", text: "" }), false);
+    assert.deepEqual(editor.getJSON(), before);
+    pasteEditorContent(editor, { text: "Безопасный", html: '<p onclick="alert(1)"><script>alert(1)</script><a href="javascript:alert(1)">Безопасный</a></p>' });
+    assert.equal(editor.view.dom.querySelector("script, [onclick], a[href^='javascript:']"), null);
+  });
+  for (const range of [[18, 19], [10, 15], [0, 18]] as const) {
+    it(`RC4 preserves partial underline ${range.join(":")} inside bold for ten canonical cycles`, () => {
+      const editor = editorFor(markdownToTiptapDoc("1. Стоимость следующая -"));
+      let start = 0;
+      editor.state.doc.descendants((node, pos) => { if (node.isText) start = pos; });
+      editor.commands.setTextSelection({ from: start, to: start + 19 });
+      editor.commands.setBold();
+      editor.commands.setTextSelection({ from: start + range[0], to: start + range[1] });
+      editor.commands.setUnderline();
+      const original = editor.getJSON() as EditorDocument;
+      const text = editor.getText();
+      const markdown = serializeEditorDocumentForStorage(original).contentMarkdown;
+      for (let cycle = 0; cycle < 10; cycle++) {
+        editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
+        assert.equal(editor.getText(), text, `visible text cycle ${cycle}`);
+        assert.deepEqual(editor.getJSON(), original, `marks/list structure cycle ${cycle}`);
+        assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, markdown);
+      }
+    });
+  }
+  for (const fixture of [
+    { name: "literal Markdown punctuation", text: "**** ** *важно* _текст_ [ ] [x] \\ ` == ~~ <текст>", marks: [] },
+    { name: "Unicode and boundary spaces", text: "  Ёжик 42, 🙂 и е\u0308!  ", marks: ["bold", "underline"] },
+    { name: "Unicode whitespace", text: "\u00a0\tЁжик\u2009", marks: ["italic", "underline"] },
+    { name: "intraword italic", text: "Стоимость следующая -", marks: ["italic", "underline"] },
+    { name: "mixed adjacent emphasis", text: "Стоимость следующая -", marks: ["bold", "italic", "underline"] },
+    { name: "code and backticks", text: "`текст` и **literal**", marks: ["bold", "code", "underline"] },
+  ]) it(`RC4 keeps ${fixture.name} text and marks over ten cycles`, () => {
+    const editor = editorFor({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: fixture.text }] }] });
+    editor.commands.selectAll();
+    for (const mark of fixture.marks) editor.commands.setMark(mark);
+    if (fixture.name.includes("italic") || fixture.name.includes("adjacent")) {
+      editor.commands.setTextSelection({ from: 4, to: 8 });
+      editor.commands.unsetMark("underline");
+      editor.commands.setMark("strike");
+    }
+    const original = editor.getJSON() as EditorDocument;
+    const text = editor.getText();
+    const markdown = serializeEditorDocumentForStorage(original).contentMarkdown;
+    for (let cycle = 0; cycle < 10; cycle++) {
+      editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
+      assert.equal(editor.getText(), text, `text cycle ${cycle}`);
+      assert.deepEqual(editor.getJSON(), original, `semantic marks cycle ${cycle}`);
+      assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, markdown);
+    }
+  });
+  for (const fixture of [
+    { name: "crossing bold and italic ranges", content: [
+      { type: "text", text: "Первый", marks: [{ type: "bold" }] },
+      { type: "text", text: "второй", marks: [{ type: "bold" }, { type: "italic" }] },
+      { type: "text", text: "третий", marks: [{ type: "italic" }] },
+    ] },
+    { name: "same bold with different sidecar marks", content: [
+      { type: "text", text: "Стоимость", marks: [{ type: "bold" }, { type: "textStyle", attrs: { color: "#123456" } }] },
+      { type: "text", text: " следующая", marks: [{ type: "bold" }, { type: "superscript" }] },
+      { type: "text", text: " -", marks: [{ type: "bold" }, { type: "subscript" }] },
+    ] },
+    { name: "hard break and escaped literals", content: [
+      { type: "text", text: "# текст ** & &#32;", marks: [{ type: "bold" }] },
+      { type: "hardBreak" }, { type: "text", text: "- [ ] Ёжик 🙂 42." },
+    ] },
+    { name: "partial punctuation emphasis", content: [
+      { type: "text", text: "а" }, { type: "text", text: ".", marks: [{ type: "bold" }] }, { type: "text", text: "б" },
+    ] },
+    { name: "trailing hard break", content: [{ type: "text", text: "Текст" }, { type: "hardBreak" }] },
+  ]) it(`RC4 preserves ${fixture.name} through ten canonical cycles`, () => {
+    const editor = editorFor({ type: "doc", content: [{ type: "paragraph", content: fixture.content }] });
+    const original = editor.getJSON() as EditorDocument;
+    const text = editor.getText();
+    const markdown = serializeEditorDocumentForStorage(original).contentMarkdown;
+    for (let cycle = 0; cycle < 10; cycle++) {
+      editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
+      assert.equal(editor.getText(), text);
+      assert.deepEqual(editor.getJSON(), original);
+      assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, markdown);
+    }
+  });
   const mixedLists = [
     { name: "loose bullet and task siblings", source: "- обычный\n- второй\n\n- [ ] задача\n- [x] готово", tasks: ["задача", "готово"] },
     { name: "bullet to nested task", source: "- обычный\n  - [ ] задача A\n  - [x] задача B\n- конец", tasks: ["задача A", "задача B"] },
@@ -319,6 +528,45 @@ function noteWith(text: string, id = "phase-c"): Note {
 }
 
 describe("Phase C mounted EditorArea synchronization and context menu", () => {
+  for (const method of ["shortcut", "context"]) it(`RC4 imports a managed clipboard file through the mounted ${method} pipeline exactly once`, async () => {
+    const { editor, container } = await mount();
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "isTauri");
+    Object.defineProperty(globalThis, "isTauri", { configurable: true, value: true });
+    let reads = 0;
+    mockIPC((command, args) => {
+      if (command !== "read_editor_clipboard") return { hasProvider: false };
+      reads++; assert.deepEqual(args, { noteId: "phase-c", plainTextOnly: false });
+      return { text: "", html: "", failedFiles: 0, attachments: [{ sizeLabel: "1 KB", attachment: { id: "clip-pdf", noteId: "phase-c", kind: "file", originalName: "Документ.pdf", storedName: "managed.pdf", relativePath: "managed", assetUri: null, mimeType: "application/pdf", sizeBytes: 1024, createdAt: "" } }] };
+    });
+    try {
+      await act(async () => { editor.commands.setTextSelection({ from: 1, to: 6 }); editor.view.focus(); });
+      const before = editor.getJSON();
+      if (method === "shortcut") await act(async () => { editor.view.dom.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })); });
+      else {
+        await act(async () => editor.view.dom.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+        const paste = [...document.querySelectorAll<HTMLButtonElement>('.editor-context-menu [role="menuitem"]')].find((item) => item.textContent === "Вставить"); assert.ok(paste);
+        await act(async () => paste.click());
+      }
+      assert.equal(reads, 1); assert.ok(editor.getJSON().content?.some((node) => node.type === "fileAttachment" && node.attrs?.storageId === "clip-pdf"));
+      assert.equal(editor.getText().includes("Перва"), false);
+      await act(async () => editor.commands.undo()); assert.deepEqual(editor.getJSON(), before);
+      // Dispatching a key without editor focus must not read/import the OS clipboard.
+      await act(async () => container.querySelector<HTMLInputElement>("input")!.focus());
+      await act(async () => editor.view.dom.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+      assert.equal(reads, 1); assert.deepEqual(editor.getJSON(), before);
+    } finally { if (descriptor) Object.defineProperty(globalThis, "isTauri", descriptor); else Reflect.deleteProperty(globalThis, "isTauri"); }
+  });
+  it("RC4 exposes the exact shortened image menu order with a final danger action", async () => {
+    const { editor } = await mount();
+    await act(async () => { editor.commands.setContent({ type: "doc", content: [{ type: "image", attrs: { src: "data:image/png;base64,iVBORw0KGgo=", alt: "QA" } }, { type: "paragraph" }] }); editor.commands.setNodeSelection(0); });
+    const more = document.querySelector<HTMLButtonElement>('.note-image-node button[aria-label="Другие действия с изображением"]');
+    assert.ok(more);
+    await act(async () => more.click());
+    const menu = document.querySelector('.image-actions-menu'); assert.ok(menu);
+    assert.deepEqual([...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent), ["Рисовать", "Описание изображения", "Сбросить изменения", "Копировать", "Сохранить…", "Удалить изображение"]);
+    const separator = menu.querySelector('.nf-menu-separator'); assert.ok(separator);
+    assert.equal(separator.nextElementSibling?.textContent, "Удалить изображение"); assert.ok(separator.nextElementSibling?.classList.contains("danger"));
+  });
   async function mount() {
     mockIPC((command) => command === "get_note_ai_status" ? { available: false, privacyAccepted: false, reason: "no_provider" } : []);
     const container = document.createElement("div"); document.body.append(container); root = createRoot(container);
@@ -337,6 +585,73 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const editor = (container.querySelector(".tiptap") as HTMLElement & { editor: Editor }).editor;
     return { props, editor, container, render };
   }
+  it("RC4 drains in-flight formatted autosave before rapid A/B navigation without moving the live caret", async () => {
+    const { props, editor, container, render } = await mount();
+    type Snapshot = ReturnType<typeof serializeEditorDocumentForStorage>;
+    type Save = { noteId: string; expectedContentVersion: number; sequence: number; snapshot: Snapshot };
+    const queue = new PendingNoteSaves<Save>();
+    const stored = new Map<string, { contentVersion: number; snapshot: Snapshot }>();
+    let sequence = 0;
+    props.onEditorChange = (noteId, document) => queue.enqueue({ noteId, expectedContentVersion: props.note.contentVersion,
+      sequence: ++sequence, snapshot: serializeEditorDocumentForStorage(document) });
+    await render();
+    await act(async () => {
+      editor.commands.setContent(markdownToTiptapDoc("1. Стоимость следующая -"));
+      editor.commands.setTextSelection({ from: 3, to: 22 }); editor.commands.setBold();
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const flush = queue.flush(async (save) => {
+      if (++calls === 1) await gate;
+      assert.equal(save.expectedContentVersion, stored.get(save.noteId)?.contentVersion ?? 1);
+      const next = { contentVersion: save.expectedContentVersion + 1, snapshot: save.snapshot };
+      stored.set(save.noteId, next); return next;
+    }, (save, saved) => {
+      if (props.note.id === save.noteId) props.note = { ...props.note, contentVersion: saved.contentVersion, editorDocument: saved.snapshot.editorDocument };
+    });
+    await act(async () => { editor.commands.setTextSelection({ from: 3, to: 21 }); editor.commands.setUnderline(); });
+    const original = editor.getJSON(); const selection = editor.state.selection.toJSON();
+    const element = container.querySelector(".tiptap");
+    assert.ok(queue.hasPending()); release(); await flush; await render();
+    assert.equal(calls, 2); assert.equal(queue.hasPending(), false);
+    assert.deepEqual(editor.getJSON(), original); assert.deepEqual(editor.state.selection.toJSON(), selection);
+    assert.equal(container.querySelector(".tiptap"), element);
+    const saved = stored.get("phase-c")!;
+    for (let cycle = 0; cycle < 10; cycle++) {
+      props.note = noteWith("Другая заметка", "other"); await render();
+      assert.equal(editor.getText(), "Другая заметка");
+      props.note = { ...noteWith("", "phase-c"), contentVersion: saved.contentVersion, editorDocument: reload(saved.snapshot.editorDocument) };
+      await render(); assert.deepEqual(editor.getJSON(), original);
+    }
+  });
+  it("RC4 native Ctrl+V reads rich clipboard once and ignores a reply after note navigation", async () => {
+    const { props, editor, render } = await mount();
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "isTauri");
+    let resolveClipboard!: (value: { text: string; html: string }) => void;
+    const pending = new Promise<{ text: string; html: string }>((resolve) => { resolveClipboard = resolve; });
+    let reads = 0;
+    mockIPC((command) => {
+      if (command === "read_editor_clipboard") { reads++; return pending; }
+      return { hasProvider: false };
+    });
+    Object.defineProperty(globalThis, "isTauri", { configurable: true, value: true });
+    try {
+      await act(async () => editor.view.focus());
+      await act(async () => editor.view.dom.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+      assert.equal(reads, 1);
+      props.note = noteWith("Другая заметка", "other"); await render();
+      await act(async () => { resolveClipboard({ text: "Ответ", html: "<p><b>Ответ</b></p>" }); await pending; });
+      assert.equal(editor.getText(), "Другая заметка");
+      mockIPC((command) => command === "read_editor_clipboard" ? { text: "Ответ", html: "<p><b>Ответ</b></p>" } : { hasProvider: false });
+      await act(async () => editor.view.focus());
+      await act(async () => editor.view.dom.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+      assert.equal(editor.view.dom.querySelector("strong")?.textContent, "Ответ");
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, "isTauri", descriptor);
+      else Reflect.deleteProperty(globalThis, "isTauri");
+    }
+  });
   for (const modifier of [{}, { ctrlKey: true }, { metaKey: true }]) it(`cancels the real DOM anchor click before native opener: ${JSON.stringify(modifier)}`, async () => {
     const { props, editor, render } = await mount();
     let saves = 0;
