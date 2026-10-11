@@ -4,10 +4,10 @@ NoteFlow — локальное desktop-приложение для замето
 
 | Платформа | Состояние |
 | --- | --- |
-| Windows x64 | **1.0.0-rc.4**, Release Candidate. Финальный пользовательский smoke RC4 принят. Installer lifecycle и совместная установка NSIS/MSI проверены пользователем на предыдущем RC; новые пакеты rc.4 не проходили отдельную clean-install/upgrade/uninstall матрицу. Windows 10 отдельно не подтверждена. |
+| Windows x64 | **1.0.0-rc.5**, Release Candidate. Пользовательский smoke RC5 принят. Installer lifecycle и совместная установка NSIS/MSI проверены пользователем на предыдущем RC; новые пакеты rc.5 не проходили отдельную clean-install/upgrade/uninstall матрицу. Windows 10 отдельно не подтверждена. |
 | macOS (Apple Silicon / Intel) | Код предусматривает сборку, но публичный подписанный и notarized релиз ещё не проверен и не выпускается. |
 
-**Текущий выпуск: 1.0.0-rc.4, Release Candidate, не финальная v1.0.** Установщики и SHA-256 публикуются в [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases).
+**Текущий выпуск: 1.0.0-rc.5, Release Candidate, не финальная v1.0.** Установщики и SHA-256 публикуются в [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases).
 
 ## Возможности
 
@@ -38,9 +38,9 @@ Global Knowledge Agent дополнительно использует данн�
 
 ## Установка на Windows
 
-Рекомендуется **NSIS**: `NoteFlow_1.0.0-rc.4_x64-setup.exe` (установка для текущего пользователя). MSI (`en-US` и `ru-RU`) — альтернативные артефакты с установкой для компьютера. Предыдущий RC прошёл пользовательскую проверку installer lifecycle и coexistence на втором ПК; это не отдельная проверка новых пакетов rc.4 и не гарантия одинакового поведения на любой конфигурации. Для обычной работы выбирайте один тип установщика.
+Рекомендуется **NSIS**: `NoteFlow_1.0.0-rc.5_x64-setup.exe` (установка для текущего пользователя). MSI (`en-US` и `ru-RU`) — альтернативные артефакты с установкой для компьютера. Предыдущий RC прошёл пользовательскую проверку installer lifecycle и coexistence на втором ПК; это не отдельная проверка новых пакетов rc.5 и не гарантия одинакового поведения на любой конфигурации. Для обычной работы выбирайте один тип установщика.
 
-1. Откройте [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases) и выберите `1.0.0-rc.4`.
+1. Откройте [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases) и выберите `1.0.0-rc.5`.
 2. Скачайте NSIS setup и, при желании, сравните его SHA-256 с `SHA256SUMS.txt` (`Get-FileHash -Algorithm SHA256` в PowerShell).
 3. Запустите установщик, завершите установку и откройте NoteFlow.
 
@@ -130,10 +130,10 @@ Windows RC-сборка и отдельный FTS benchmark описаны в [r
 
 ## Статус и ограничения
 
-- Windows `1.0.0-rc.4` — тестовый выпуск без цифровой подписи. Финальный пользовательский smoke RC4 принят; отдельная installer lifecycle матрица новых пакетов rc.4 не выполнена. Это не финальная production v1.0.
+- Windows `1.0.0-rc.5` — тестовый выпуск без цифровой подписи. Пользовательский smoke RC5 принят; отдельная installer lifecycle матрица новых пакетов rc.5 не выполнена. Это не финальная production v1.0.
 - Публичного проверенного macOS-релиза нет; Windows 10 требует отдельного smoke, прежде чем считать поддержку подтверждённой.
 - Автоматического обновления и отдельного reranker в retrieval нет. Неотправленные AI-черновики сохраняются только до закрытия приложения. Streaming зависит от поддержки выбранного провайдера.
 
 Дальнейшие шаги без обещания сроков: расширить Windows lifecycle/platform validation и подготовить подписанный Windows 1.0, затем собрать, проверить, подписать и notarize macOS-версию; позднее рассмотреть updater и улучшения retrieval/AI.
 
-Подробности текущего RC — в [release notes](docs/release/rc-1.0.0-rc.4-notes.md). Функциональные требования — в [product specification](docs/specifications/product-spec.md).
+Подробности текущего RC — в [release notes](docs/release/rc-1.0.0-rc.5-notes.md). Функциональные требования — в [product specification](docs/specifications/product-spec.md).
