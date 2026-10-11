@@ -6,7 +6,7 @@ import postcss from "postcss";
 const sheets = new Map(["app", "foundation", "editor", "pages", "settings"].map((name) => [name, postcss.parse(readFileSync(`src/styles/${name}.css`, "utf8"))]));
 function declarations(sheet: string, selector: string) {
   const values = new Map<string, string>();
-  sheets.get(sheet)!.walkRules((rule) => { if (rule.selector === selector) rule.walkDecls((declaration) => { values.set(declaration.prop, declaration.value); }); });
+  sheets.get(sheet)!.walkRules((rule) => { if (rule.selector.replace(/\r\n/g, "\n") === selector) rule.walkDecls((declaration) => { values.set(declaration.prop, declaration.value); }); });
   assert.ok(values.size > 0, selector); return values;
 }
 it("RC5 reserves scrollbar space without horizontal overflow or title clipping", () => {

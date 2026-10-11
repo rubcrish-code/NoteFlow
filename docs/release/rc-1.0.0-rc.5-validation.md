@@ -34,6 +34,8 @@ All of these gates were actually rerun after the version bump, with owned Vite/b
 
 P0 partial-underline regressions passed for ranges 18:19, 10:15 and 0:18, over ten canonical cycles; the queued formatted-autosave/navigation test also passed. Adversarial Markdown application parsing passed in 601.1295 ms. There were no changed test thresholds or disabled tests in this release pass.
 
+The first canonical-branch rerun exposed a line-ending portability defect in `rc5Styles.test.ts`: Git's `core.autocrlf=true` checkout produced a CRLF selector, while the test compared it with LF. PostCSS confirmed that both forms had the same `grid-auto-rows: auto` declaration. The selector comparison now normalizes CRLF only; selector identity and all property/value assertions remain unchanged. That failed run is retained in the local audit evidence, and the complete gates are rerun before publication. No production stylesheet or application behavior was changed by this correction.
+
 The production web output contains no source maps, dev server URLs or synthetic QA fixture markers. Final production bundling must run again at the canonical release branch's final HEAD. A build made before that commit is not a publishable artifact. Relevant gates are repeated after the canonical fast-forward; final package metadata and remote download hashes remain separate post-build evidence.
 
 ## Regression evidence and limits
