@@ -67,9 +67,18 @@ it("keeps all actual Settings navigation labels visible through five live MainSi
   function verifyLabels(collapsed: boolean) {
     const settingsLabels = Array.from(container.querySelectorAll(".settings-nav span"));
     assert.equal(settingsLabels.length, 6);
-    for (const label of settingsLabels) assert.notEqual(getComputedStyle(label).display, "none", label.textContent ?? "");
-    for (const label of container.querySelectorAll(".sb .nav-i span")) {
-      assert.equal(getComputedStyle(label).display === "none", collapsed, "Only MainSidebar labels follow collapsed state");
+    for (const label of settingsLabels) {
+      assert.notEqual(getComputedStyle(label).display, "none", label.textContent ?? "");
+      assert.notEqual(getComputedStyle(label).opacity, "0", label.textContent ?? "");
+    }
+    const sidebarLabels = container.querySelectorAll(".sb .sidebar-action-label");
+    assert.equal(sidebarLabels.length, 7);
+    for (const label of sidebarLabels) {
+      const style = getComputedStyle(label);
+      assert.notEqual(style.display, "none", "Label tracks must remain in the animated layout");
+      assert.equal(style.position, "static");
+      assert.equal(style.opacity, collapsed ? "0" : "1", "Only MainSidebar labels follow collapsed state");
+      if (collapsed) assert.equal(style.pointerEvents, "none");
     }
     for (const button of container.querySelectorAll(".settings-nav")) assert.notEqual(getComputedStyle(button).justifyContent, "center");
   }

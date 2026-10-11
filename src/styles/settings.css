@@ -1,5 +1,14 @@
 /* P1.2 desktop preferences and model management. */
 
+.settings-card.bulk-delete-zone {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: var(--space-5) 0;
+}
+
 .settings-layout-inner {
   gap: clamp(var(--space-6), 3cqi, var(--space-10));
   grid-template-columns: minmax(168px, 190px) minmax(0, 1fr);
@@ -262,7 +271,7 @@
   font-size: var(--text-md-size);
   line-height: var(--text-md-line);
   margin-bottom: var(--space-8);
-  max-width: 72ch;
+  max-width: none;
 }
 
 .settings-card {
@@ -324,7 +333,7 @@
   color: var(--text-secondary);
   font-size: var(--text-sm-size);
   line-height: var(--text-sm-line);
-  max-width: 72ch;
+  max-width: none;
   margin-top: var(--space-2);
 }
 
@@ -559,6 +568,11 @@
   width: min(800px, calc(100vw - 2 * var(--space-6)));
 }
 
+.llm-provider-modal .nf-modal-heading,
+.semantic-profile-modal .nf-modal-heading { flex: 1; }
+.llm-provider-modal .nf-modal-heading p,
+.semantic-profile-modal .nf-modal-heading p { max-width: none; }
+
 .settings-modal-shell .nf-modal-eyebrow {
   letter-spacing: 0;
   text-transform: none;
@@ -570,6 +584,7 @@
 
 .theme-options {
   gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
 }
 
 .settings-card:has(> .theme-options) {
@@ -582,6 +597,7 @@
   border-color: var(--border-subtle);
   border-radius: var(--radius-card);
   box-shadow: none;
+  min-width: 0;
   padding: var(--space-3);
 }
 
@@ -605,7 +621,12 @@
   border-left: 0;
   border-radius: 0;
   border-right: 0;
+  flex-wrap: wrap;
   padding-inline: 0;
+}
+
+.zoom-settings-card .settings-section-head {
+  flex: 1 1 180px;
 }
 
 .settings-layout-inner:is(.settings-layout-compact, .settings-layout-narrow) {
@@ -653,9 +674,9 @@
 .export-card {
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0;
   border-radius: 0;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0;
   box-shadow: none;
   display: grid;
   gap: var(--space-6);
@@ -665,6 +686,20 @@
 
 .export-action-group {
   min-width: 0;
+}
+
+.export-card .export-action {
+  max-width: 100%;
+  min-width: 0;
+  text-align: center;
+  white-space: normal;
+}
+
+.export-card .export-action svg { flex-shrink: 0; }
+
+.export-card {
+  container-type: inline-size;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
 
 .backup-export-status {
@@ -877,4 +912,13 @@
   font-size: var(--text-sm-size);
   line-height: var(--text-sm-line);
   margin: 0;
+}
+
+@container (max-width: 600px) {
+  .export-card .export-action-group.recovery {
+    border-left: 0;
+    border-top: 1px solid var(--border-subtle);
+    padding-left: 0;
+    padding-top: var(--space-5);
+  }
 }

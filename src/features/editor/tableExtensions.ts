@@ -7,6 +7,7 @@ import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey, type EditorState } from "@tiptap/pm/state";
 import { CellSelection } from "@tiptap/pm/tables";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
+import { tableHeaderAxesPlugin } from "./tableSelectionHeaders";
 
 const tableToolsAnchorPluginKey = new PluginKey("noteflow-table-tools-anchor");
 
@@ -204,9 +205,16 @@ export const NoteFlowTableHeader = TableHeader.extend({
 });
 
 export const NoteFlowTable = Table.extend({
+  addProseMirrorPlugins() {
+    return [...this.parent?.() ?? [], tableHeaderAxesPlugin()];
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
+      headerAxesManaged: { default: false, rendered: false },
+      headerRow: { default: null, rendered: false },
+      headerColumn: { default: null, rendered: false },
       emphasizedBorders: {
         default: false,
         parseHTML: (element) => normalizeEmphasizedBorders(element.getAttribute("data-table-borders")),

@@ -2885,7 +2885,7 @@
 
 .ed-body th,
 .ed-body td {
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, var(--surface-panel));
   min-width: 90px;
   padding: 8px 10px;
   vertical-align: top;
@@ -3295,6 +3295,7 @@
 
 .block-insert-menu {
   bottom: calc(100% + 10px);
+  box-sizing: border-box;
   display: grid;
   gap: 12px;
   left: 18px;
@@ -3302,7 +3303,7 @@
   overflow-y: auto;
   padding: 14px;
   position: absolute;
-  width: min(560px, calc(100vw - 36px));
+  width: min(560px, calc(100% - 36px));
 }
 
 .block-menu-grid {
@@ -6846,7 +6847,7 @@
   text-align: center;
   white-space: normal;
   overflow-wrap: anywhere;
-  z-index: 220;
+  z-index: 1400;
 }
 
 /* 05B production polish: shared compact actions and editor contextual controls. */

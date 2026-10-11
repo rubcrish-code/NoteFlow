@@ -79,7 +79,7 @@ describe("Phase E export workflow", () => {
     assert.equal(await service.exportNote("note", format), null); assert.deepEqual(calls, ["get_note", "plugin:dialog|save"]); assert.equal(workerRequests.length, 0);
   });
   it("native Project Save dialog has a sanitized ZIP name and cancels safely", async () => {
-    mockIPC((command, args) => { assert.equal(command, "plugin:dialog|save"); assert.equal((args?.options as { defaultPath: string }).defaultPath, "_CON.zip"); return null; });
+    mockIPC((command, args) => { assert.equal(command, "plugin:dialog|save"); const options = args?.options as { defaultPath: string; filters: { name: string; extensions: string[] }[] }; assert.equal(options.defaultPath, "_CON.zip"); assert.deepEqual(options.filters, [{ name: "ZIP-архив (*.zip)", extensions: ["zip"] }]); return null; });
     assert.equal(await service.exportProject("project", "CON"), null);
   });
   it("writes portable Markdown through the backend rather than a second serializer", async () => {

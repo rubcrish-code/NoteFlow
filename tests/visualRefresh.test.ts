@@ -34,7 +34,7 @@ describe("P2.0A lightweight visual foundation", () => {
   });
 
   it("preserves the complete toolbar registry and one-row overflow partition", () => {
-    assert.equal(EDITOR_TOOLBAR_ACTIONS.length, 27);
+    assert.equal(EDITOR_TOOLBAR_ACTIONS.length, 28);
     for (const width of [280, 560, 980, 1440]) {
       const layout = resolveEditorToolbarActions(width);
       const actionIds = [...layout.visibleActions, ...layout.overflowActions].map((action) => action.id);
@@ -44,7 +44,7 @@ describe("P2.0A lightweight visual foundation", () => {
   });
 
   it("keeps collapsed sidebar controls accessible while icons remain compact", () => {
-    assert.match(sidebarCss, /--collapsed-rail-control-size:\s*44px/);
+    assert.match(sidebarCss, /--collapsed-rail-control-size:\s*var\(--control-height-default\)/);
     assert.match(sidebarCss, /--collapsed-rail-icon-size:\s*18px/);
     assert.match(sidebarCss, /min-height:\s*var\(--collapsed-rail-control-size\)/);
     assert.match(sidebarCss, /width:\s*var\(--collapsed-rail-control-size\)/);

@@ -40,6 +40,7 @@ const { RagChatWorkspace } = await import("../src/features/rag/RagChatWorkspace"
 const { ragDrafts } = await import("../src/features/rag/ragDrafts");
 const { ragJobs } = await import("../src/services/ragBackground");
 const { NoteChatPanel } = await import("../src/features/note-chat/NoteChatPanel");
+const { SidebarPanel } = await import("../src/shared/SidebarPanel");
 const { noteChatJobs, noteChatDrafts, forgetNoteChat, sendNoteChatInBackground } = await import("../src/services/noteChatBackground");
 let root: Root;
 let container: HTMLDivElement;
@@ -96,6 +97,26 @@ function noteIpc(behavior: { saveUser?: () => unknown; answer?: () => unknown } 
 }
 
 describe("RC4 note chat session drafts", () => {
+  it("animated note-panel close preserves drafts and background generation without duplicate requests", async () => {
+    const answer = deferred<Record<string, unknown>>();
+    const { commands, history } = noteIpc({ answer: () => answer.promise });
+    const renderPanel = async (open: boolean) => {
+      await act(async () => root.render(h(SidebarPanel, { className: "workspace-chat-panel", open, children: h(NoteChatPanel, { note: syntheticNote("A"), onClose() {}, onOpenAiSettings() {}, onResize() {}, onResetWidth() {}, onToast() {} }) })));
+    };
+    await renderPanel(true); await until(() => container.querySelector<HTMLTextAreaElement>("textarea")?.disabled === false);
+    await setComposerValue("Черновик 🙂"); const textarea = composer();
+    await renderPanel(false); await renderPanel(true);
+    assert.ok(composer() === textarea); assert.equal(composer().value, "Черновик 🙂");
+    await click("Отправить"); await until(() => commands.includes("run_note_ai"));
+    await renderPanel(false); await until(() => !container.querySelector("textarea"));
+    assert.equal(noteChatJobs.get("A")?.phase, "generating");
+    await act(async () => answer.resolve({ status: "success", response: "Готово **Markdown** 🙂", message: "", model: "QA", providerName: "QA", isLocal: true }));
+    await until(() => noteChatJobs.get("A")?.phase === "success"); await renderPanel(true);
+    await until(() => container.textContent?.includes("Готово") ?? false);
+    assert.equal(commands.filter((command) => command === "run_note_ai").length, 1);
+    assert.equal(commands.includes("cancel_ai_operation"), false);
+    assert.equal(history.get("A")?.filter((message) => message.role === "assistant").length, 1);
+  });
   for (const stop of [false, true]) it(`restores note streaming after unmount and ${stop ? "stops its backend request" : "completes once"}`, async () => {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, "isTauri");
     Object.defineProperty(globalThis, "isTauri", { configurable: true, value: true });
@@ -325,7 +346,7 @@ describe("RAG workspace generation flow", () => {
       assert.equal(composer(), input);
       assert.equal(composer().value, "Неотправленный черновик");
       assert.equal(container.querySelector(".rag-citation"), citation);
-      assert.equal(button("Область поиска: Вся база")?.getAttribute("aria-expanded"), "false");
+assert.equal(button("Область поиска: Все заметки")?.getAttribute("aria-expanded"), "false");
     }
     assert.equal(commands.length, initialCommands);
     assert.match(container.querySelector(".rag-source-list")?.textContent ?? "", /Проект Альфа/);
@@ -337,13 +358,18 @@ describe("RAG workspace generation flow", () => {
     await until(() => !composer().disabled);
     await renderWorkspace(() => {}, "compact");
     assert.ok(container.querySelector(".rag-sources-panel.rag-panel-overlay"));
-    assert.equal(container.querySelector(".rag-conversations"), null);
+    assert.equal(container.querySelector(".rag-history-panel")?.getAttribute("aria-hidden"), "true");
+    assert.ok(container.querySelector(".rag-history-panel")?.hasAttribute("inert"));
+    await until(() => !container.querySelector(".rag-conversations"));
     await click("Показать историю чатов");
     assert.ok(container.querySelector(".rag-conversations.rag-panel-overlay"));
-    assert.equal(container.querySelector(".rag-sources-panel"), null);
+    assert.equal(container.querySelector(".rag-source-panel")?.getAttribute("aria-hidden"), "true");
+    assert.ok(container.querySelector(".rag-source-panel")?.hasAttribute("inert"));
+    await until(() => !container.querySelector(".rag-sources-panel"));
     await click("Источники ответа");
     assert.ok(container.querySelector(".rag-sources-panel.rag-panel-overlay"));
-    assert.equal(container.querySelector(".rag-conversations"), null);
+    assert.equal(container.querySelector(".rag-history-panel")?.getAttribute("aria-hidden"), "true");
+    await until(() => !container.querySelector(".rag-conversations"));
     await renderWorkspace(() => {}, "wide");
     assert.ok(container.querySelector(".rag-conversations:not(.rag-panel-overlay)"));
     assert.ok(container.querySelector(".rag-sources-panel:not(.rag-panel-overlay)"));
@@ -354,7 +380,7 @@ describe("RAG workspace generation flow", () => {
     installBaseIpc(commands, { hybridSearch: () => [semanticSource], runGeneration: () => generationResult("Standalone answer. [[S1]]") });
     await renderWorkspace(() => {});
     await until(() => !composer().disabled);
-    await click("Область поиска: Вся база");
+    await click("Область поиска: Все заметки");
     const standalone = document.querySelector<HTMLInputElement>('.rag-project-popover input[type="checkbox"]');
     assert.ok(standalone);
     await act(async () => standalone.click());
@@ -519,7 +545,7 @@ describe("RAG workspace generation flow", () => {
     });
     await renderWorkspace(() => {});
     await until(() => !composer().disabled);
-    await click("Область поиска: Вся база");
+    await click("Область поиска: Все заметки");
     const check = document.querySelectorAll<HTMLInputElement>('.rag-project-options input')[2]!;
     await act(async () => check.click());
     await until(() => (container.querySelector('.rag-project-trigger')?.textContent ?? "").includes("1 проект + вне проектов"));
@@ -528,7 +554,7 @@ describe("RAG workspace generation flow", () => {
     await click("Отправить");
     await until(() => Boolean(button("Повторить")));
     await click("Область поиска: 1 проект + вне проектов");
-    await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>('.rag-project-popover button')).find((item) => item.textContent?.includes("Вся база"))!.click());
+    await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>('.rag-project-popover button')).find((item) => item.textContent?.includes("Все заметки"))!.click());
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     await click("Повторить");
     await until(() => (container.textContent ?? "").includes("Ответ ALPHA"));

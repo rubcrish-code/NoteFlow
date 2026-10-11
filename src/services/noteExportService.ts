@@ -18,6 +18,6 @@ export async function exportNote(noteId: string, format: NoteExportFormat): Prom
 }
 
 export async function exportProject(projectId: string, title: string): Promise<dataService.ExportResult | null> {
-  const path = await save({ title: "Экспортировать проект", defaultPath: exportFilename(title, "zip"), filters: [{ name: "Markdown-заметки и вложения", extensions: ["zip"] }] });
+  const path = await save({ title: "Экспортировать проект", defaultPath: exportFilename(title, "zip"), filters: [{ name: "ZIP-архив (*.zip)", extensions: ["zip"] }] });
   return path ? invoke<dataService.ExportResult>("export_project_zip_at_path", { projectId, path }) : null;
 }

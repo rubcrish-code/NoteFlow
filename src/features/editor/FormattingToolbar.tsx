@@ -501,6 +501,7 @@ function buildToolbarState(editor: Editor | null): ToolbarRuntimeState {
       "align-center": editor.isActive({ textAlign: "center" }),
       "align-left": editor.isActive({ textAlign: "left" }),
       "align-right": editor.isActive({ textAlign: "right" }),
+      "align-justify": editor.isActive({ textAlign: "justify" }),
       bold: editor.isActive("bold"),
       color: typeof editor.getAttributes("textStyle").color === "string",
       "code-block": editor.isActive("codeBlock"),

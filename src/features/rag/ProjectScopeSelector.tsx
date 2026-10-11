@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ProjectCard } from "../../app/types";
 import { Icon } from "../../shared/Icon";
+import { InfoHint } from "../../shared/InfoHint";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
 import { formatRussianCount } from "../../shared/russianPlural";
 
@@ -23,7 +24,7 @@ export function ProjectScopeSelector({ projects, selectedIds, includeStandalone 
   const activeProjects = projects.filter((project) => !project.archivedAt);
   const shown = activeProjects.filter((project) => project.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const standaloneChecked = selectedIds === null || includeStandalone;
-  const label = !selectedIds ? "Вся база" : selectedIds.length === 0 ? includeStandalone ? "Вне проектов" : "Выберите область поиска" : includeStandalone ? `${formatRussianCount(selectedIds.length, ["проект", "проекта", "проектов"])} + вне проектов` : selectedIds.length === 1
+  const label = !selectedIds ? "Все заметки" : selectedIds.length === 0 ? includeStandalone ? "Вне проектов" : "Выберите область поиска" : includeStandalone ? `${formatRussianCount(selectedIds.length, ["проект", "проекта", "проектов"])} + вне проектов` : selectedIds.length === 1
     ? activeProjects.find((project) => project.id === selectedIds[0])?.title ?? "Недоступный проект"
     : formatRussianCount(selectedIds.length, ["проект", "проекта", "проектов"]);
 
@@ -57,8 +58,9 @@ export function ProjectScopeSelector({ projects, selectedIds, includeStandalone 
       <Icon name="folder" /><span>{label}</span><Icon name="caret" />
     </button>
     {open ? createPortal(<div aria-label="Проекты для ИИ-поиска" className="nf-popover rag-project-popover" ref={popoverRef} role="dialog" style={{ ...style, visibility: style ? "visible" : "hidden" }}>
+      <div className="field-help">Область поиска <InfoHint text="Ограничивает источники этого чата. Все заметки включают активные проекты и заметки вне проектов." /></div>
       {activeProjects.length > 7 ? <input aria-label="Поиск проекта" onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Найти проект…" type="search" value={query} /> : null}
-      <button aria-pressed={!selectedIds} className="ghost-btn" disabled={busy} onClick={() => void change(null, true)} type="button"><Icon name={!selectedIds ? "check" : "folder"} /> Вся база</button>
+      <button aria-pressed={!selectedIds} className="ghost-btn" disabled={busy} onClick={() => void change(null, true)} type="button"><Icon name={!selectedIds ? "check" : "folder"} /> Все заметки</button>
       <div className="rag-project-options">
         <label><input checked={standaloneChecked} disabled={busy} onChange={() => void change(selectedIds ?? activeProjects.map((item) => item.id), !standaloneChecked)} type="checkbox" /><span>Заметки вне проектов</span></label>
         {shown.map((project) => <label key={project.id}><input checked={selectedIds === null || selectedIds.includes(project.id)} disabled={busy} onChange={() => {

@@ -9,6 +9,7 @@ import type {
   SaveEmbeddingProfileInput,
 } from "../../services/embeddingService";
 import { Icon } from "../../shared/Icon";
+import { InfoHint } from "../../shared/InfoHint";
 import { formatDisplayDateTime } from "../../shared/displayDate";
 import {
   ModelDiscoveryField,
@@ -393,7 +394,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
             Добавить модель
           </button>
         ) : null}
-        description="Находит связанные по смыслу фрагменты заметок и используется для поиска по базе знаний."
+        description="Находит связанные по смыслу фрагменты заметок и используется для поиска по базе знаний"
         info="Модель смыслового поиска не создаёт ответы. Она находит связанные по смыслу фрагменты во всей базе заметок. В RAG найденные фрагменты используются как источники для ответа ИИ."
         title="Смысловой поиск (RAG)"
       />
@@ -404,7 +405,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
           <div className="semantic-empty-state model-empty-state">
             <span className="semantic-empty-icon"><Icon name="search" /></span>
             <b>Смысловой поиск (RAG) пока не настроен</b>
-            <p>Подключите локальную или облачную модель, чтобы искать заметки по смыслу.</p>
+            <p>Подключите локальную или облачную модель, чтобы искать заметки по смыслу</p>
             <button className="primary-btn" onClick={openNewProfile} type="button">Добавить модель</button>
           </div>
         ) : null}
@@ -465,7 +466,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       {isFormOpen ? (
         <SettingsModalShell
           className="semantic-profile-modal"
-          description="Настройте отдельную модель для поиска заметок по смыслу. Подключение не меняет модель ИИ-помощника."
+          description="Модель смыслового поиска настраивается отдельно от ИИ-помощника"
           eyebrow={form.id ? "Редактирование" : "Новая модель"}
           footer={(
             <div className="settings-modal-footer-actions">
@@ -486,8 +487,8 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
               value={form.providerType}
             />
             <div className="form-grid semantic-profile-form">
-              <label className="field full">Название<input onChange={(event) => updateForm({ name: event.currentTarget.value })} value={form.name} /></label>
-              <label className="field full">Адрес подключения<input onChange={(event) => updateForm({ baseUrl: event.currentTarget.value })} spellCheck={false} value={form.baseUrl} /></label>
+              <label className="field full"><span className="field-label">Название <InfoHint text="Имя этого подключения в NoteFlow. Не влияет на выбор модели на сервере." /></span><input onChange={(event) => updateForm({ name: event.currentTarget.value })} value={form.name} /></label>
+              <label className="field full"><span className="field-label">Адрес подключения <InfoHint text="Адрес Ollama, LM Studio или облачного API модели. Секретный ключ вводится отдельно." /></span><input onChange={(event) => updateForm({ baseUrl: event.currentTarget.value })} spellCheck={false} value={form.baseUrl} /></label>
               <ModelDiscoveryField
                 label="Модель смыслового поиска (RAG)"
                 manualPlaceholder="Укажите Model ID"
@@ -500,11 +501,11 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
                 state={modelDiscoveryState}
                 statusMessage={modelDiscoveryMessage}
               />
-              <label className="field full">Режим<select onChange={(event) => updateForm({ locality: event.currentTarget.value === "cloud" ? "cloud" : "local" })} value={form.locality}><option value="local">Локально</option><option value="cloud">Облачно</option></select></label>
-              <label className="field full">Путь смыслового поиска (RAG)<input onChange={(event) => updateForm({ embeddingsEndpoint: event.currentTarget.value })} spellCheck={false} value={form.embeddingsEndpoint} /></label>
-              <label className="field">Размер группы<input min="1" max="128" onChange={(event) => updateForm({ batchSize: event.currentTarget.value })} type="number" value={form.batchSize} /></label>
-              <label className="field">Ожидание ответа, сек.<input min="5" max="300" onChange={(event) => updateForm({ timeoutSeconds: event.currentTarget.value })} type="number" value={form.timeoutSeconds} /></label>
-              <label className="field full">API key<input autoComplete="off" onChange={(event) => updateForm({ apiKey: event.currentTarget.value, deleteApiKey: false })} placeholder={form.id ? "Оставьте пустым, чтобы сохранить текущий ключ" : "Не нужен для локальной Ollama"} type="password" value={form.apiKey} /></label>
+              <label className="field full"><span className="field-label">Режим <InfoHint text="Локальная обработка остаётся на вашем компьютере. Облачная отправляет фрагменты провайдеру только после вашего согласия." /></span><select onChange={(event) => updateForm({ locality: event.currentTarget.value === "cloud" ? "cloud" : "local" })} value={form.locality}><option value="local">Локально</option><option value="cloud">Облачно</option></select></label>
+              <label className="field full"><span className="field-label">Путь смыслового поиска (RAG) <InfoHint text="Путь API, который принимает текст и возвращает его числовое представление. Для Ollama обычно /api/embed." /></span><input onChange={(event) => updateForm({ embeddingsEndpoint: event.currentTarget.value })} spellCheck={false} value={form.embeddingsEndpoint} /></label>
+              <label className="field"><span className="field-label">Размер группы <InfoHint text="Сколько фрагментов отправлять за один запрос. Уменьшите значение, если сервер перегружен." /></span><input min="1" max="128" onChange={(event) => updateForm({ batchSize: event.currentTarget.value })} type="number" value={form.batchSize} /></label>
+              <label className="field"><span className="field-label">Ожидание ответа, сек. <InfoHint text="Максимальное время ожидания одного запроса к модели смыслового поиска." /></span><input min="5" max="300" onChange={(event) => updateForm({ timeoutSeconds: event.currentTarget.value })} type="number" value={form.timeoutSeconds} /></label>
+              <label className="field full"><span className="field-label">API key <InfoHint text="Ключ провайдера хранится в защищённом хранилище ОС и не попадает в резервную копию. Для локальной Ollama обычно не нужен." /></span><input autoComplete="off" onChange={(event) => updateForm({ apiKey: event.currentTarget.value, deleteApiKey: false })} placeholder={form.id ? "Оставьте пустым, чтобы сохранить текущий ключ" : "Не нужен для локальной Ollama"} type="password" value={form.apiKey} /></label>
               {form.id ? <button className="text-danger-action" onClick={() => updateForm({ apiKey: "", deleteApiKey: true })} type="button">{form.deleteApiKey ? "Сохранённый ключ будет удалён" : "Удалить сохранённый ключ"}</button> : null}
               {profiles.find((profile) => profile.id === form.id)?.dimensions ? (
                 <details className="semantic-technical-details full">

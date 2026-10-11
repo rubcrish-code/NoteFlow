@@ -20,6 +20,7 @@ import { ProjectScopeSelector } from "./ProjectScopeSelector";
 import { isRagHistoryOverlayMode, resolveRagPanelVisibility, transitionRagOverlays, type RagLayoutMode } from "./ragResponsiveLayout";
 import { useRagOverlayBounds } from "./useRagOverlayBounds";
 import { ragDrafts } from "./ragDrafts";
+import { SidebarPanel } from "../../shared/SidebarPanel";
 
 interface RagChatWorkspaceProps {
   conversationWidth: number;
@@ -429,9 +430,8 @@ export function RagChatWorkspace({
 
   return (
     <div className={`rag-page rag-production-chat rag-layout-${layoutMode} ${!sourcesVisible ? "sources-collapsed" : ""} ${!historyVisible ? "conversations-collapsed" : ""}`} style={pageStyle}>
-      {historyVisible ? (
-        <>
-          <aside aria-label="История диалогов" className={`rag-conversations ${historyIsOverlay ? "rag-panel-overlay" : ""}`}>
+      <SidebarPanel className={`rag-history-panel ${historyIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`} open={historyVisible} restoreFocusSelector='[aria-label="Показать историю чатов"]'>
+          <aside aria-label="История диалогов" className={`rag-conversations ${historyIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`}>
             <button className="secondary-btn rag-new-chat" onClick={() => void createChat()} type="button">
               <Icon name="plus" />
               Новый чат
@@ -489,9 +489,8 @@ export function RagChatWorkspace({
               {!isLoading && chats.length === 0 ? <div className="rag-history-empty">Создайте первый чат по базе заметок.</div> : null}
             </div>
           </aside>
-          {!historyIsOverlay ? <ResizeHandle className="rag-conversation-resize" label="Изменить ширину истории диалогов" onReset={onConversationReset} onResize={onConversationResize} /> : null}
-        </>
-      ) : null}
+      </SidebarPanel>
+      {historyVisible && !historyIsOverlay ? <ResizeHandle className="rag-conversation-resize" label="Изменить ширину истории диалогов" onReset={onConversationReset} onResize={onConversationResize} /> : null}
 
       <main className="rag-main-chat">
         <header className="rag-chat-header" ref={headerRef}>
@@ -615,10 +614,9 @@ export function RagChatWorkspace({
         </div>
       </main>
 
-      {sourcesVisible ? (
-        <>
-          {!sourcesIsOverlay ? <ResizeHandle className="rag-sources-resize" label="Изменить ширину источников RAG" onReset={onSourcesReset} onResize={onSourcesResize} /> : null}
-          <aside aria-label="Источники ответа" className={`rag-sources-panel ${sourcesIsOverlay ? "rag-panel-overlay" : ""}`}>
+      {sourcesVisible && !sourcesIsOverlay ? <ResizeHandle className="rag-sources-resize" label="Изменить ширину источников RAG" onReset={onSourcesReset} onResize={onSourcesResize} /> : null}
+      <SidebarPanel className={`rag-source-panel ${sourcesIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`} open={sourcesVisible} restoreFocusSelector='[aria-label="Источники ответа"]'>
+          <aside aria-label="Источники ответа" className={`rag-sources-panel ${sourcesIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`}>
             <div className="rag-sources-panel-head">
               <span className="rag-sources-panel-title"><b>Источники</b><span>{activeSources.length > 0 ? formatRussianCount(activeSources.length, FRAGMENT_COUNT_FORMS) : "Пока нет результатов"}</span></span>
               <button aria-label="Скрыть источники" className="rag-sources-close" data-tooltip="Скрыть источники" onClick={closeSources} type="button"><Icon name="x" /></button>
@@ -647,8 +645,7 @@ export function RagChatWorkspace({
               ) : null}
             </div>
           </aside>
-        </>
-      ) : null}
+      </SidebarPanel>
 
       {pendingPrivacyQuestion ? (
         <SettingsModalShell

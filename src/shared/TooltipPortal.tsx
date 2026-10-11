@@ -118,11 +118,19 @@ export function TooltipPortal() {
     }
 
     function handleFocusIn(event: FocusEvent) {
-      if (findTooltipTarget(event.target)?.dataset.tooltip === suppressedPointerTooltip) return;
       scheduleTooltip(event.target);
     }
 
     function handleMouseOut(event: MouseEvent) {
+      const trigger = anchorElementRef.current ?? pendingTrigger;
+      if (!trigger || !(event.target instanceof Node) || !trigger.contains(event.target)) return;
+      if (document.activeElement && trigger.contains(document.activeElement)) return;
+      hideTooltip(event);
+    }
+
+    function handleFocusOut(event: FocusEvent) {
+      const trigger = anchorElementRef.current ?? pendingTrigger;
+      if (!trigger || !(event.target instanceof Node) || !trigger.contains(event.target)) return;
       hideTooltip(event);
     }
 
@@ -142,6 +150,11 @@ export function TooltipPortal() {
     }
 
     function handlePointerInteraction(event: Event) {
+      const trigger = findTooltipTarget(event.target);
+      if (trigger?.classList.contains("info-hint")) {
+        scheduleTooltip(trigger);
+        return;
+      }
       suppressedPointerTooltip = findTooltipTarget(event.target)?.dataset.tooltip ?? null;
       hideTooltip(event);
     }
@@ -149,7 +162,7 @@ export function TooltipPortal() {
     document.addEventListener("mouseover", handleMouseOver);
     document.addEventListener("focusin", handleFocusIn);
     document.addEventListener("mouseout", handleMouseOut);
-    document.addEventListener("focusout", hideTooltip);
+    document.addEventListener("focusout", handleFocusOut);
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("pointermove", handlePointerMove);
     document.addEventListener("pointerdown", handlePointerInteraction, true);
@@ -161,7 +174,7 @@ export function TooltipPortal() {
       document.removeEventListener("mouseover", handleMouseOver);
       document.removeEventListener("focusin", handleFocusIn);
       document.removeEventListener("mouseout", handleMouseOut);
-      document.removeEventListener("focusout", hideTooltip);
+      document.removeEventListener("focusout", handleFocusOut);
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerdown", handlePointerInteraction, true);

@@ -133,6 +133,8 @@ it("actual AppShell clears the editor and reloads preserved projects/tags and RA
   await confirm(); await click("Удалить"); assert.equal(deleted, true);
   await click("Все заметки"); await wait(() => !container.querySelector(".tiptap"));
   assert.equal(container.querySelector(".note-item"), null); assert.doesNotMatch(container.textContent ?? "", /Old note|Old text/);
+  assert.ok(container.textContent?.includes("Создайте новую заметку"));
+  assert.ok(!container.textContent?.includes("Создайте новую заметку."));
   await click("Проекты"); await wait(() => (container.textContent ?? "").includes("Preserved project"));
   await click("Теги"); await wait(() => (container.textContent ?? "").includes("Preserved tag"));
   await click("ИИ-чат по базе"); await wait(() => ragLoads > 0);

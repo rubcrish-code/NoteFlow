@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ModalShell } from "../../shared/ModalShell";
+import { entityNameLength, validateEntityName } from "../../shared/entityName";
 import { formatDisplayDate, DatePicker as NoteDatePicker, todayIsoDate, type DatePickerHandle } from "../../shared/DatePicker";
 
 interface NewNoteModalProps {
@@ -10,6 +11,7 @@ interface NewNoteModalProps {
 
 export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
   const [title, setTitle] = useState("");
+  const [error, setError] = useState("");
   const [noteDate, setNoteDate] = useState(todayIsoDate);
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -19,6 +21,7 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
   useEffect(() => {
     if (isOpen) {
       setTitle("");
+      setError("");
       setNoteDate(todayIsoDate());
       setIsDatePickerOpen(false);
     }
@@ -26,6 +29,8 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const validation = validateEntityName(title.trim() || "Без названия");
+    if (validation) { setError(validation); return; }
     onCreate(title.trim() || "Без названия", noteDate || todayIsoDate());
   }
 
@@ -64,7 +69,9 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
       <form className="new-note-form" id="new-note-form" onSubmit={handleSubmit}>
         <label>
           Название заметки
-          <input onChange={(event) => setTitle(event.currentTarget.value)} placeholder="Например, Итоги встречи" ref={titleInputRef} type="text" value={title} />
+          <input aria-invalid={Boolean(error)} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder="Например, Итоги встречи" ref={titleInputRef} type="text" value={title} />
+          <small>{entityNameLength(title)}/25</small>
+          {error ? <span className="field-error" role="alert">{error}</span> : null}
         </label>
         <label>
           Дата заметки

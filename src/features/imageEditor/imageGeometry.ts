@@ -14,6 +14,12 @@ export interface Rect extends Size {
 
 export interface Bounds extends Size {}
 
+export function imageResizeStart(rendered: Size, layout: Size) {
+  const scaleX = layout.width > 0 ? rendered.width / layout.width : 1;
+  const scaleY = layout.height > 0 ? rendered.height / layout.height : scaleX;
+  return { size: { width: layout.width || rendered.width, height: layout.height || rendered.height }, scaleX: scaleX || 1, scaleY: scaleY || 1 };
+}
+
 export function getResizeCursor(handle: ResizeHandle) {
   const cursors: Record<ResizeHandle, string> = {
     e: "ew-resize",

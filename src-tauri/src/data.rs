@@ -1999,7 +1999,7 @@ impl DataStore {
         request: &CreateNoteRequest,
         now: &str,
     ) -> DataResult<String> {
-        let title = normalize_required_text(&request.title, "Название заметки")?;
+        let title = normalize_entity_title(&request.title, "Название заметки")?;
         validate_iso_date(&request.note_date)?;
         let note_id = Uuid::new_v4().to_string();
         let content_json = empty_document();
@@ -2258,7 +2258,7 @@ impl DataStore {
     }
 
     fn rename_note(&mut self, request: RenameNoteRequest) -> DataResult<NoteDto> {
-        let title = normalize_required_text(&request.title, "Название заметки")?;
+        let title = normalize_entity_title(&request.title, "Название заметки")?;
         self.conn.execute(
             "UPDATE notes SET title = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
             params![title, now_iso(), request.note_id],
@@ -2438,7 +2438,11 @@ impl DataStore {
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 'doc', ?9, ?10, ?10, ?10)",
                 params![
                     new_id,
-                    format!("{source_title} - копия"),
+                    if source_title.chars().count() + " - копия".chars().count() <= 25 {
+                        format!("{source_title} - копия")
+                    } else {
+                        "Копия заметки".to_string()
+                    },
                     source_note_date,
                     duplicate_content_json.to_string(),
                     duplicate_content_markdown,
@@ -2698,10 +2702,10 @@ impl DataStore {
         let mut statement = self.conn.prepare(
             "SELECT p.id, p.title, p.description, p.color, p.icon_key, p.status, p.archived_at,
                     COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND (p.archived_at IS NOT NULL OR n.archived_at IS NULL) THEN n.id END) AS note_count,
-                    COUNT(DISTINCT a.id) AS file_count
+                    COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND (p.archived_at IS NOT NULL OR n.archived_at IS NULL) THEN a.blob_id END) AS file_count
              FROM projects p
              LEFT JOIN notes n ON n.project_id = p.id
-             LEFT JOIN attachments a ON a.note_id = n.id
+             LEFT JOIN note_asset_refs a ON a.note_id = n.id
              WHERE ?1 OR p.archived_at IS NULL
              GROUP BY p.id
              ORDER BY lower(p.title)",
@@ -2725,7 +2729,7 @@ impl DataStore {
     }
 
     fn create_project(&mut self, request: CreateProjectRequest) -> DataResult<ProjectCardDto> {
-        let title = normalize_required_text(&request.title, "Название проекта")?;
+        let title = normalize_entity_title(&request.title, "Название проекта")?;
         let description = if request.description.trim().is_empty() {
             "Новое пространство заметок".to_string()
         } else {
@@ -2733,11 +2737,16 @@ impl DataStore {
         };
         let project_id = Uuid::new_v4().to_string();
         let now = now_iso();
-        self.conn.execute(
+        let transaction = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        ensure_unique_project_title(&transaction, &title, None)?;
+        transaction.execute(
             "INSERT INTO projects (id, title, description, color, icon_key, status, created_at, updated_at)
              VALUES (?1, ?2, ?3, 'blue', 'project', 'active', ?4, ?4)",
             params![project_id, title, description, now],
         )?;
+        transaction.commit()?;
         self.list_projects(false)?
             .into_iter()
             .find(|project| project.id == project_id)
@@ -2745,9 +2754,22 @@ impl DataStore {
     }
 
     fn update_project(&mut self, request: UpdateProjectRequest) -> DataResult<ProjectCardDto> {
-        let title = normalize_required_text(&request.title, "Название проекта")?;
         let description = request.description.trim();
-        let updated = self.conn.execute(
+        let transaction = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let existing_title: String = transaction.query_row(
+            "SELECT title FROM projects WHERE id = ?1",
+            params![request.project_id],
+            |row| row.get(0),
+        )?;
+        let title = if request.title.trim() == existing_title {
+            existing_title
+        } else {
+            normalize_entity_title(&request.title, "Название проекта")?
+        };
+        ensure_unique_project_title(&transaction, &title, Some(&request.project_id))?;
+        let updated = transaction.execute(
             "UPDATE projects SET title = ?1, description = ?2, updated_at = ?3
              WHERE id = ?4 AND archived_at IS NULL",
             params![title, description, now_iso(), request.project_id],
@@ -2755,6 +2777,7 @@ impl DataStore {
         if updated == 0 {
             return Err(DataError::NotFound("Проект не найден".to_string()));
         }
+        transaction.commit()?;
         self.list_projects(false)?
             .into_iter()
             .find(|project| project.id == request.project_id)
@@ -2800,7 +2823,7 @@ impl DataStore {
                     "Markdown-файлы слишком большие".to_string(),
                 ));
             }
-            normalize_required_text(&note.title, "Название заметки")?;
+            normalize_entity_title(&note.title, "Название заметки")?;
             if note.content_markdown.contains("noteflow-asset://")
                 || note.content_markdown.contains("noteflow-file://")
             {
@@ -2864,18 +2887,16 @@ impl DataStore {
 
     fn list_tags(&self, query: Option<String>) -> DataResult<Vec<TagRowDto>> {
         let trimmed_query = query.unwrap_or_default().trim().to_lowercase();
-        let like_query = format!("%{trimmed_query}%");
         let mut statement = self.conn.prepare(
             "SELECT t.id, t.name, t.color, t.custom_color, t.icon_key,
                     COUNT(DISTINCT CASE WHEN n.deleted_at IS NULL AND n.archived_at IS NULL THEN n.id END) AS note_count
              FROM tags t
              LEFT JOIN note_tags nt ON nt.tag_id = t.id
              LEFT JOIN notes n ON n.id = nt.note_id
-             WHERE ?1 = '' OR lower(t.name) LIKE ?2
              GROUP BY t.id
              ORDER BY lower(t.name)",
         )?;
-        let rows = statement.query_map(params![trimmed_query, like_query], |row| {
+        let rows = statement.query_map([], |row| {
             Ok(TagRowDto {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -2885,7 +2906,13 @@ impl DataStore {
                 count: row.get(5)?,
             })
         })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        Ok(rows
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|tag| {
+                trimmed_query.is_empty() || tag.name.to_lowercase().contains(&trimmed_query)
+            })
+            .collect())
     }
 
     fn create_tag(&mut self, request: CreateTagRequest) -> DataResult<TagRowDto> {
@@ -3122,41 +3149,46 @@ impl DataStore {
 
     fn delete_archive_item(&mut self, item_id: &str, kind: &str) -> DataResult<()> {
         if kind == "Проект" {
-            let transaction = self.conn.transaction()?;
-            let project_exists: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1 AND archived_at IS NOT NULL)",
-                params![item_id],
-                |row| row.get(0),
-            )?;
-            if !project_exists {
-                return Err(DataError::NotFound("Проект не найден в архиве".to_string()));
-            }
-            let note_ids = {
-                let mut statement = transaction
-                    .prepare("SELECT id FROM notes WHERE project_id = ?1 ORDER BY id")?;
-                let ids = statement
-                    .query_map(params![item_id], |row| row.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                ids
-            };
-            for note_id in &note_ids {
-                Self::delete_note_rows(&transaction, note_id)?;
-            }
-            if !note_ids.is_empty() {
-                knowledge::mark_index_changed(&transaction, &now_iso())?;
-            }
-            let changed = transaction.execute(
-                "DELETE FROM projects WHERE id = ?1 AND archived_at IS NOT NULL",
-                params![item_id],
-            )?;
-            if changed == 0 {
-                return Err(DataError::NotFound("Проект не найден в архиве".to_string()));
-            }
-            transaction.commit()?;
-            let _ = assets::collect_garbage(&mut self.conn, &self.base_dir);
+            self.delete_project_rows(item_id, true)?;
         } else {
             self.delete_note_permanently(item_id)?;
         }
+        Ok(())
+    }
+
+    fn delete_project_rows(&mut self, item_id: &str, archived_only: bool) -> DataResult<()> {
+        let transaction = self.conn.transaction()?;
+        let project_exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1 AND (?2 = 0 OR archived_at IS NOT NULL))",
+                params![item_id, archived_only],
+                |row| row.get(0),
+            )?;
+        if !project_exists {
+            return Err(DataError::NotFound("Проект не найден в архиве".to_string()));
+        }
+        let note_ids = {
+            let mut statement =
+                transaction.prepare("SELECT id FROM notes WHERE project_id = ?1 ORDER BY id")?;
+            let ids = statement
+                .query_map(params![item_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            ids
+        };
+        for note_id in &note_ids {
+            Self::delete_note_rows(&transaction, note_id)?;
+        }
+        if !note_ids.is_empty() {
+            knowledge::mark_index_changed(&transaction, &now_iso())?;
+        }
+        let changed = transaction.execute(
+            "DELETE FROM projects WHERE id = ?1 AND (?2 = 0 OR archived_at IS NOT NULL)",
+            params![item_id, archived_only],
+        )?;
+        if changed == 0 {
+            return Err(DataError::NotFound("Проект не найден в архиве".to_string()));
+        }
+        transaction.commit()?;
+        let _ = assets::collect_garbage(&mut self.conn, &self.base_dir);
         Ok(())
     }
 
@@ -6306,7 +6338,38 @@ fn default_ui_language() -> String {
 }
 
 fn default_ui_local_profile_name() -> String {
-    "Локальный профиль".to_string()
+    "Пользователь".to_string()
+}
+
+fn normalize_entity_title(value: &str, field: &str) -> DataResult<String> {
+    let title = normalize_required_text(value, field)?;
+    if title.chars().count() > 25 {
+        return Err(DataError::InvalidInput(
+            "Название не должно превышать 25 символов.".into(),
+        ));
+    }
+    Ok(title)
+}
+
+fn ensure_unique_project_title(
+    conn: &Connection,
+    title: &str,
+    except_id: Option<&str>,
+) -> DataResult<()> {
+    let mut statement = conn.prepare("SELECT id, title FROM projects")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let normalized = title.trim().to_lowercase();
+    for row in rows {
+        let (id, existing) = row?;
+        if except_id != Some(id.as_str()) && existing.trim().to_lowercase() == normalized {
+            return Err(DataError::InvalidInput(
+                "Проект с таким названием уже существует.".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn normalize_local_profile_name(value: &str) -> String {
@@ -6559,7 +6622,20 @@ fn command_error(error: DataError) -> PublicCommandError {
         ),
         DataError::InvalidInput(raw) => {
             let lower = raw.to_lowercase();
-            if raw == "Файл пустой" {
+            if raw == "Проект с таким названием уже существует." {
+                (
+                    "PROJECT_TITLE_EXISTS",
+                    "Проект с таким названием уже существует.",
+                    false,
+                )
+            } else if raw == "Название не должно превышать 25 символов."
+            {
+                (
+                    "TITLE_TOO_LONG",
+                    "Название не должно превышать 25 символов.",
+                    false,
+                )
+            } else if raw == "Файл пустой" {
                 (
                     "ATTACHMENT_EMPTY",
                     "Файл пустой. Выберите непустой файл.",
@@ -7821,6 +7897,16 @@ pub fn archive_project(
 }
 
 #[tauri::command]
+pub fn delete_project(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), PublicCommandError> {
+    state
+        .with_store(|store| store.delete_project_rows(&project_id, false))
+        .map_err(command_error)
+}
+
+#[tauri::command]
 pub fn list_archived_project_notes(
     project_id: String,
     state: State<'_, AppState>,
@@ -8306,6 +8392,291 @@ mod tests {
     use super::*;
     use crate::llm::SecretStorage;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn rc5_project_names_are_case_insensitive_and_length_bounded_without_touching_legacy() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("temporary store");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: " Работа ".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let error = store
+            .create_project(CreateProjectRequest {
+                title: "РАБОТА".into(),
+                description: "".into(),
+            })
+            .expect_err("duplicate");
+        assert_eq!(command_error(error).code, "PROJECT_TITLE_EXISTS");
+        assert!(store
+            .create_project(CreateProjectRequest {
+                title: "я".repeat(26),
+                description: "".into()
+            })
+            .is_err());
+        let legacy = "Старое название проекта длиннее двадцати пяти символов";
+        store
+            .conn
+            .execute(
+                "UPDATE projects SET title = ?1 WHERE id = ?2",
+                params![legacy, project.id],
+            )
+            .expect("legacy fixture");
+        let updated = store
+            .update_project(UpdateProjectRequest {
+                project_id: project.id.clone(),
+                title: legacy.into(),
+                description: "Описание".into(),
+            })
+            .expect("edit legacy description");
+        assert_eq!(updated.title, legacy);
+        drop(store);
+        assert_eq!(
+            DataStore::open(dir)
+                .expect("reopen")
+                .list_projects(false)
+                .expect("projects")[0]
+                .title,
+            legacy
+        );
+    }
+
+    #[test]
+    fn rc5_note_names_accept_25_unicode_characters_and_do_not_truncate_or_rewrite_legacy() {
+        let mut store = DataStore::open(temp_store_dir()).expect("store");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "😀".repeat(25),
+                note_date: "2026-10-09".into(),
+            })
+            .expect("25 emoji");
+        assert_eq!(note.title.chars().count(), 25);
+        let error = store
+            .create_note(CreateNoteRequest {
+                title: "я".repeat(26),
+                note_date: "2026-10-09".into(),
+            })
+            .expect_err("too long");
+        assert_eq!(command_error(error).code, "TITLE_TOO_LONG");
+        let legacy = "Старое название заметки значительно длиннее нового лимита";
+        store
+            .conn
+            .execute(
+                "UPDATE notes SET title = ?1 WHERE id = ?2",
+                params![legacy, note.id],
+            )
+            .expect("legacy");
+        assert_eq!(store.get_note(&note.id).expect("read legacy").title, legacy);
+        let duplicate = store.duplicate_note(&note.id).expect("duplicate legacy");
+        assert!(duplicate.title.chars().count() <= 25);
+        assert_eq!(
+            store.get_note(&note.id).expect("source unchanged").title,
+            legacy
+        );
+    }
+
+    #[test]
+    fn rc5_tag_filter_uses_literal_unicode_case_and_clearing_returns_all() {
+        let mut store = DataStore::open(temp_store_dir()).expect("store");
+        for name in ["РАБОТА", "Учёба", "100%"] {
+            store
+                .create_tag(CreateTagRequest {
+                    name: name.into(),
+                    color: "blue".into(),
+                    custom_color: None,
+                })
+                .expect("tag");
+        }
+        assert_eq!(
+            store
+                .list_tags(Some("работ".into()))
+                .expect("Russian filter")[0]
+                .name,
+            "РАБОТА"
+        );
+        assert_eq!(
+            store
+                .list_tags(Some("%".into()))
+                .expect("literal wildcard")
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .list_tags(Some("нет совпадений".into()))
+                .expect("empty")
+                .len(),
+            0
+        );
+        assert_eq!(store.list_tags(Some("".into())).expect("clear").len(), 3);
+    }
+
+    #[test]
+    fn rc5_project_file_counts_follow_current_refs_not_revision_or_attachment_metadata() {
+        let mut store = DataStore::open(temp_store_dir()).expect("store");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Assets".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: "Assets note".into(),
+                note_date: "2026-10-09".into(),
+            })
+            .expect("note");
+        store
+            .conn
+            .execute(
+                "UPDATE notes SET project_id = ?1 WHERE id = ?2",
+                params![project.id, note.id],
+            )
+            .expect("assign");
+        let image = store_test_image(&mut store, &note.id, "Фото.png", 31);
+        let saved = save_image_note(&mut store, &note, &image);
+        assert_eq!(
+            store.list_projects(false).expect("current reference")[0].files,
+            Some(1)
+        );
+        let duplicate = store
+            .duplicate_note(&saved.id)
+            .expect("same blob referenced twice");
+        assert_eq!(
+            store.list_projects(false).expect("deduplicated count")[0].files,
+            Some(1)
+        );
+        let cleared = store.update_note_content(persistence_request(&saved.id, saved.content_version, "Без файла", json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Без файла"}]}]}), vec![])).expect("remove from document");
+        assert_eq!(
+            store
+                .list_projects(false)
+                .expect("other document still references asset")[0]
+                .files,
+            Some(1)
+        );
+        assert!(
+            store
+                .resolve_storage_path(&image.storage_rel_path)
+                .expect("managed path")
+                .exists(),
+            "shared and revision asset remains available"
+        );
+        store.update_note_content(persistence_request(&duplicate.id, duplicate.content_version, "Без файла", json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Без файла"}]}]}), vec![])).expect("remove last document reference");
+        assert_eq!(
+            store
+                .list_projects(false)
+                .expect("metadata and revisions do not inflate counts")[0]
+                .files,
+            None
+        );
+        let saved = save_image_note(&mut store, &cleared, &image);
+        assert_eq!(
+            store.list_projects(false).expect("reinsert reference")[0].files,
+            Some(1)
+        );
+        store.delete_note(&saved.id).expect("delete first");
+        assert_eq!(
+            store.list_projects(false).expect("second reference")[0].files,
+            None
+        );
+        store.delete_note(&duplicate.id).expect("delete last");
+        assert_eq!(
+            store.list_projects(false).expect("no references")[0].files,
+            None
+        );
+    }
+
+    #[test]
+    fn rc5_active_project_delete_reuses_atomic_cascade_and_cleans_search() {
+        let mut store = DataStore::open(temp_store_dir()).expect("store");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "DELETE TEST".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let mut ids = Vec::new();
+        for index in 0..3 {
+            let note = store
+                .create_note(CreateNoteRequest {
+                    title: format!("QA delete {index}"),
+                    note_date: "2026-10-09".into(),
+                })
+                .expect("note");
+            store
+                .conn
+                .execute(
+                    "UPDATE notes SET project_id = ?1 WHERE id = ?2",
+                    params![project.id, note.id],
+                )
+                .expect("assign");
+            ids.push(note.id);
+        }
+        store
+            .delete_project_rows(&project.id, false)
+            .expect("active cascade");
+        assert!(store.list_projects(false).expect("projects").is_empty());
+        for id in ids {
+            assert!(store.get_note(&id).is_err());
+            let remaining: i64 = store
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM note_search_fts WHERE note_id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .expect("FTS");
+            assert_eq!(remaining, 0);
+        }
+    }
+
+    #[test]
+    fn rc5_active_project_delete_failure_rolls_back_project_notes_and_search() {
+        let mut store = DataStore::open(temp_store_dir()).expect("store");
+        let project = store
+            .create_project(CreateProjectRequest {
+                title: "Rollback".into(),
+                description: "".into(),
+            })
+            .expect("project");
+        let mut ids = Vec::new();
+        for index in 0..3 {
+            let note = store
+                .create_note(CreateNoteRequest {
+                    title: format!("Rollback {index}"),
+                    note_date: "2026-10-09".into(),
+                })
+                .expect("note");
+            store
+                .conn
+                .execute(
+                    "UPDATE notes SET project_id = ?1 WHERE id = ?2",
+                    params![project.id, note.id],
+                )
+                .expect("assign");
+            ids.push(note.id);
+        }
+        store.conn.execute_batch("CREATE TEMP TRIGGER rc5_delete_failure BEFORE DELETE ON projects BEGIN SELECT RAISE(ABORT, 'test fault'); END;").expect("fault trigger");
+        assert!(store.delete_project_rows(&project.id, false).is_err());
+        assert_eq!(
+            store.list_projects(false).expect("project rollback")[0].notes,
+            3
+        );
+        for id in ids {
+            assert!(store.get_note(&id).is_ok());
+            let count: i64 = store
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM note_search_fts WHERE note_id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .expect("FTS rollback");
+            assert_eq!(count, 1);
+        }
+    }
 
     fn temp_store() -> DataStore {
         let dir = std::env::temp_dir().join(format!("noteflow-test-{}", Uuid::new_v4()));

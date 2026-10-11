@@ -1,4 +1,4 @@
-export const DEFAULT_LOCAL_PROFILE_NAME = "Локальный профиль";
+export const DEFAULT_LOCAL_PROFILE_NAME = "Пользователь";
 export const LOCAL_PROFILE_NAME_MAX_LENGTH = 48;
 
 export function normalizeLocalProfileName(value: string) {

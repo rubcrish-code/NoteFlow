@@ -59,8 +59,8 @@ export async function generatePdf(input: ExportDocument): Promise<Uint8Array> {
       if (node.type === "fileAttachment") return [{ text: `[Файл: ${node.attrs?.name ?? "Вложение"}]` }];
       const level = Number(node.attrs?.level ?? 1);
       return [{ text: runs(node), bold: node.type === "heading" || node.type === "detailsSummary", fontSize: node.type === "heading" ? [20, 16, 13][Math.min(2, Math.max(0, level - 1))] : 11,
-        alignment: node.attrs?.textAlign === "right" ? "right" : node.attrs?.textAlign === "center" ? "center" : "left",
-        margin: [Math.min(6, Math.max(0, Number(node.attrs?.indent ?? 0))) * 18, node.type === "heading" ? 12 : 0, 0, 8] }];
+        alignment: node.attrs?.textAlign === "justify" ? "justify" : node.attrs?.textAlign === "right" ? "right" : node.attrs?.textAlign === "center" ? "center" : "left",
+        margin: [Math.min(20, Math.max(0, Number(node.attrs?.indent ?? 0))) * 18, node.type === "heading" ? 12 : 0, 0, 8] }];
     });
   }
   const definition: TDocumentDefinitions = { pageSize: "A4", pageMargins: [48, 48, 48, 48],

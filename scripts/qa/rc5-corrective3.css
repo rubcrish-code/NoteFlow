@@ -1,0 +1,12 @@
+.qa-workspace { height: 100vh; width: 100vw; }
+.qa-editor { display: flex; height: 100%; flex-direction: column; position: relative; }
+.qa-editor > .editor-writing-viewport { overflow: hidden; }
+.qa-editor .ed-scroll { overflow-y: auto; }
+.qa-editor .ed-body { max-width: none; width: 100%; }
+.qa-editor .ed-bottom { position: relative; flex: 0 0 48px; }
+.qa-page { padding: 32px; }
+.qa-table-top { height: 24px; }
+.qa-table-middle { height: 240px; }
+.qa-table-bottom { height: calc(100vh / var(--qa-zoom) - 190px); }
+.qa-note-menu { position: relative; height: 100%; }
+.qa-note-menu .note-menu-popover { left: 24px; top: 24px; right: auto; }

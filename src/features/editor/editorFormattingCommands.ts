@@ -6,7 +6,7 @@ import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
 export function runEditorFormattingCommand(editor: Editor, id: EditorToolbarActionId): boolean {
   const chain = editor.chain().focus();
   if (id === "h1" || id === "h2" || id === "h3") return chain.toggleHeading({ level: Number(id.slice(1)) as 1 | 2 | 3 }).run();
-  if (id === "align-left" || id === "align-center" || id === "align-right") return chain.setTextAlign(id.slice(6)).run();
+  if (id === "align-left" || id === "align-center" || id === "align-right" || id === "align-justify") return chain.setTextAlign(id.slice(6)).run();
   switch (id) {
     case "undo": return chain.undo().run();
     case "redo": return chain.redo().run();

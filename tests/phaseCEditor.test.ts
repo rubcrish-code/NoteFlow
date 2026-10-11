@@ -481,10 +481,10 @@ describe("Phase C actual editor behavior", () => {
   it("indents a paragraph only in sidecar, clamps it and reverses with Shift-Tab", () => {
     const editor = editorFor("<p>Текст</p>"); editor.commands.setTextSelection(2);
     for (let index = 0; index < 10; index++) assert.equal(tab(editor).defaultPrevented, true);
-    assert.equal(editor.getAttributes("paragraph").indent, 6);
+    assert.equal(editor.getAttributes("paragraph").indent, 10);
     const saved = serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument); assert.equal(saved.contentMarkdown, "Текст");
     editor.commands.setContent(reload(editor.getJSON() as EditorDocument)); editor.commands.setTextSelection(2);
-    assert.equal(editor.getAttributes("paragraph").indent, 6); tab(editor, true); assert.equal(editor.getAttributes("paragraph").indent, 5);
+    assert.equal(editor.getAttributes("paragraph").indent, 10); tab(editor, true); assert.equal(editor.getAttributes("paragraph").indent, 9);
   });
   it("indents and outdents multiple code lines without leaving the editor", () => {
     const editor = editorFor("<pre><code>one\ntwo</code></pre>"); editor.commands.setTextSelection({ from: 1, to: 8 });
@@ -528,6 +528,19 @@ function noteWith(text: string, id = "phase-c"): Note {
 }
 
 describe("Phase C mounted EditorArea synchronization and context menu", () => {
+  it("block insertion menu temporarily hides table tools without changing the table or selection", async () => {
+    const { editor, container } = await mount();
+    await act(async () => editor.commands.insertTable({ rows: 3, cols: 3 }));
+    const before = editor.getJSON(); const selection = editor.state.selection.toJSON();
+    const trigger = container.querySelector<HTMLButtonElement>('.ed-bottom button[data-tooltip="Вставить сложный блок"]'); assert.ok(trigger);
+    await act(async () => trigger.click());
+    assert.ok(container.querySelector('.block-menu-grid'));
+    assert.equal(document.querySelector('.table-tools-popover'), null);
+    assert.deepEqual(editor.getJSON(), before); assert.deepEqual(editor.state.selection.toJSON(), selection);
+    await act(async () => trigger.click());
+    assert.equal(container.querySelector('.block-menu-grid'), null);
+    assert.deepEqual(editor.getJSON(), before); assert.deepEqual(editor.state.selection.toJSON(), selection);
+  });
   for (const method of ["shortcut", "context"]) it(`RC4 imports a managed clipboard file through the mounted ${method} pipeline exactly once`, async () => {
     const { editor, container } = await mount();
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, "isTauri");
@@ -585,6 +598,43 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const editor = (container.querySelector(".tiptap") as HTMLElement & { editor: Editor }).editor;
     return { props, editor, container, render };
   }
+  it("note-menu Markdown import updates the existing note without calling new-note persistence", async () => {
+    const { File } = await import("node:buffer");
+    const { props, editor, container, render } = await mount();
+    const originalId = props.note.id;
+    const originalTitle = props.note.title;
+    const notes = new Map([[originalId, props.note]]);
+    let createCalls = 0;
+    props.onImportMarkdown = async () => { createCalls++; return 1; };
+    props.onEditorChange = (noteId, document) => {
+      const current = notes.get(noteId);
+      assert.ok(current);
+      notes.set(noteId, { ...current, editorDocument: document });
+    };
+    await render();
+    await act(async () => (container.querySelector('[data-tooltip="Меню заметки"]') as HTMLButtonElement).click());
+    const importAction = [...document.querySelectorAll<HTMLButtonElement>(".note-menu-popover button")]
+      .find((button) => button.textContent?.trim() === "Импортировать Markdown");
+    assert.ok(importAction);
+    await act(async () => importAction.click());
+    const picker = container.querySelector<HTMLInputElement>('input[type="file"][accept=".md,text/markdown"]')!;
+    Object.defineProperty(picker, "files", { configurable: true, value: [new File(["# Импорт\n\n- [ ] Задача"], "Другой заголовок.md")] });
+    await act(async () => {
+      picker.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const confirm = [...document.querySelectorAll<HTMLButtonElement>(".markdown-import-dialog button")]
+      .find((button) => button.textContent?.trim() === "Импортировать");
+    assert.ok(confirm);
+    await act(async () => confirm.click());
+    assert.equal(createCalls, 0);
+    assert.equal(notes.size, 1);
+    assert.equal(notes.get(originalId)?.id, originalId);
+    assert.equal(notes.get(originalId)?.title, originalTitle);
+    assert.ok(editor.getText().includes("Первая строка"));
+    assert.ok(editor.view.dom.querySelector("h1"));
+    assert.deepEqual(notes.get(originalId)?.editorDocument, JSON.parse(JSON.stringify(editor.getJSON())));
+  });
   it("RC4 drains in-flight formatted autosave before rapid A/B navigation without moving the live caret", async () => {
     const { props, editor, container, render } = await mount();
     type Snapshot = ReturnType<typeof serializeEditorDocumentForStorage>;

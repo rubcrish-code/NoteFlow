@@ -195,5 +195,5 @@ function getTitle(mode: EditorCommandPopoverMode) {
   if (mode === "table") {
     return "Таблица";
   }
-  return "Ссылка";
+  return "Гиперссылка";
 }

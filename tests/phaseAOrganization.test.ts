@@ -150,9 +150,10 @@ describe("Phase A organization UI", () => {
     await act(async () => buttonByText("Все", container.querySelector(".archive-filters")!).click());
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Действия с «Старый»"]')!.click());
     await act(async () => buttonByText("Удалить", document.querySelector(".row-actions-menu")!).click());
-    const confirm = buttonByText("Удалить", document.querySelector(".confirm-dialog")!);
-    assert.match(document.querySelector(".confirm-dialog")?.textContent ?? "", /Старый/);
-    assert.match(document.querySelector(".confirm-dialog")?.textContent ?? "", /все заметки внутри него: 2 заметки/);
+    const dialog = document.querySelector('[aria-labelledby="project-delete-title"]')!;
+    const confirm = buttonByText("Удалить проект", dialog);
+    assert.match(dialog.textContent ?? "", /Старый/);
+    assert.match(dialog.textContent ?? "", /все заметки внутри него: 2 заметки/);
     assert.doesNotMatch(document.body.textContent ?? "", /Удалить окончательно/);
     assert.equal(confirm.disabled, true);
     const input = document.querySelector<HTMLInputElement>(".archive-delete-name input")!;
@@ -172,9 +173,10 @@ describe("Phase A organization UI", () => {
     })));
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Действия с «Пустой»"]')!.click());
     await act(async () => buttonByText("Удалить", document.querySelector(".row-actions-menu")!).click());
-    const dialogText = document.querySelector(".confirm-dialog")?.textContent ?? "";
-    assert.match(dialogText, /Проект не содержит заметок/);
+    const dialog = document.querySelector('[aria-labelledby="project-delete-title"]')!;
+    const dialogText = dialog.textContent ?? "";
+    assert.match(dialogText, /Проект «Пустой» не содержит заметок/);
     assert.doesNotMatch(dialogText, /0 заметок|0 заметки/);
-    assert.equal(buttonByText("Удалить", document.querySelector(".confirm-dialog")!).disabled, true);
+    assert.equal(buttonByText("Удалить проект", dialog).disabled, true);
   });
 });

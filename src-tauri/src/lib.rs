@@ -116,6 +116,7 @@ pub fn run() {
             assets::get_attachment_policy,
             data::archive_note,
             data::archive_project,
+            data::delete_project,
             data::accept_embedding_cloud_consent,
             data::cancel_embedding_indexing,
             data::create_backup,

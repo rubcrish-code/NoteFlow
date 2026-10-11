@@ -115,10 +115,10 @@ describe("editor UI polish contract", () => {
     assert.match(tableTools, /event\.stopPropagation\(\)/);
     assert.match(tableTools, /onMouseDown=\{preserveTableToolSelection\}/);
     assert.match(tableTools, /onPointerDown=\{stopInternalTableToolPointer\}/);
-    assert.match(tableTools, /isTableToolsEventTarget\(event\.target, popoverRef\.current\)/);
-    assert.match(tableTools, /closest\('\[data-noteflow-table-tools-anchor="true"\]'\)/);
-    assert.match(tableTools, /document\.addEventListener\("keydown", handleKeyDown, true\)/);
-    assert.match(tableTools, /event\.key === "Escape"/);
+    assert.match(tableTools, /<MenuPopover anchorRef=\{triggerRef\}/);
+    const menu = readFileSync("src/shared/MenuPopover.tsx", "utf8");
+    assert.match(menu, /!anchorRef\.current\?\.contains\(target\) && !popoverRef\.current\?\.contains\(target\)/);
+    assert.match(menu, /event\.key === "Escape"/);
   });
 
   it("wires table menu actions to TipTap commands without closing the menu first", () => {
@@ -136,7 +136,7 @@ describe("editor UI polish contract", () => {
     assert.match(tableTools, /command === "deleteTable"/);
     assert.match(tableTools, /command === "mergeCells"/);
     assert.match(tableTools, /command === "splitCell"/);
-    assert.match(tableTools, /chain\.toggleHeaderRow\(\)\.run\(\)/);
+    assert.match(tableTools, /toggleSelectedTableHeader\("row", editor\.state/);
     assert.match(tableTools, /if \(didRun\) \{\s*captureTableSelection\(\);/);
   });
 

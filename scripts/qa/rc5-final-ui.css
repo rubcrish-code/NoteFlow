@@ -1,0 +1,5 @@
+/* Emulate native WebView zoom in the full physical browser viewport. */
+.app-zoom-root.css-zoom-fallback {
+  width: calc(100vw / var(--app-zoom));
+  height: calc(100vh / var(--app-zoom));
+}

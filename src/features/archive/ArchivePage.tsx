@@ -11,6 +11,7 @@ import { getTagDisplayColor } from "../tags/tagPalette";
 import type { TagColor } from "../../app/types";
 import { formatRussianCount, NOTE_COUNT_FORMS } from "../../shared/russianPlural";
 import { formatDisplayDate } from "../../shared/displayDate";
+import { ProjectDeleteDialog } from "../projects/ProjectDeleteDialog";
 
 interface ArchivePageProps {
   archiveItems: ArchiveItem[];
@@ -31,7 +32,6 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
   const [loadingProject, setLoadingProject] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [confirmationName, setConfirmationName] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ArchiveItem | null>(null);
   const [openItemMenuId, setOpenItemMenuId] = useState("");
   const itemMenuAnchorRef = useRef<HTMLButtonElement>(null);
@@ -96,7 +96,6 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
       await onDeleteItem(pendingDelete);
       if (openProject?.id === pendingDelete.id) { setOpenProject(null); setPreviewNote(null); }
       setPendingDelete(null);
-      setConfirmationName("");
     } catch {
       setActionError("Не удалось удалить элемент архива.");
     } finally {
@@ -108,13 +107,13 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
     ? (pendingDelete.noteCount ?? 0) > 0
       ? `Вместе с проектом будут удалены все заметки внутри него: ${formatRussianCount(pendingDelete.noteCount ?? 0, NOTE_COUNT_FORMS)}. Это действие нельзя отменить.`
       : "Проект не содержит заметок. Это действие нельзя отменить."
-    : "Заметка будет удалена из локальной базы NoteFlow. Это действие нельзя отменить.";
+    : "После удаления заметку не получится восстановить.";
 
   return (
     <PageShell activeSection="archive" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
       <div className="archive-page-content">
         <div className="page-title">Архив</div>
-        <div className="page-subtitle">Завершённые и неактуальные материалы. Их можно восстановить в любой момент.</div>
+        <div className="page-subtitle">Архивные заметки можно восстановить в любой момент</div>
         <label className="search archive-search">
           <Icon name="search" />
           <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск в архиве…" type="search" value={query} />
@@ -150,9 +149,6 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
               </div>
             </button>
             <div className="archive-row-actions">
-              <button className="archive-action secondary-btn compact" disabled={actionBusy} onClick={() => void restoreItem(item)} type="button">
-                Восстановить
-              </button>
               <button
                 aria-expanded={openItemMenuId === item.id}
                 aria-haspopup="menu"
@@ -174,6 +170,7 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
                 onClose={closeItemMenu}
                 preferredWidth={210}
               >
+                <button disabled={actionBusy} onClick={() => { closeItemMenu(); void restoreItem(item); }} role="menuitem" type="button">Восстановить</button>
                 <button className="danger" onClick={() => { setOpenItemMenuId(""); setPendingDelete(item); }} role="menuitem" type="button">Удалить</button>
               </MenuPopover>
             </div>
@@ -189,7 +186,7 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
         )}
       </div>
 
-      {pendingDelete ? (
+      {pendingDelete?.kind === "Проект" ? <ProjectDeleteDialog title={pendingDelete.title} notes={pendingDelete.noteCount ?? 0} onClose={() => { setPendingDelete(null); setActionError(""); }} onDelete={() => onDeleteItem(pendingDelete).then(() => { if (openProject?.id === pendingDelete.id) { setOpenProject(null); setPreviewNote(null); } })} /> : pendingDelete ? (
         <ModalShell
           backdropClassName="confirm-backdrop"
           className="confirm-dialog"
@@ -201,18 +198,17 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
               <button className="secondary-btn" disabled={actionBusy} onClick={() => setPendingDelete(null)} type="button">
                 Отмена
               </button>
-              <button className="danger-btn" disabled={actionBusy || (pendingDelete.kind === "Проект" && confirmationName !== pendingDelete.title)} onClick={() => void deletePermanently()} type="button">
+              <button className="danger-btn" disabled={actionBusy} onClick={() => void deletePermanently()} type="button">
                 Удалить
               </button>
             </div>
           )}
-          onClose={() => { setPendingDelete(null); setConfirmationName(""); setActionError(""); }}
+          onClose={() => { setPendingDelete(null); setActionError(""); }}
           open
           size="compact"
-          title={pendingDelete.kind === "Проект" ? `Удалить проект «${pendingDelete.title}»?` : `Удалить заметку «${pendingDelete.title}»?`}
+          title={`Удалить заметку «${pendingDelete.title}»?`}
           titleId="delete-archive-title"
         >
-          {pendingDelete.kind === "Проект" ? <label className="archive-delete-name">Для подтверждения введите название проекта: <b>{pendingDelete.title}</b><input autoComplete="off" onChange={(event) => setConfirmationName(event.currentTarget.value)} value={confirmationName} /></label> : null}
           {actionError ? <div className="field-error" role="alert">{actionError}</div> : null}
         </ModalShell>
       ) : null}

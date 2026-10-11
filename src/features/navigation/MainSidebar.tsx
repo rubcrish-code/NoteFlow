@@ -44,14 +44,14 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
       <button
         aria-label={item.label}
         aria-current={isActive ? "page" : undefined}
-        className={`nav-i ${isActive ? "on" : ""}`}
+        className={`nav-i sidebar-action ${isActive ? "on" : ""}`}
         data-tooltip={item.label}
         key={item.section}
         onClick={() => onNavigate(item.section)}
         type="button"
       >
         <Icon name={item.icon} />
-        <span>{item.label}</span>
+        <span className="sidebar-action-label">{item.label}</span>
       </button>
     );
   }
@@ -59,13 +59,16 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
   return (
     <aside className="sb">
       <div className="sb-brand">
-        <div className="mark">
-          <Icon name="logo" />
+        <div className="sidebar-brand-copy">
+          <div className="mark">
+            <Icon name="logo" />
+          </div>
+          <span className="nm">NoteFlow</span>
         </div>
-        <span className="nm">NoteFlow</span>
         {onToggleCollapse ? (
           <button
             aria-label={collapsed ? "Развернуть боковую панель" : "Свернуть боковую панель"}
+            aria-expanded={!collapsed}
             className="col"
             data-tooltip={collapsed ? "Развернуть боковую панель" : "Свернуть боковую панель"}
             onClick={onToggleCollapse}
@@ -81,9 +84,9 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
         )}
       </div>
 
-      <button aria-label="Новая заметка" className="new-btn" data-tooltip="Новая заметка" onClick={onNewNote} type="button">
+      <button aria-label="Новая заметка" className="new-btn sidebar-action" data-tooltip="Новая заметка" onClick={onNewNote} type="button">
         <Icon name="plus" />
-        <span>Новая заметка</span>
+        <span className="sidebar-action-label">Новая заметка</span>
       </button>
 
       <nav aria-label="Основная навигация">
@@ -98,7 +101,7 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
           aria-label={`${localProfileName}, локальный профиль`}
           aria-expanded={isProfileOpen}
           aria-haspopup="menu"
-          className="sb-user"
+          className="sb-user sidebar-profile"
           data-tooltip={localProfileName}
           onClick={() => setIsProfileOpen((value) => !value)}
           ref={profileAnchorRef}

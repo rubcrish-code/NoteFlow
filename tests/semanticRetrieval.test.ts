@@ -63,7 +63,8 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
   });
 
   it("keeps the note list on the existing FTS flow only", () => {
-    assert.match(noteListSource, /searchResults\.map/);
+    assert.match(noteListSource, /orderedResults\.map/);
+    assert.match(noteListSource, /searchResults\.filter/);
     assert.match(noteListSource, /getNextSearchResultIndex/);
     assert.match(noteListSource, /includeArchivedSearch/);
     assert.doesNotMatch(noteListSource, /SemanticSearchResult|EmbeddingProfile|semanticSearch|hybridSearch|searchMode|По смыслу|Модель смыслового поиска/);

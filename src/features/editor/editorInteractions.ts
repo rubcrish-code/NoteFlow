@@ -3,7 +3,11 @@ import Link from "@tiptap/extension-link";
 import { TextSelection } from "@tiptap/pm/state";
 import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
 
-export const MAX_PARAGRAPH_INDENT = 6;
+export const MAX_PARAGRAPH_INDENT = 100;
+
+export function paragraphIndentLimit(width: number) {
+  return Math.min(MAX_PARAGRAPH_INDENT, Math.max(0, Math.floor((width - 120) / 24)));
+}
 
 export const EditorIndent = Extension.create({
   name: "editorIndent", priority: 1000,
@@ -11,7 +15,7 @@ export const EditorIndent = Extension.create({
     return [{ types: ["paragraph", "heading"], attributes: { indent: {
       default: 0,
       parseHTML: (element: HTMLElement) => Math.min(MAX_PARAGRAPH_INDENT, Math.max(0, Number(element.dataset.editorIndent) || 0)),
-      renderHTML: (attributes: Record<string, unknown>) => attributes.indent ? { "data-editor-indent": String(attributes.indent) } : {},
+      renderHTML: (attributes: Record<string, unknown>) => attributes.indent ? { "data-editor-indent": String(attributes.indent), style: `padding-inline-start: min(${Math.min(MAX_PARAGRAPH_INDENT, Math.max(0, Number(attributes.indent) || 0)) * 24}px, max(0px, calc(100% - 120px)))` } : {},
     } } }];
   },
   addKeyboardShortcuts() {
@@ -53,7 +57,9 @@ export const EditorIndent = Extension.create({
       } else {
         tr.doc.nodesBetween(selection.from, selection.to, (node, position) => {
           if (node.type.name !== "paragraph" && node.type.name !== "heading") return;
-          const next = Math.max(0, Math.min(MAX_PARAGRAPH_INDENT, Number(node.attrs.indent ?? 0) + (outdent ? -1 : 1)));
+          const current = Number(node.attrs.indent ?? 0);
+          const limit = paragraphIndentLimit(editor.view.dom.clientWidth || 600);
+          const next = outdent ? Math.max(0, current - 1) : Math.max(current, Math.min(limit, current + 1));
           tr.setNodeMarkup(position, undefined, { ...node.attrs, indent: next });
         });
       }

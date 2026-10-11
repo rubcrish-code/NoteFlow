@@ -63,6 +63,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
   const [insertError, setInsertError] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [dateOpen, setDateOpen] = useState(editTarget?.kind === "date");
   const calendarOpenRef = useRef(false);
   calendarOpenRef.current = calendarOpen;
   const [calloutOpen, setCalloutOpen] = useState(false);
@@ -257,7 +258,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
         </button>
       </div>
 
-      <div className="block-menu-grid">
+      <div className="block-menu-grid block-menu-tools">
         {blockMenuItems.map((item) => (
           <button className="block-menu-item" key={item.command} ref={item.command === "callout" ? calloutAnchorRef : undefined}
             aria-expanded={item.command === "callout" ? calloutOpen : undefined} aria-haspopup={item.command === "callout" ? "menu" : undefined}
@@ -269,9 +270,6 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
             </span>
           </button>
         ))}
-      </div>
-
-      <div className="block-menu-tools">
         <button className="block-menu-item" onClick={() => setMediaKind(mediaKind === "image" ? null : "image")} type="button">
           <Icon name="image" />
           <span>
@@ -287,6 +285,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
           </span>
         </button>
         {onCreateDrawing ? <button className="block-menu-item" onClick={onCreateDrawing} type="button"><Icon name="image" /><span><b>Создать рисунок</b><small>Пустой холст</small></span></button> : null}
+        <button className="block-menu-item" aria-expanded={dateOpen} onClick={() => setDateOpen((open) => !open)} type="button"><Icon name="date" /><span><b>Вставить дату</b><small>Выбрать в календаре</small></span></button>
       </div>
 
       {mediaKind ? <div className="block-media-requirements">
@@ -300,11 +299,11 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
       <CalloutColorPalette anchorRef={calloutAnchorRef} isOpen={calloutOpen} onClose={() => setCalloutOpen(false)}
         value={(editor?.getAttributes("callout").variant as CalloutVariant | undefined) ?? "info"} onChoose={insertCalloutVariant} />
 
-      {!editTarget || editTarget.kind === "date" ? (
+      {dateOpen ? (
         <div className="block-menu-inline">
           <DatePicker ref={datePickerRef} isOpen={calendarOpen} onOpenChange={setCalendarOpen} onChange={setDateDraft} value={dateDraft} />
           <button className="secondary-btn" disabled={!dateDraft.trim()} onClick={insertDate} onMouseDown={preserveEditorSelection} type="button">
-            {editTarget?.kind === "date" ? "Сохранить дату" : "Вставить дату"}
+            {editTarget?.kind === "date" ? "Сохранить дату" : "Вставить"}
           </button>
         </div>
       ) : null}

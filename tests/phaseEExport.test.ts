@@ -66,6 +66,17 @@ describe("Phase E portable documents", () => {
     assert.match(await zip.file("word/numbering.xml")!.async("string"), /w:start w:val="5"/);
     xml.window.close();
   });
+  it("RC5 exports justified paragraphs and deep indentation as actual DOCX and PDF", async () => {
+    const input: ExportDocument = { ...fixture, images: [], document: { type: "doc", content: [{ type: "paragraph", attrs: { textAlign: "justify", indent: 12 }, content: [{ type: "text", text: "Выравнивание по ширине. ".repeat(40), marks: [{ type: "bold" }, { type: "underline" }] }] }] } };
+    const zip = await JSZip.loadAsync(await generateDocx(input), { checkCRC32: true });
+    const xml = await zip.file("word/document.xml")!.async("string");
+    const document = new JSDOM(xml, { contentType: "text/xml" });
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    assert.ok([...document.window.document.getElementsByTagNameNS(ns, "jc")].some((node) => node.getAttribute("w:val") === "both"));
+    assert.ok([...document.window.document.getElementsByTagNameNS(ns, "ind")].some((node) => node.getAttribute("w:left") === "4320"));
+    assert.match(xml, /<w:b\/>/); assert.match(xml, /<w:u /); document.window.close();
+    const pdf = Buffer.from(await generatePdf(input)).toString("latin1"); assert.ok(pdf.startsWith("%PDF-")); assert.match(pdf, /%%EOF/);
+  });
   it("creates a real multipage PDF with embedded Unicode font and image, not a screenshot", async () => {
     const bytes = await generatePdf({ ...fixture, document: { type: "doc", content: [...fixture.document.content!, ...Array.from({ length: 100 }, () => ({ type: "paragraph", content: [{ type: "text", text: "Длинная заметка: русский текст, ёжик, проект, заметка." }] }))] } });
     const pdf = Buffer.from(bytes).toString("latin1");

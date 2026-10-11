@@ -726,6 +726,78 @@ mod tests {
     }
 
     #[test]
+    fn third_tag_search_uses_actual_relationships_and_exact_tag_filter() {
+        let conn = create_connection();
+        insert_note(
+            &conn,
+            "tagged",
+            "Обычная заметка",
+            "Текст",
+            None,
+            false,
+            false,
+        );
+        insert_note(
+            &conn,
+            "shared",
+            "Другая заметка",
+            "Текст",
+            None,
+            true,
+            false,
+        );
+        insert_note(
+            &conn,
+            "text-only",
+            "Исследование",
+            "Исследование",
+            None,
+            false,
+            false,
+        );
+        for (id, name) in [
+            ("one", "Первый"),
+            ("two", "Второй"),
+            ("three", "Исследование"),
+        ] {
+            conn.execute(
+                "INSERT INTO tags (id, name, color, icon_key) VALUES (?1, ?2, 'blue', 'tag')",
+                params![id, name],
+            )
+            .expect("tag");
+            conn.execute(
+                "INSERT INTO note_tags (note_id, tag_id) VALUES ('tagged', ?1)",
+                [id],
+            )
+            .expect("relationship");
+        }
+        conn.execute(
+            "INSERT INTO note_tags (note_id, tag_id) VALUES ('shared', 'three')",
+            [],
+        )
+        .expect("shared tag");
+        conn.execute_batch(SEARCH_MIGRATION_SQL).expect("migration");
+        let mut filter = request("ИССЛЕД");
+        filter.tag_id = Some("three".into());
+        assert_eq!(search_notes(&conn, &filter).expect("active tag").len(), 1);
+        filter.include_archived = true;
+        let results = search_notes(&conn, &filter).expect("archived tag");
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|note| note.note_id != "text-only"));
+        assert_eq!(
+            results
+                .iter()
+                .find(|note| note.note_id == "tagged")
+                .expect("tagged")
+                .tags
+                .len(),
+            3
+        );
+        filter.tag_id = Some("thr".into());
+        assert!(search_notes(&conn, &filter).expect("exact ID").is_empty());
+    }
+
+    #[test]
     fn triggers_keep_only_affected_search_documents_in_sync() {
         let conn = create_connection();
         conn.execute(

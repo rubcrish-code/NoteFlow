@@ -21,6 +21,7 @@ import type { TagEditorValue } from "../features/tags/TagEditorModal";
 import { mergeTagInNotes, removeTagFromNotes, replaceTagInNotes } from "../features/tags/tagState";
 import { createNotePreview } from "../features/notes/notePreview";
 import { ResizeHandle } from "../shared/ResizeHandle";
+import { SidebarPanel } from "../shared/SidebarPanel";
 import { Toast, type ToastAction } from "../shared/Toast";
 import { TooltipPortal } from "../shared/TooltipPortal";
 import { AppZoomProvider } from "../shared/AppZoomContext";
@@ -108,11 +109,12 @@ export function AppShell() {
   const [archiveItems, setArchiveItems] = useState<ArchiveItem[]>([]);
   const [activeNoteId, setActiveNoteId] = useState("");
   const [query, setQuery] = useState("");
+  const [searchTagId, setSearchTagId] = useState<string | null>(null);
   const [projectScope, setProjectScope] = useState<{ id: string; title: string } | null>(null);
   const [searchResults, setSearchResults] = useState<SearchNoteResult[]>([]);
   const [semanticOpenTarget, setSemanticOpenTarget] = useState<SemanticSearchResult | null>(null);
   const [searchStatus, setSearchStatus] = useState<NoteSearchStatus>("idle");
-  const [includeArchivedSearch, setIncludeArchivedSearch] = useState(false);
+  const [includeArchivedSearch, setIncludeArchivedSearch] = useState(true);
   const [searchRevision, setSearchRevision] = useState(0);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isSettingsLoading, setIsSettingsLoading] = useState(true);
@@ -122,6 +124,7 @@ export function AppShell() {
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isNewNoteModalOpen, setIsNewNoteModalOpen] = useState(false);
   const [isProfileNameModalOpen, setIsProfileNameModalOpen] = useState(false);
+  const [isTrainingOpen, setIsTrainingOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [editorReloadGeneration, setEditorReloadGeneration] = useState(0);
   const [workspaceReloadGeneration, setWorkspaceReloadGeneration] = useState(0);
@@ -140,6 +143,8 @@ export function AppShell() {
   const settingsSaveInFlightRef = useRef<Promise<void> | null>(null);
   const uiSettingsRef = useRef<UiSettings>(DEFAULT_UI_SETTINGS);
   const searchRequestIdRef = useRef(0);
+  const secondaryDataRequestRef = useRef(0);
+  const projectCountsRequestRef = useRef(0);
   const openedArchivedNoteIdRef = useRef<string | null>(null);
   const appZoom = useAppZoom({
     onZoomChange: showToast,
@@ -253,6 +258,7 @@ export function AppShell() {
     const requestId = searchRequestIdRef.current + 1;
     searchRequestIdRef.current = requestId;
     if (!trimmedQuery) {
+      setSearchTagId(null);
       setSearchResults([]);
       setSearchStatus("idle");
       if (openedArchivedNoteIdRef.current) {
@@ -273,7 +279,7 @@ export function AppShell() {
     setSearchStatus("searching");
     const timeoutId = window.setTimeout(() => {
       void searchService
-        .searchNotes({ includeArchived: includeArchivedSearch, projectId: projectScope?.id, query: trimmedQuery })
+        .searchNotes({ includeArchived: includeArchivedSearch, projectId: projectScope?.id, tagId: searchTagId ?? undefined, query: trimmedQuery })
         .then((results) => {
           if (searchRequestIdRef.current !== requestId) {
             return;
@@ -292,7 +298,7 @@ export function AppShell() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [includeArchivedSearch, isDataLoading, projectScope?.id, query, searchRevision]);
+  }, [includeArchivedSearch, isDataLoading, projectScope?.id, query, searchRevision, searchTagId]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -509,12 +515,25 @@ export function AppShell() {
   }
 
   async function refreshSecondaryData() {
+    const requestId = ++secondaryDataRequestRef.current;
+    ++projectCountsRequestRef.current;
     const generation = notesGenerationRef.current;
     const [loadedProjects, loadedTags, loadedArchiveItems] = await Promise.all([dataService.listProjects(), dataService.listTags(), dataService.listArchive()]);
-    if (generation !== notesGenerationRef.current) return;
+    if (generation !== notesGenerationRef.current || requestId !== secondaryDataRequestRef.current) return;
     setProjects(loadedProjects);
     setTags(loadedTags);
     setArchiveItems(loadedArchiveItems);
+  }
+
+  async function refreshProjectCounts() {
+    const requestId = ++projectCountsRequestRef.current;
+    const generation = notesGenerationRef.current;
+    const loadedProjects = await dataService.listProjects();
+    if (generation !== notesGenerationRef.current || requestId !== projectCountsRequestRef.current) return;
+    setProjects((current) => current.map((project) => {
+      const loaded = loadedProjects.find((candidate) => candidate.id === project.id);
+      return loaded ? { ...project, notes: loaded.notes, files: loaded.files } : project;
+    }));
   }
 
   async function flushPendingSave() {
@@ -563,6 +582,7 @@ export function AppShell() {
         } else {
           replaceNote(savedNote);
           setSaveStatus("saved");
+          if (savedNote.projectId) void refreshProjectCounts().catch(() => undefined);
         }
       },
     );
@@ -994,6 +1014,7 @@ export function AppShell() {
       const updatedTag = nextTags.find((tag) => tag.id === tagId);
       setTags(nextTags);
       if (updatedTag) setNotes((currentNotes) => replaceTagInNotes(currentNotes, updatedTag));
+      if (updatedTag && searchTagId === tagId) setQuery(updatedTag.name);
       setSearchRevision((revision) => revision + 1);
       showToast("Тег обновлён");
     } catch (error) {
@@ -1028,13 +1049,16 @@ export function AppShell() {
     }
   }
 
-  function openTagNotes(tagName: string) {
+  function openTagNotes(tagId: string) {
     void (async () => {
       if (!await tryFlushPendingSave()) return;
+      const tag = tags.find((item) => item.id === tagId);
+      if (!tag) return;
       activateSection("notes");
       setProjectScope(null);
-      setQuery(tagName);
-      showToast(`Открыты заметки с тегом «${tagName}»`);
+      setSearchTagId(tag.id);
+      setQuery(tag.name);
+      showToast(`Открыты заметки с тегом «${tag.name}»`);
     })();
   }
 
@@ -1045,6 +1069,7 @@ export function AppShell() {
       if (!project) return;
       activateSection("notes");
       setProjectScope({ id: project.id, title: project.title });
+      setSearchTagId(null);
       setActiveNoteId(notes.find((note) => note.projectId === project.id)?.id ?? "");
       setQuery("");
     })();
@@ -1071,6 +1096,20 @@ export function AppShell() {
     await refreshSecondaryData();
     setSearchRevision((revision) => revision + 1);
     showToast(item.kind === "Проект" ? "Проект и его заметки удалены" : "Заметка удалена");
+  }
+
+  async function deleteProject(projectId: string) {
+    if (!await tryFlushPendingSave()) throw new Error("Не удалось сохранить заметку перед удалением проекта.");
+    const affected = notes.filter((note) => note.projectId === projectId).map((note) => note.id);
+    await pendingSavesRef.current.deleteAfterInFlight(() => dataService.deleteProject(projectId), affected);
+    affected.forEach(forgetNoteChat);
+    const loadedNotes = await dataService.listNotes("");
+    setNotes(loadedNotes);
+    setActiveNoteId((id) => loadedNotes.some((note) => note.id === id) ? id : loadedNotes[0]?.id ?? "");
+    if (projectScope?.id === projectId) setProjectScope(null);
+    await refreshSecondaryData();
+    setSearchRevision((revision) => revision + 1);
+    showToast("Проект и его заметки удалены");
   }
 
   async function createBackup() {
@@ -1179,14 +1218,18 @@ export function AppShell() {
   const sharedFooter = (
     <SharedOverlays
       isNewNoteModalOpen={isNewNoteModalOpen}
-      isFirstRunOpen={firstRunRequired && !isDataLoading && !isSettingsLoading}
+      isFirstRunOpen={(firstRunRequired || isTrainingOpen) && !isDataLoading && !isSettingsLoading}
+      replayTraining={isTrainingOpen}
       isProfileNameModalOpen={isProfileNameModalOpen}
       localProfileName={uiSettings.localProfileName}
       onCloseNewNote={() => setIsNewNoteModalOpen(false)}
       onCloseProfileName={() => setIsProfileNameModalOpen(false)}
       onCreateNote={createNote}
       onCompleteFirstRun={completeFirstRun}
-      onDismissFirstRun={async () => { await dataService.dismissFirstRun(); setFirstRunRequired(false); }}
+      onDismissFirstRun={async () => {
+        if (isTrainingOpen) { setIsTrainingOpen(false); return; }
+        await dataService.dismissFirstRun(); setFirstRunRequired(false);
+      }}
       onSaveProfileName={(localProfileName) => {
         updateUiSettings({ localProfileName });
         setIsProfileNameModalOpen(false);
@@ -1244,7 +1287,7 @@ export function AppShell() {
     return renderLazyFeaturePage(
       "projects",
       "проекты",
-      <LazyProjectsPage onArchiveProject={archiveProject} onExportProject={exportProject} onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} onUpdateProject={updateProject} projects={projects} sidebar={sharedPageSidebar} />,
+      <LazyProjectsPage onArchiveProject={archiveProject} onDeleteProject={deleteProject} onExportProject={exportProject} onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} onUpdateProject={updateProject} projects={projects} sidebar={sharedPageSidebar} />,
     );
   }
 
@@ -1324,6 +1367,8 @@ export function AppShell() {
       <LazySettingsPage
         initialTarget={settingsTarget}
         appZoomPercent={appZoom.zoomPercent}
+        onApplyZoom={appZoom.setZoom}
+        onReplayTraining={() => setIsTrainingOpen(true)}
         localProfileName={uiSettings.localProfileName}
         onNavigate={navigate}
         onNewNote={openNewNoteModal}
@@ -1349,8 +1394,7 @@ export function AppShell() {
         className={`workspace ${isSidebarCollapsed ? "collapse-sb" : ""} ${isFocusMode ? "focus" : ""} ${isChatOpen ? "chat-open" : ""} ${hideNoteListForChat ? "workspace-hide-list-for-chat" : ""}`}
         style={workspaceStyle}
       >
-        {!isFocusMode ? (
-          <>
+        <SidebarPanel className="workspace-sidebar-panel" collapsed={isSidebarCollapsed} open={!isFocusMode} restoreFocusSelector='[data-tooltip="Выйти из режима фокуса"], [data-tooltip="Чат по заметке"]'>
             <MainSidebar
               activeSection="notes"
               collapsed={isSidebarCollapsed}
@@ -1365,7 +1409,8 @@ export function AppShell() {
                 }))
               }
             />
-            {!isSidebarCollapsed ? (
+        </SidebarPanel>
+            {!isSidebarCollapsed && !isFocusMode ? (
               <ResizeHandle
                 className="resize-sb"
                 label="Изменить ширину сайдбара"
@@ -1377,14 +1422,20 @@ export function AppShell() {
                 }
               />
             ) : null}
+        <SidebarPanel className="workspace-list-panel" open={!isFocusMode && !hideNoteListForChat} restoreFocusSelector='[data-tooltip="Выйти из режима фокуса"], [data-tooltip="Чат по заметке"]'>
             <NoteListPanel
               activeNoteId={activeNote?.id ?? ""}
               includeArchivedSearch={includeArchivedSearch}
               notes={scopedNotes}
-              onQueryChange={setQuery}
+              onQueryChange={(value) => { setSearchTagId(null); setQuery(value); }}
               onSelectNote={(noteId) => void openNote(noteId)}
               onToggleArchivedSearch={() => setIncludeArchivedSearch((includeArchived) => !includeArchived)}
               onTogglePin={toggleNotePin}
+              onDuplicateNote={duplicateNote}
+              onArchiveNote={(id) => removeNote(id, "archive")}
+              onDeleteNote={(id) => removeNote(id, "delete")}
+              onExportNote={exportNote}
+              onRestoreNote={(id) => { void dataService.restoreNote(id).then(async () => { setNotes(await dataService.listNotes("")); await refreshSecondaryData(); setSearchRevision((revision) => revision + 1); showToast("Заметка восстановлена"); }).catch(() => showToast("Не удалось восстановить заметку.")); }}
               projects={projects}
               projectScope={projectScope}
               onClearProjectScope={() => setProjectScope(null)}
@@ -1392,7 +1443,8 @@ export function AppShell() {
               searchResults={searchResults}
               searchStatus={searchStatus}
             />
-            <ResizeHandle
+        </SidebarPanel>
+            {!isFocusMode && !hideNoteListForChat ? <ResizeHandle
               className="resize-list"
               label="Изменить ширину списка заметок"
               onReset={() => updateUiSettings({ listWidth: 376 })}
@@ -1401,15 +1453,14 @@ export function AppShell() {
                   listWidth: clamp(currentSettings.listWidth + deltaX, 260, 560),
                 }))
               }
-            />
-          </>
-        ) : null}
+            /> : null}
 
         {activeNote ? (
           <EditorArea
             documentReloadGeneration={editorReloadGeneration}
             isFocusMode={isFocusMode}
             note={activeNote}
+            searchQuery={query}
             semanticOpenTarget={semanticOpenTarget}
             onArchiveNote={(noteId) => removeNote(noteId, "archive")}
             onDeleteNote={(noteId) => removeNote(noteId, "delete")}
@@ -1456,12 +1507,13 @@ export function AppShell() {
           <section className="editor-col empty-editor-state">
             <div className="empty-state-card">
               <b>{isDataLoading ? "Открываем локальную базу…" : "Заметок не найдено"}</b>
-              <span>{isDataLoading ? "SQLite готовит рабочее пространство NoteFlow." : "Создайте новую заметку или очистите поиск."}</span>
+              <span>{isDataLoading ? "SQLite готовит рабочее пространство NoteFlow." : "Создайте новую заметку"}</span>
             </div>
           </section>
         )}
 
-        {isChatOpen && !isFocusMode && activeNote ? (
+        <SidebarPanel className="workspace-chat-panel" open={isChatOpen && !isFocusMode && Boolean(activeNote)} restoreFocusSelector='[data-tooltip="Выйти из режима фокуса"], [data-tooltip="Чат по заметке"]'>
+        {activeNote ? (
           <NoteChatPanel
             note={activeNote}
             onClose={() => setIsChatOpen(false)}
@@ -1478,6 +1530,7 @@ export function AppShell() {
             onToast={showToast}
           />
         ) : null}
+        </SidebarPanel>
       </div>
   );
 }
@@ -1510,6 +1563,7 @@ function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFram
 
 interface SharedOverlaysProps {
   isFirstRunOpen: boolean;
+  replayTraining: boolean;
   isNewNoteModalOpen: boolean;
   isProfileNameModalOpen: boolean;
   localProfileName: string;
@@ -1523,10 +1577,10 @@ interface SharedOverlaysProps {
   onSaveProfileName: (name: string) => void;
 }
 
-function SharedOverlays({ isFirstRunOpen, isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onCompleteFirstRun, onDismissFirstRun, onSaveProfileName }: SharedOverlaysProps) {
+function SharedOverlays({ isFirstRunOpen, replayTraining, isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onCompleteFirstRun, onDismissFirstRun, onSaveProfileName }: SharedOverlaysProps) {
   return (
     <>
-      <FirstRunModal onClose={onDismissFirstRun} onCreate={onCompleteFirstRun} open={isFirstRunOpen} />
+      {isFirstRunOpen ? <FirstRunModal onClose={onDismissFirstRun} onCreate={onCompleteFirstRun} open replay={replayTraining} /> : null}
       <NewNoteModal isOpen={isNewNoteModalOpen} onClose={onCloseNewNote} onCreate={onCreateNote} />
       <LocalProfileModal name={localProfileName} onClose={onCloseProfileName} onSave={onSaveProfileName} open={isProfileNameModalOpen} />
       <Toast action={toastAction} message={toastMessage} />

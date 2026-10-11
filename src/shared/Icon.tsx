@@ -4,6 +4,9 @@ export type IconName =
   | "alignCenter"
   | "alignLeft"
   | "alignRight"
+  | "alignJustify"
+  | "unlink"
+  | "help"
   | "archive"
   | "annotationText"
   | "annotationArrow"
@@ -65,6 +68,12 @@ interface IconProps extends SVGProps<SVGSVGElement> {
 
 export function Icon({ name, ...props }: IconProps) {
   switch (name) {
+    case "help":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16h.01" strokeLinecap="round" /></svg>;
+    case "alignJustify":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" {...props}><path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" /></svg>;
+    case "unlink":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><path d="m3 3 18 18M8 16l-1 1a3.5 3.5 0 0 1-5-5l3-3m11 0 1-1a3.5 3.5 0 0 1 5 5l-3 3M10 14l4-4" strokeLinecap="round" /></svg>;
     case "hand":
       return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}><path d="M8 13V6a1.5 1.5 0 0 1 3 0v6-8a1.5 1.5 0 0 1 3 0v8-6a1.5 1.5 0 0 1 3 0v6-3a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-3l-4-6a1.5 1.5 0 0 1 2-2l2 2Z" strokeLinecap="round" strokeLinejoin="round" /></svg>;
     case "annotationArrow":
@@ -154,8 +163,7 @@ export function Icon({ name, ...props }: IconProps) {
     case "clear":
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
-          <path d="M7 7l10 10M7 17L17 7" strokeLinecap="round" />
-          <path d="M4 20h7" strokeLinecap="round" />
+          <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
         </svg>
       );
     case "code":

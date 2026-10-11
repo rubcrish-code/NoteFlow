@@ -43,7 +43,7 @@ export function markdownImportTitle(fileName: string) {
   const leaf = parts[parts.length - 1] ?? "";
   const title = leaf.replace(/\.md$/i, "").trim();
   if (!/\.md$/i.test(leaf) || !title) throw new Error("Выберите файл .md с корректным именем");
-  return title.slice(0, 180);
+  return title;
 }
 
 export function prepareMarkdownText(fileName: string, markdown: string): PreparedMarkdownNote {

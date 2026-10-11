@@ -63,18 +63,9 @@ export function NoteMenuPopover({
 
   return (
     <div className="note-menu-popover" ref={popoverRef} role="menu">
-      <div className="note-menu-head">
-        <div>
-          <b>Меню заметки</b>
-          <span>{note.title}</span>
-        </div>
-        <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
-          <Icon name="x" />
-        </button>
-      </div>
-
       {mode === "move" ? (
         <div className="note-menu-projects">
+          <p className="field-help">Заметка может находиться только в одном проекте.{note.projectId ? " Заметка будет перемещена из текущего проекта." : ""}</p>
           {projectOptions.map((project) => (
             <button
               className={project === note.project ? "active" : ""}
@@ -108,7 +99,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            Дублировать
+            <Icon name="copy" /><span>Дублировать</span>
           </button>
           <button
             onClick={() => {
@@ -117,21 +108,21 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            {note.pinned ? "Открепить заметку" : "Закрепить заметку"}
+            <Icon name="pin" /><span>{note.pinned ? "Открепить заметку" : "Закрепить заметку"}</span>
           </button>
           <button onClick={() => setMode("move")} type="button">
-            Добавить в проект
+            <Icon name="folder" /><span>Добавить в проект</span>
           </button>
           {note.projectId ? <button disabled={busy} onClick={() => {
             setBusy(true);
             setError("");
             void onRemoveFromProject(note.id).then(onClose).catch(() => setError("Не удалось убрать заметку из проекта.")).finally(() => setBusy(false));
-          }} type="button">Убрать из проекта</button> : null}
+          }} type="button"><Icon name="folder" /><span>Убрать из проекта</span></button> : null}
           <button
             onClick={() => { onImportMarkdown(); onClose(); }}
             type="button"
           >
-            Импортировать Markdown
+            <Icon name="doc" /><span>Импортировать Markdown</span>
           </button>
           <button
             onClick={() => {
@@ -140,7 +131,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            Архивировать
+            <Icon name="archive" /><span>Архивировать</span>
           </button>
           <button
             onClick={() => {
@@ -149,7 +140,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            Экспортировать
+            <Icon name="doc" /><span>Экспортировать</span>
           </button>
           <button
             className="danger"
@@ -159,7 +150,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            Удалить
+            <Icon name="x" /><span>Удалить</span>
           </button>
           {error ? <span className="field-error" role="alert">{error}</span> : null}
         </div>

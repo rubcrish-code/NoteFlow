@@ -40,6 +40,7 @@ export function ResizeHandle({ className = "", label, onResize, onReset }: Resiz
       aria-label={label}
       className={`resize-handle ${className} ${isDragging ? "dragging" : ""}`}
       onDoubleClick={onReset}
+      onLostPointerCapture={() => setIsDragging(false)}
       onPointerCancel={handlePointerEnd}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

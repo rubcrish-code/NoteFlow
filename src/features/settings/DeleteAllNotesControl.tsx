@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getDeleteAllNotesSummary, type DeleteAllNotesResult, type DeleteAllNotesSummary } from "../../services/dataService";
 import { Icon } from "../../shared/Icon";
+import { InfoHint } from "../../shared/InfoHint";
 import { formatRussianCount, NOTE_COUNT_FORMS } from "../../shared/russianPlural";
 import { SettingsModalShell } from "./ModelSettingsUi";
 
@@ -91,7 +92,7 @@ export function DeleteAllNotesControl({ disabled = false, getSummary = getDelete
     <section className="settings-card bulk-delete-zone" aria-labelledby="bulk-delete-heading">
       <div className="settings-section-head">
         <div>
-          <b id="bulk-delete-heading">Удаление заметок</b>
+          <b id="bulk-delete-heading">Удаление заметок <InfoHint text="Удаляет заметки и историю чатов без возможности отмены. Перед удалением сохраните резервную копию." /></b>
           <span>Удаляет все заметки, историю ИИ по базе и связанные данные. Проекты, теги, настройки и подключённые модели останутся.</span>
         </div>
       </div>

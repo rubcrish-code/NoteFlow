@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
 import type { ReactNode, Ref } from "react";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
+import { InfoHint } from "../../shared/InfoHint";
 
 export interface ProviderTypeOption<T extends string> {
   id: T;
@@ -120,7 +120,7 @@ export function ModelDiscoveryField({
 
   return (
     <div className="field full model-discovery-field">
-      <span className="field-label">{label}</span>
+      <span className="field-label">{label} <InfoHint text={purpose === "chat" ? "Модель для ответов ИИ. Выберите из списка сервера или укажите её точный ID вручную." : "Модель преобразует текст в числовое представление для поиска по смыслу, но не пишет ответы."} /></span>
       {availableOptions.length > 0 ? (
         <label className="model-discovery-select">
           <span>Доступные модели</span>
@@ -147,7 +147,7 @@ export function ModelDiscoveryField({
         {buttonLabel}
       </button>
       <label className="model-discovery-manual">
-        <span>Model ID вручную</span>
+        <span>Model ID вручную <InfoHint text="Точное имя модели у провайдера. Используйте ручной ввод, если сервер не предоставляет список моделей." /></span>
         <input
           onChange={(event) => onManualChange(event.currentTarget.value)}
           placeholder={manualPlaceholder}
@@ -226,56 +226,12 @@ interface SettingsSectionHeaderProps {
 }
 
 export function SettingsSectionHeader({ action, description, info, title }: SettingsSectionHeaderProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isDismissed, setIsDismissed] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    function handlePointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsOpen(false);
-        setIsDismissed(true);
-        rootRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
-      }
-    }
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isOpen]);
-
   return (
     <div className="model-section-header">
       <div className="model-section-heading">
         <div className="model-section-title-row">
           <h2>{title}</h2>
-          <div
-            className={`settings-info-control ${isOpen ? "open" : ""} ${isDismissed ? "dismissed" : ""}`}
-            onFocusCapture={() => setIsDismissed(false)}
-            onPointerLeave={() => setIsDismissed(false)}
-            ref={rootRef}
-          >
-            <button
-              aria-expanded={isOpen}
-              aria-label={`Подробнее: ${title}`}
-              className="settings-info-trigger"
-              onClick={() => {
-                setIsDismissed(false);
-                setIsOpen((current) => !current);
-              }}
-              title="Подробнее"
-              type="button"
-            >
-              <Icon name="callout" />
-            </button>
-            <div className="settings-info-popover" role="tooltip">{info}</div>
-          </div>
+          <InfoHint label={`Подробнее: ${title}`} text={info} />
         </div>
         <p>{description}</p>
       </div>

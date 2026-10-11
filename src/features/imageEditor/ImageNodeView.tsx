@@ -7,7 +7,7 @@ import { ModalShell } from "../../shared/ModalShell";
 import { runtimeAssetUrl } from "../editor/assetUri";
 import type { ImageEditMode } from "./imageEditService";
 import { copyImage, saveImage } from "../../services/imageTransferService";
-import { getResizeCursor, resizeHandles, resizeImageBox, type ResizeHandle, type Size } from "./imageGeometry";
+import { getResizeCursor, imageResizeStart, resizeHandles, resizeImageBox, type ResizeHandle, type Size } from "./imageGeometry";
 
 export interface EditableImageAttributes {
   alignment?: "center" | "left" | "right" | null;
@@ -103,7 +103,7 @@ function ImageNodeView(props: NodeViewProps) {
   const imageRef = useRef<HTMLImageElement>(null);
   const moreActionsRef = useRef<HTMLButtonElement>(null);
   const descriptionInputRef = useRef<HTMLInputElement>(null);
-  const resizeRef = useRef<{ handle: ResizeHandle; lastSize: Size; pointerId: number; startSize: Size; startX: number; startY: number } | null>(null);
+  const resizeRef = useRef<{ handle: ResizeHandle; lastSize: Size; pointerId: number; startSize: Size; startX: number; startY: number; scaleX: number; scaleY: number } | null>(null);
   const [draftSize, setDraftSize] = useState<Size | null>(null);
   const [isMoreActionsOpen, setIsMoreActionsOpen] = useState(false);
   const [isDescriptionOpen, setIsDescriptionOpen] = useState(false);
@@ -154,10 +154,8 @@ function ImageNodeView(props: NodeViewProps) {
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     const imageRect = imageRef.current?.getBoundingClientRect();
-    const startSize = {
-      height: Math.round(attrs.height ?? imageRect?.height ?? 220),
-      width: Math.round(attrs.width ?? imageRect?.width ?? 360),
-    };
+    const measured = imageResizeStart({ width: imageRect?.width ?? 360, height: imageRect?.height ?? 220 }, { width: imageRef.current?.offsetWidth ?? 0, height: imageRef.current?.offsetHeight ?? 0 });
+    const startSize = measured.size;
     resizeRef.current = {
       handle,
       lastSize: startSize,
@@ -165,6 +163,8 @@ function ImageNodeView(props: NodeViewProps) {
       startSize,
       startX: event.clientX,
       startY: event.clientY,
+      scaleX: measured.scaleX,
+      scaleY: measured.scaleY,
     };
     setDraftSize(startSize);
     document.body.style.cursor = getResizeCursor(handle);
@@ -179,11 +179,11 @@ function ImageNodeView(props: NodeViewProps) {
     event.preventDefault();
     event.stopPropagation();
     const editorWidth = imageRef.current?.closest(".ed-inner")?.clientWidth ?? 860;
-    const nextSize = resizeImageBox(resizeState.startSize, resizeState.handle, event.clientX - resizeState.startX, event.clientY - resizeState.startY, {
+    const nextSize = resizeImageBox(resizeState.startSize, resizeState.handle, (event.clientX - resizeState.startX) / resizeState.scaleX, (event.clientY - resizeState.startY) / resizeState.scaleY, {
       maxHeight: Math.max(120, editorWidth * 1.25),
       maxWidth: Math.max(160, editorWidth),
-      minHeight: 72,
-      minWidth: 120,
+      minHeight: Math.min(72, resizeState.startSize.height),
+      minWidth: Math.min(120, resizeState.startSize.width),
     });
     resizeRef.current = { ...resizeState, lastSize: nextSize };
     setDraftSize(nextSize);

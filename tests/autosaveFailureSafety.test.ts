@@ -36,6 +36,17 @@ function memoryPersistence() {
 }
 
 describe("autosave failure safety", () => {
+  it("project deletion invalidates only its own queued drafts and preserves unrelated edits", async () => {
+    const saves = new PendingNoteSaves<Draft>();
+    saves.enqueue(draft("project-note", 1, "to delete"));
+    saves.enqueue(draft("other-note", 2, "must save"));
+    await saves.deleteAfterInFlight(async () => {}, ["project-note"]);
+    assert.equal(saves.get("project-note"), null);
+    assert.equal(saves.get("other-note")?.text, "must save");
+    const db = memoryPersistence();
+    await saves.flush(db.persist, () => {});
+    assert.equal(db.stored.get("other-note")?.text, "must save");
+  });
   it("blocks an A to B switch after a failed flush and retains A until retry", async () => {
     const saves = new PendingNoteSaves<Draft>();
     const db = memoryPersistence();

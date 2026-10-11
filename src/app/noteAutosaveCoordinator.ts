@@ -61,14 +61,18 @@ export class PendingNoteSaves<T extends PendingSaveVersion> {
     this.generation += 1;
   }
 
-  async deleteAfterInFlight<TResult>(remove: () => Promise<TResult>): Promise<TResult> {
+  async deleteAfterInFlight<TResult>(remove: () => Promise<TResult>, noteIds?: readonly string[]): Promise<TResult> {
     if (this.suspended) throw new Error("Операция с заметками уже выполняется");
     this.suspended = true;
     try {
       // Do not flush unsent drafts. Settle only the write already dispatched.
       await this.inFlight?.catch(() => undefined);
       const result = await remove();
-      this.clear();
+      if (noteIds) {
+        noteIds.forEach((id) => this.pending.delete(id));
+      } else {
+        this.clear();
+      }
       return result;
     } finally {
       this.suspended = false;

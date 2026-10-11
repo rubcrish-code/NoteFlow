@@ -104,8 +104,8 @@ describe("P1.3 final UX polish", () => {
     assert.match(ragPageSource, /useObservedPhysicalElementWidth/);
     assert.match(ragWorkspaceSource, /preferredSourcesCollapsed/);
     assert.match(ragWorkspaceSource, /historyOverlayOpen/);
-    assert.match(ragCss, /\.rag-page\.rag-layout-narrow[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
-    assert.match(ragCss, /\.rag-page\.rag-layout-compact,[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+    assert.match(ragCss, /grid-template-columns: var\(--rag-history-track\) minmax\(0, 1fr\) var\(--rag-source-track\)/);
+    assert.match(ragCss, /:not\(\.rag-layout-wide\)\s*\{\s*--rag-history-track: 0px; --rag-source-track: 0px;/);
     assert.match(ragCss, /\.rag-sources-panel\.rag-panel-overlay/);
     assert.match(ragWorkspaceSource, /rag-input-wrap/);
     assert.match(ragWorkspaceSource, /aria-label="Состояние моделей и базы"/);
@@ -205,6 +205,7 @@ describe("P1.3 final UX polish", () => {
     assert.match(settingsSource, /getVersion\(\)/);
     assert.match(settingsSource, /title="О приложении"|>О приложении</);
     assert.doesNotMatch(settingsSource, /<span className="zoom-current">/);
-    assert.match(settingsSource, /className="zoom-reset-btn"[\s\S]*\{appZoomPercent\}%/);
+    assert.match(settingsSource, /className="zoom-reset-btn"[\s\S]*\{draftZoom\}%/);
+    assert.match(settingsSource, /Применить/);
   });
 });

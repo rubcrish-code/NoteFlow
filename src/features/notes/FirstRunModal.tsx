@@ -7,6 +7,7 @@ interface FirstRunModalProps {
   onClose: () => void | Promise<void>;
   onCreate: (name: string) => Promise<void>;
   open: boolean;
+  replay?: boolean;
 }
 
 const steps: { title: string; text: string; icon: IconName }[] = [
@@ -18,7 +19,7 @@ const steps: { title: string; text: string; icon: IconName }[] = [
   { title: "Ваши данные — ваш выбор", text: "Вы сами выбираете ИИ-модель: локальную или внешнюю. Перед облачной обработкой NoteFlow запросит ваше согласие.", icon: "gear" },
 ];
 
-export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
+export function FirstRunModal({ onClose, onCreate, open, replay = false }: FirstRunModalProps) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,6 +38,7 @@ export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (replay) { await skip(); return; }
     const validation = validateLocalProfileName(name);
     if (validation) {
       setError(validation);
@@ -67,7 +69,7 @@ export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
           {step > 0 ? <button className="secondary-btn" disabled={busy} onClick={() => setStep((current) => current - 1)} type="button">Назад</button> : null}
           <button className="primary-btn" disabled={busy} form={lastStep ? "first-run-form" : undefined} onClick={lastStep ? undefined : (event) => { event.preventDefault(); setStep((current) => current + 1); }} ref={nextButtonRef} type={lastStep ? "submit" : "button"}>
             {busy ? <span aria-hidden="true" className="button-spinner" /> : null}
-            {busy ? "Сохраняем…" : lastStep ? "Создать первую заметку" : "Далее"}
+            {busy ? "Сохраняем…" : lastStep ? replay ? "Завершить" : "Создать первую заметку" : "Далее"}
           </button>
         </div>
       )}
@@ -84,7 +86,7 @@ export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
         <span className="onboarding-dots" aria-hidden="true">{steps.map((_, index) => <i className={index === step ? "active" : ""} key={index} />)}</span>
       </div>
       {lastStep ? <form className="new-note-form" id="first-run-form" onSubmit={(event) => void submit(event)}>
-        <label>
+        {!replay ? <label>
           Как к вам обращаться?
           <input
             aria-invalid={Boolean(error)}
@@ -95,7 +97,7 @@ export function FirstRunModal({ onClose, onCreate, open }: FirstRunModalProps) {
             ref={nameInputRef}
             value={name}
           />
-        </label>
+        </label> : null}
         <p className="first-run-note">ИИ-модели можно подключить позже в Настройках.</p>
       </form> : null}
       {error ? <div className="field-error" role="alert">{error}</div> : null}

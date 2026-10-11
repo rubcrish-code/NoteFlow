@@ -16,7 +16,7 @@ interface TagsPageProps {
   onMergeTags: (sourceTagId: string, targetTagId: string) => Promise<void>;
   onNavigate: (section: AppSection) => void;
   onNewNote: () => void;
-  onOpenTag: (tagName: string) => void;
+  onOpenTag: (tagId: string) => void;
   onToast: (message: string) => void;
   onUpdateTag: (tagId: string, value: TagEditorValue) => Promise<void>;
   sidebar: PageShellSidebarProps;
@@ -98,7 +98,7 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
         <div className="tags-head">
           <div>
             <div className="page-title">Теги</div>
-            <div className="page-subtitle">Создавайте, редактируйте, объединяйте и удаляйте теги. Нажмите на тег, чтобы увидеть связанные заметки.</div>
+            <div className="page-subtitle">Управляйте тегами и открывайте связанные заметки</div>
           </div>
           <button className="primary-btn tags-new" onClick={openCreateDialog} ref={createButtonRef} type="button">
             <Icon name="plus" />
@@ -114,7 +114,7 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
         <div className="tags-table">
           {filteredTags.map((tag) => (
             <div className="tag-row" key={tag.id}>
-              <button className="tag-row-main" onClick={() => onOpenTag(tag.name)} type="button">
+              <button className="tag-row-main" onClick={() => onOpenTag(tag.id)} type="button">
                 <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagDisplayColor(tag) }} />
                 <div>
                   <b>{tag.name}</b>

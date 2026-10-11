@@ -4,9 +4,10 @@ import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
 import * as dataService from "../../services/dataService";
 import type { BackupPreview, ExportResult, ImportBackupResult } from "../../services/dataService";
 import { Icon } from "../../shared/Icon";
+import { InfoHint } from "../../shared/InfoHint";
 import { formatDisplayDateTime, formatDisplayTime } from "../../shared/displayDate";
 import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
-import { APP_ZOOM_MAX, APP_ZOOM_MIN } from "../../shared/appZoom";
+import { APP_ZOOM_MAX, APP_ZOOM_MIN, getNextAppZoom } from "../../shared/appZoom";
 import { APP_SHORTCUTS, EDITOR_SHORTCUTS, type ShortcutReference } from "../../shared/appShortcuts";
 import { useObservedPhysicalElementWidth } from "../../shared/useObservedPhysicalElementWidth";
 import * as llmProviderService from "../../services/llmProviderService";
@@ -31,7 +32,6 @@ import {
 import type { ModelDiscoveryOption, ModelDiscoveryState } from "./ModelSettingsUi";
 import { SemanticSearchSettings } from "./SemanticSearchSettings";
 import { getSettingsLayoutMode } from "./settingsResponsive";
-import { MarkdownImportControl } from "./MarkdownImportControl";
 import { DeleteAllNotesControl } from "./DeleteAllNotesControl";
 import type { PreparedMarkdownNote } from "./markdownImport";
 import {
@@ -47,6 +47,8 @@ import {
 interface SettingsPageProps {
   initialTarget?: "semantic-search";
   appZoomPercent: number;
+  onApplyZoom?: (percent: number) => void;
+  onReplayTraining?: () => void;
   localProfileName: string;
   theme: ThemeMode;
   onNavigate: (section: AppSection) => void;
@@ -147,6 +149,8 @@ interface ProviderFormState {
 export function SettingsPage({
   initialTarget,
   appZoomPercent,
+  onApplyZoom,
+  onReplayTraining,
   localProfileName,
   theme,
   onBackupCreate,
@@ -193,11 +197,12 @@ export function SettingsPage({
         </aside>
 
         <section className={`settings-content settings-content--${activePanel}`}>
-          {activePanel === "general" ? <GeneralSettings localProfileName={localProfileName} onEditLocalProfile={onEditLocalProfile} /> : null}
+          {activePanel === "general" ? <GeneralSettings localProfileName={localProfileName} onEditLocalProfile={onEditLocalProfile} onReplayTraining={onReplayTraining} /> : null}
           {activePanel === "models" ? <ModelsSettings onToast={onToast} /> : null}
           {activePanel === "appearance" ? (
             <AppearanceSettings
               appZoomPercent={appZoomPercent}
+              onApplyZoom={onApplyZoom}
               onThemeChange={onThemeChange}
               onToast={onToast}
               onZoomDecrease={onZoomDecrease}
@@ -227,13 +232,14 @@ export function SettingsPage({
 interface GeneralSettingsProps {
   localProfileName: string;
   onEditLocalProfile: () => void;
+  onReplayTraining?: () => void;
 }
 
-function GeneralSettings({ localProfileName, onEditLocalProfile }: GeneralSettingsProps) {
+function GeneralSettings({ localProfileName, onEditLocalProfile, onReplayTraining }: GeneralSettingsProps) {
   return (
     <div>
       <div className="settings-title">Основные</div>
-      <div className="settings-subtitle">Профиль и основные сведения о локальной работе NoteFlow.</div>
+      <div className="settings-subtitle">Профиль и основные сведения о локальной работе NoteFlow</div>
       <section className="settings-preference-group" aria-labelledby="general-profile-heading">
         <div className="settings-preference-label" id="general-profile-heading">Профиль</div>
         <div className="settings-preference-list">
@@ -241,6 +247,11 @@ function GeneralSettings({ localProfileName, onEditLocalProfile }: GeneralSettin
             <span className="settings-info-icon"><Icon name="person" /></span>
             <span className="settings-preference-copy"><b>{localProfileName}</b><small>Локальный профиль · на этом устройстве</small></span>
             <button className="secondary-btn compact" onClick={onEditLocalProfile} type="button">Изменить имя</button>
+          </div>
+          <div className="settings-preference-row">
+            <span className="settings-info-icon"><Icon name="bulb" /></span>
+            <span className="settings-preference-copy"><b>Знакомство с NoteFlow</b></span>
+            <button className="secondary-btn compact" onClick={onReplayTraining} type="button">Пройти обучение</button>
           </div>
         </div>
       </section>
@@ -1071,7 +1082,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   return (
     <div className="model-settings-page">
       <div className="settings-title">Модели ИИ</div>
-      <div className="settings-subtitle">Подключайте модели для генерации текста и смыслового поиска по базе заметок.</div>
+      <div className="settings-subtitle">Подключайте модели для генерации текста и смыслового поиска по базе заметок</div>
       <section className="model-settings-section">
         <SettingsSectionHeader
           action={providers.length > 0 ? (
@@ -1079,7 +1090,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
               Добавить модель
             </button>
           ) : null}
-          description="Генерируют и редактируют текст, отвечают на вопросы и используются в ИИ-помощнике."
+          description="Генерируют и редактируют текст, отвечают на вопросы и используются в ИИ-помощнике"
           info="Эти модели создают текст: отвечают на вопросы, редактируют заметки, сокращают, объясняют и выполняют другие действия ИИ-помощника. API key хранится только в защищённом хранилище операционной системы."
           title="Модели для ИИ-помощника"
         />
@@ -1088,7 +1099,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
           <div className="llm-empty-state-card model-empty-state">
             <div className="llm-empty-icon" aria-hidden="true"><Icon name="logo" /></div>
             <b>Модель ИИ пока не подключена</b>
-            <p>Подключите модель для работы ИИ-помощника и чата.</p>
+            <p>Подключите модель для работы ИИ-помощника и чата</p>
             <button className="primary-btn" onClick={() => openAddProvider()} type="button">
               Добавить модель
             </button>
@@ -1157,7 +1168,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       {isProviderModalOpen && !providerDeleteRequest ? (
         <SettingsModalShell
           className="llm-provider-modal"
-          description={privacyNotice}
+          description={privacyNotice === "Локальный endpoint: данные остаются на устройстве, если сервер действительно запущен локально." ? "Данные остаются на устройстве, только если сервер работает локально" : privacyNotice}
           eyebrow={draftMode === "edit" ? "Редактирование" : "Новая модель"}
           footer={(
             <div className="settings-modal-footer-layout">
@@ -1198,12 +1209,12 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
             />
             <div className="form-grid llm-provider-modal-form">
               <label className="field full">
-                Название подключения
+                <span className="field-label">Название подключения <InfoHint text="Понятное вам имя подключения. Оно не отправляется модели." /></span>
                 <input onChange={(event) => updateDraft({ name: event.currentTarget.value })} placeholder="Например, Ollama Local" value={form.name} />
               </label>
               {showBaseUrlField ? (
                 <label className="field full">
-                  Base URL
+                  <span className="field-label">Base URL <InfoHint text="Адрес сервера модели. Для локальной модели это адрес Ollama или LM Studio, для облачной — адрес API провайдера." /></span>
                   <input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })} placeholder={form.providerType === "ollama" ? "http://127.0.0.1:11434" : "https://…/v1"} value={form.baseUrl} />
                   <span className="field-help">
                     {form.providerType === "ollama"
@@ -1216,7 +1227,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
               ) : null}
               {showApiKeyField ? (
                 <label className="field full">
-                  API key
+                  <span className="field-label">API key <InfoHint text="Ключ доступа провайдера. После сохранения хранится в защищённом хранилище ОС и не включается в резервные копии." /></span>
                   <div className="secret-wrap">
                     <input
                       autoComplete="off"
@@ -1260,34 +1271,34 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
               <div className="form-grid advanced-grid llm-provider-modal-form">
                 {!showBaseUrlField ? (
                   <label className="field full">
-                    Base URL
+                    <span className="field-label">Base URL <InfoHint text="Адрес API. Для стандартного OpenAI оставьте значение по умолчанию." /></span>
                     <input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })} value={form.baseUrl} />
                     <span className="field-help">Стандартный OpenAI endpoint обычно не нужно менять.</span>
                   </label>
                 ) : null}
                 <label className="field">
-                  Тайм-аут, сек.
+                  <span className="field-label">Тайм-аут, сек. <InfoHint text="Максимальное время ожидания ответа модели. При превышении запрос завершится с ошибкой." /></span>
                   <input max="600" min="5" onChange={(event) => updateDraft({ timeoutSec: event.currentTarget.value })} type="number" value={form.timeoutSec} />
                 </label>
                 <label className="field">
-                  Контекст, токенов
+                  <span className="field-label">Контекст, токенов <InfoHint text="Объём текста, который модель может учитывать за один запрос. Значение должно соответствовать возможностям модели." /></span>
                   <input min="1024" onChange={(event) => updateDraft({ contextSize: event.currentTarget.value })} step="1024" type="number" value={form.contextSize} />
                 </label>
                 <label className="field">
-                  Температура
+                  <span className="field-label">Температура <InfoHint text="Низкое значение делает ответы более предсказуемыми, высокое — более разнообразными." /></span>
                   <input max="2" min="0" onChange={(event) => updateDraft({ temperature: event.currentTarget.value })} step="0.1" type="number" value={form.temperature} />
                 </label>
                 <label className="field full">
-                  Дополнительные HTTP-заголовки
+                  <span className="field-label">Дополнительные HTTP-заголовки <InfoHint text="Несекретные параметры, требуемые сервером. Ключи и Authorization сюда вводить нельзя." /></span>
                   <textarea onChange={(event) => updateDraft({ customHeadersJson: event.currentTarget.value })} placeholder='{"X-Organization":"example"}' rows={3} value={form.customHeadersJson} />
                   <span className="field-help">Секретные заголовки вроде Authorization или X-API-Key запрещены. Используйте поле API key.</span>
                 </label>
                 <label className="field">
-                  Путь списка моделей
+                  <span className="field-label">Путь списка моделей <InfoHint text="Путь API для получения доступных моделей, относительно Base URL." /></span>
                   <input onChange={(event) => updateDraft({ modelsEndpoint: event.currentTarget.value })} value={form.modelsEndpoint} />
                 </label>
                 <label className="field">
-                  Путь чата
+                  <span className="field-label">Путь чата <InfoHint text="Путь API для отправки сообщений, относительно Base URL." /></span>
                   <input onChange={(event) => updateDraft({ chatEndpoint: event.currentTarget.value })} value={form.chatEndpoint} />
                 </label>
                 <label className="field">
@@ -1324,6 +1335,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
 
 interface AppearanceSettingsProps {
   appZoomPercent: number;
+  onApplyZoom?: (percent: number) => void;
   theme: ThemeMode;
   onThemeChange: (theme: ThemeMode) => void;
   onToast: (message: string) => void;
@@ -1332,7 +1344,9 @@ interface AppearanceSettingsProps {
   onZoomReset: () => void;
 }
 
-function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZoomDecrease, onZoomIncrease, onZoomReset }: AppearanceSettingsProps) {
+export function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onApplyZoom }: AppearanceSettingsProps) {
+  const [draftZoom, setDraftZoom] = useState(appZoomPercent);
+  useEffect(() => setDraftZoom(appZoomPercent), [appZoomPercent]);
   const options: Array<{ id: ThemeMode; label: string }> = [
     { id: "light", label: "Светлая" },
     { id: "dark", label: "Тёмная" },
@@ -1342,7 +1356,7 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
   return (
     <div>
       <div className="settings-title">Внешний вид</div>
-      <div className="settings-subtitle">Тема приложения настраивается только в этом разделе.</div>
+      <div className="settings-subtitle">Тема приложения настраивается только в этом разделе</div>
       <div className="settings-card">
         <div className="theme-options">
           {options.map((option) => (
@@ -1375,15 +1389,16 @@ function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onZ
           </div>
         </div>
         <div className="zoom-settings-row">
-          <button className="zoom-step-btn" data-tooltip="Уменьшить масштаб" disabled={appZoomPercent <= APP_ZOOM_MIN} onClick={onZoomDecrease} type="button">
+          <button className="zoom-step-btn" data-tooltip="Уменьшить масштаб" disabled={draftZoom <= APP_ZOOM_MIN} onClick={() => setDraftZoom((value) => getNextAppZoom(value, "decrease"))} type="button">
             <Icon name="minus" />
           </button>
-          <button className="zoom-reset-btn" data-tooltip="Сбросить масштаб" onClick={onZoomReset} type="button">
-            {appZoomPercent}%
+          <button className="zoom-reset-btn" data-tooltip="Сбросить масштаб" onClick={() => setDraftZoom(getNextAppZoom(draftZoom, "reset"))} type="button">
+            {draftZoom}%
           </button>
-          <button className="zoom-step-btn" data-tooltip="Увеличить масштаб" disabled={appZoomPercent >= APP_ZOOM_MAX} onClick={onZoomIncrease} type="button">
+          <button className="zoom-step-btn" data-tooltip="Увеличить масштаб" disabled={draftZoom >= APP_ZOOM_MAX} onClick={() => setDraftZoom((value) => getNextAppZoom(value, "increase"))} type="button">
             <Icon name="plus" />
           </button>
+          <button className="primary-btn compact" disabled={draftZoom === appZoomPercent || !onApplyZoom} onClick={() => onApplyZoom?.(draftZoom)} type="button">Применить</button>
         </div>
       </div>
     </div>
@@ -1422,7 +1437,7 @@ export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()
   return isToday ? `сегодня, ${formatDisplayTime(date)}` : formatDisplayDateTime(date);
 }
 
-function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImportMarkdown, onDeleteAllNotes, onToast }: DataSettingsProps) {
+function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDeleteAllNotes, onToast }: DataSettingsProps) {
   const importInputRef = useRef<HTMLInputElement>(null);
   const importRequestIdRef = useRef(0);
   const knowledgeMoreRef = useRef<HTMLDetailsElement>(null);
@@ -1556,12 +1571,12 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImpor
   return (
     <div>
       <div className="settings-title">Данные и экспорт</div>
-      <div className="settings-subtitle">Резервные копии профиля, импорт и восстановление данных.</div>
+      <div className="settings-subtitle">Резервные копии профиля, импорт и восстановление данных</div>
       <div className="settings-card knowledge-index-card">
         <div className="settings-section-head knowledge-index-head">
           <div>
-            <b>База знаний</b>
-            <span>NoteFlow делит длинные заметки на небольшие части, чтобы точнее находить нужную информацию при ИИ-поиске.</span>
+            <b>База знаний <InfoHint text="Индекс обновляется после сохранения заметки. Облачная обработка запускается только после вашего согласия." /></b>
+            <span>NoteFlow делит длинные заметки на небольшие части, чтобы точнее находить нужную информацию при ИИ-поиске</span>
           </div>
           <span className={`status-pill ${visibleKnowledgeStatus === "current" ? "ok" : visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
             {knowledgeOperation ? <span aria-hidden="true" className="button-spinner" /> : null}
@@ -1570,7 +1585,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImpor
         </div>
         <div className="knowledge-index-metrics">
           <div><span>Заметки</span><b>{knowledgeStatus?.indexedNotes ?? 0} из {knowledgeStatus?.totalNotes ?? 0}</b></div>
-          <div><span>Фрагменты заметок для ИИ-поиска</span><b>{knowledgeStatus?.chunkCount ?? 0}</b></div>
+          <div><span>Фрагменты заметок для ИИ-поиска <InfoHint text="Небольшие части ваших заметок. Поиск находит подходящие части, чтобы ИИ не пришлось читать всю базу сразу. Оригинальные заметки не меняются." /></span><b>{knowledgeStatus?.chunkCount ?? 0}</b></div>
           <div><span>Последняя проверка</span><b>{formatKnowledgeCheckedAt(knowledgeStatus?.lastCheckedAt)}</b></div>
         </div>
         <div aria-live="polite" className={`knowledge-index-message ${knowledgeHasError || visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
@@ -1580,7 +1595,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImpor
           <details className="knowledge-index-more" ref={knowledgeMoreRef}>
             <summary>Восстановление индекса</summary>
             <div className="knowledge-repair-action">
-              <b>Исправление проблем</b>
+              <b>Исправление проблем <InfoHint text="Заново создаёт только индекс поиска. Заметки, вложения и история чатов сохраняются." /></b>
               <span>Удаляет служебные данные базы знаний и создаёт их заново. Ваши заметки не изменятся.</span>
               <button
                 className="export-action secondary"
@@ -1597,7 +1612,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImpor
       <div className="settings-card export-card">
         <div className="export-action-group">
           <div className="export-action-head">
-            <b>Резервная копия</b>
+            <b>Резервная копия <InfoHint text="Сохраняет заметки, вложения, историю чатов и настройки. API-ключи в копию не входят. Восстановление заменяет данные профиля." /></b>
             <span>Все данные профиля</span>
           </div>
           <div className="export-action-list">
@@ -1616,10 +1631,9 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onImpor
         </div>
         <div className="export-action-group recovery">
           <div className="export-action-head">
-            <b>Импорт и восстановление</b>
-            <span>Markdown-файлы или резервная копия NoteFlow</span>
+            <b>Импорт и восстановление <InfoHint text="Перед восстановлением вы увидите состав копии. Данные профиля будут заменены; сначала сохраните текущую резервную копию." /></b>
+            <span>Резервная копия NoteFlow</span>
           </div>
-          <MarkdownImportControl onImport={onImportMarkdown} />
           <button
             className="export-action secondary"
             disabled={importState.phase === "previewing" || importState.phase === "restoring"}
@@ -1783,7 +1797,7 @@ function ShortcutsSettings() {
   return (
     <div>
       <div className="settings-title">Горячие клавиши</div>
-      <div className="settings-subtitle">Сочетания, которые уже работают в приложении. На macOS используйте ⌘ вместо Ctrl.</div>
+      <div className="settings-subtitle">Сочетания, которые уже работают в приложении. На macOS используйте ⌘ вместо Ctrl</div>
       <ShortcutGroup label="Навигация" shortcuts={APP_SHORTCUTS} />
       <ShortcutGroup label="Редактор" shortcuts={EDITOR_SHORTCUTS} />
     </div>
@@ -1833,7 +1847,7 @@ function AboutSettings() {
   return (
     <div>
       <div className="settings-title">О приложении</div>
-      <div className="settings-subtitle">Локальные заметки, Markdown-first редактор и ИИ-инструменты с контролем приватности.</div>
+      <div className="settings-subtitle">Локальные заметки, Markdown-first редактор и ИИ-инструменты с контролем приватности</div>
       <div className="settings-card about-card">
         <span className="about-mark"><Icon name="logo" /></span>
         <span>

@@ -1,11 +1,13 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
+import { entityNameLength, validateEntityName } from "../../shared/entityName";
 import { prepareMarkdownFiles, type PreparedMarkdownNote } from "./markdownImport";
 
 interface MarkdownImportControlProps {
   onImport: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
   showTrigger?: boolean;
+  targetNoteTitle?: string;
 }
 
 export interface MarkdownImportControlHandle {
@@ -14,7 +16,7 @@ export interface MarkdownImportControlHandle {
 
 type ImportPhase = "closed" | "preparing" | "ready" | "importing" | "error";
 
-export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, MarkdownImportControlProps>(function MarkdownImportControl({ onImport, showTrigger = true }, ref) {
+export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, MarkdownImportControlProps>(function MarkdownImportControl({ onImport, showTrigger = true, targetNoteTitle }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
   const requestIdRef = useRef(0);
   const [phase, setPhase] = useState<ImportPhase>("closed");
@@ -48,10 +50,12 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
 
   async function importNotes() {
     if (phase !== "ready" || notes.length === 0) return;
+    const validation = notes.map((note) => validateEntityName(note.title)).find(Boolean);
+    if (targetNoteTitle === undefined && validation) { setError(validation); return; }
     setPhase("importing");
     setError("");
     try {
-      await onImport(notes);
+      await onImport(notes.map((note) => ({ ...note, title: note.title.trim() })));
       setPhase("closed");
     } catch {
       setError("Не удалось импортировать Markdown. Проверьте файлы и повторите попытку.");
@@ -81,7 +85,7 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
           backdropClassName="modal-backdrop"
           className="markdown-import-dialog"
           closeDisabled={phase === "importing"}
-          description="Выбранные файлы станут новыми заметками. Существующие заметки не изменятся."
+          description={targetNoteTitle === undefined ? "Выбранные файлы станут новыми заметками. Существующие заметки не изменятся." : "Текст будет вставлен в текущую заметку в место курсора. Если документ изменился, текст добавится в конец. Название заметки не изменится."}
           footer={(
             <div className="new-note-actions">
               <button className="secondary-btn" disabled={phase === "importing"} onClick={close} type="button">Отмена</button>
@@ -89,7 +93,7 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
               {phase === "ready" || phase === "importing" ? (
                 <button className="primary-btn" disabled={phase !== "ready"} onClick={() => void importNotes()} type="button">
                   {phase === "importing" ? <span aria-hidden="true" className="button-spinner" /> : null}
-                  {phase === "importing" ? "Импортируем…" : `Импортировать ${notes.length}`}
+                  {phase === "importing" ? "Импортируем…" : "Импортировать"}
                 </button>
               ) : null}
             </div>
@@ -103,8 +107,18 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
           {phase === "preparing" ? <p className="markdown-import-status" role="status">Проверяем файлы…</p> : null}
           {notes.length > 0 ? (
             <div className="markdown-import-preview">
-              <b>{notes.length === 1 ? "Будет создана 1 заметка" : `Будет создано заметок: ${notes.length}`}</b>
-              <ul>{notes.map((note, index) => <li key={`${note.title}-${index}`}>{note.title}</li>)}</ul>
+              <b>{targetNoteTitle !== undefined ? `Вставить в «${targetNoteTitle}»: файлов ${notes.length}` : notes.length === 1 ? "Будет создана 1 заметка" : `Будет создано заметок: ${notes.length}`}</b>
+              {targetNoteTitle === undefined ? <div className="new-note-form">{notes.map((note, index) => (
+                <label key={index}>Название заметки
+                  <input aria-invalid={Boolean(validateEntityName(note.title))} disabled={phase === "importing"} onChange={(event) => {
+                    const title = event.currentTarget.value;
+                    setNotes((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title } : item));
+                    setError("");
+                  }} value={note.title} />
+                  <small>{entityNameLength(note.title)}/25</small>
+                  {validateEntityName(note.title) ? <span className="field-error">{validateEntityName(note.title)}</span> : null}
+                </label>
+              ))}</div> : null}
               {skippedReferences > 0 ? (
                 <p className="markdown-import-warning" role="status">
                   Ссылки на файлы и изображения не перенесены ({skippedReferences}). Текст заметок сохранится.

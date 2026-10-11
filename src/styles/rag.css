@@ -5,11 +5,36 @@
   container-type: inline-size;
 }
 
-.rag-page.rag-layout-compact,
-.rag-page.rag-layout-compact.conversations-collapsed,
-.rag-page.rag-layout-narrow,
-.rag-page.rag-layout-tight {
-  grid-template-columns: minmax(0, 1fr);
+/* Constant tracks let both side panels animate without moving the chat's grid slot. */
+.rag-page.rag-production-chat:is(.rag-layout-wide, .rag-layout-compact, .rag-layout-narrow, .rag-layout-tight) {
+  --rag-history-track: calc(var(--ragcw, 280px) / var(--app-zoom, 1));
+  --rag-source-track: calc(var(--ragsw, 320px) / var(--app-zoom, 1));
+  grid-template-columns: var(--rag-history-track) minmax(0, 1fr) var(--rag-source-track);
+}
+.rag-page.rag-production-chat.conversations-collapsed { --rag-history-track: 0px; }
+.rag-page.rag-production-chat.sources-collapsed { --rag-source-track: 0px; }
+.rag-page.rag-production-chat:not(.rag-layout-wide) { --rag-history-track: 0px; --rag-source-track: 0px; }
+.rag-history-panel { grid-column: 1; grid-row: 1; }
+.rag-source-panel { grid-column: 3; grid-row: 1; }
+.rag-production-chat > .rag-main-chat { grid-column: 2; grid-row: 1; }
+.rag-history-panel > .rag-conversations,
+.rag-source-panel > .rag-sources-panel { height: 100%; box-sizing: border-box; }
+.rag-page > .sidebar-panel.rag-panel-overlay {
+  grid-column: 1 / -1;
+  box-shadow: none;
+  overflow: visible;
+  animation: none;
+  transform: translateX(0);
+  transition: opacity var(--motion-panel) var(--ease-standard), transform var(--motion-panel) var(--ease-standard);
+}
+.rag-page > .rag-history-panel.rag-panel-overlay { left: var(--space-2); width: min(300px, calc(100% - 2 * var(--space-2))); }
+.rag-page > .rag-source-panel.rag-panel-overlay { right: var(--space-2); width: min(360px, calc(100% - 2 * var(--space-2))); }
+.rag-page > .rag-history-panel.rag-panel-overlay[data-panel-open="false"] { transform: translateX(-12px); }
+.rag-page > .rag-source-panel.rag-panel-overlay[data-panel-open="false"] { transform: translateX(12px); }
+.rag-page .sidebar-panel > :is(.rag-conversations, .rag-sources-panel).rag-panel-overlay { position: relative; inset: auto; width: 100%; max-width: none; animation: none; }
+@starting-style {
+  .rag-page > .rag-history-panel.rag-panel-overlay[data-panel-animate="true"][data-panel-open="true"] { opacity: 0; transform: translateX(-12px); }
+  .rag-page > .rag-source-panel.rag-panel-overlay[data-panel-animate="true"][data-panel-open="true"] { opacity: 0; transform: translateX(12px); }
 }
 
 .rag-page .rag-panel-overlay {
@@ -73,6 +98,22 @@
   margin-bottom: var(--space-5);
   min-height: var(--control-height-default);
 }
+
+/* Fixed-size action controls must not inherit the browser's button padding. */
+.rag-page :is(.rag-history-menu-button, .rag-sources-close, .icon-close-btn, .chat-composer-send, .chat-copy-icon) {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.rag-page :is(.secondary-btn, .ghost-btn, .rag-inline-sources) {
+  align-items: center;
+  line-height: 1.2;
+}
+
+.rag-page button > svg { display: block; flex-shrink: 0; }
 
 .rag-new-chat:hover {
   background: var(--surface-hover);

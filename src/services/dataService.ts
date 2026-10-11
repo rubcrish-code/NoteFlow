@@ -563,6 +563,10 @@ export async function archiveProject(projectId: string) {
   await invoke<void>("archive_project", { projectId });
 }
 
+export async function deleteProject(projectId: string) {
+  await invoke<void>("delete_project", { projectId });
+}
+
 export async function importMarkdown(notes: readonly PreparedMarkdownNote[]) {
   const result = await invoke<{ notes: NoteDto[] }>("import_markdown", {
     request: {

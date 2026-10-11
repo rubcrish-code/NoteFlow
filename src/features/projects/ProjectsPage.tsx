@@ -5,10 +5,14 @@ import { MenuPopover } from "../../shared/MenuPopover";
 import { ModalShell } from "../../shared/ModalShell";
 import { FILE_COUNT_FORMS, formatRussianCount, NOTE_COUNT_FORMS } from "../../shared/russianPlural";
 import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
+import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
+import { entityNameLength, validateEntityName } from "../../shared/entityName";
+import { PublicCommandError } from "../../services/safeInvoke";
 
 interface ProjectsPageProps {
   projects: ProjectCard[];
   onArchiveProject: (projectId: string) => Promise<void>;
+  onDeleteProject?: (projectId: string) => Promise<void>;
   onExportProject: (project: ProjectCard) => Promise<void>;
   onCreateProject: (title: string, description: string) => Promise<ProjectCard>;
   onNavigate: (section: AppSection) => void;
@@ -19,10 +23,11 @@ interface ProjectsPageProps {
   sidebar: PageShellSidebarProps;
 }
 
-export function ProjectsPage({ projects, onArchiveProject, onExportProject, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast, onUpdateProject, sidebar }: ProjectsPageProps) {
+export function ProjectsPage({ projects, onArchiveProject, onDeleteProject, onExportProject, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast, onUpdateProject, sidebar }: ProjectsPageProps) {
   const [editingProject, setEditingProject] = useState<ProjectCard | null>(null);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [pendingArchive, setPendingArchive] = useState<ProjectCard | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ProjectCard | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const [openMenuId, setOpenMenuId] = useState("");
@@ -50,7 +55,7 @@ export function ProjectsPage({ projects, onArchiveProject, onExportProject, onCr
         <header className="content-page-header">
           <div>
             <div className="page-title">Проекты</div>
-            <div className="page-subtitle">Организуйте заметки и материалы по направлениям работы.</div>
+            <div className="page-subtitle">Организуйте заметки и материалы по направлениям работы</div>
           </div>
           <button className="primary-btn compact" onClick={() => { setEditingProject(null); setIsProjectModalOpen(true); }} type="button">
             <Icon name="plus" /> Новый проект
@@ -92,6 +97,8 @@ export function ProjectsPage({ projects, onArchiveProject, onExportProject, onCr
                   void onExportProject(project).then(closeMenu).catch((error) => onToast(error instanceof Error && error.message === "Не удалось сохранить изменения перед экспортом." ? error.message : "Не удалось экспортировать проект.")).finally(() => setExportBusy(""));
                 }} role="menuitem" type="button">{exportBusy === project.id ? <span aria-hidden="true" className="button-spinner" /> : null}{exportBusy === project.id ? "Сохраняем…" : "Экспортировать"}</button>
                 <button onClick={() => { closeMenu(); setArchiveError(""); setPendingArchive(project); }} role="menuitem" type="button">Архивировать</button>
+                <div className="nf-menu-separator" />
+                <button className="danger" disabled={!onDeleteProject} onClick={() => { closeMenu(); setPendingDelete(project); }} role="menuitem" type="button">Удалить проект</button>
               </MenuPopover>
             </article>
           ))}
@@ -113,8 +120,10 @@ export function ProjectsPage({ projects, onArchiveProject, onExportProject, onCr
             setIsProjectModalOpen(false);
           }}
           project={editingProject}
+          projects={projects}
         />
       ) : null}
+      {pendingDelete && onDeleteProject ? <ProjectDeleteDialog title={pendingDelete.title} notes={pendingDelete.notes} onClose={() => setPendingDelete(null)} onDelete={() => onDeleteProject(pendingDelete.id)} /> : null}
       {pendingArchive ? (
         <ModalShell
           backdropClassName="confirm-backdrop"
@@ -140,9 +149,10 @@ interface ProjectEditorModalProps {
   onClose: () => void;
   onSave: (title: string, description: string) => Promise<void>;
   project: ProjectCard | null;
+  projects: ProjectCard[];
 }
 
-function ProjectEditorModal({ onClose, onSave, project }: ProjectEditorModalProps) {
+function ProjectEditorModal({ onClose, onSave, project, projects }: ProjectEditorModalProps) {
   const [title, setTitle] = useState(project?.title ?? "");
   const [description, setDescription] = useState(project?.description ?? "");
   const [busy, setBusy] = useState(false);
@@ -152,12 +162,17 @@ function ProjectEditorModal({ onClose, onSave, project }: ProjectEditorModalProp
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!title.trim() || busy) return;
+    const validation = title.trim() === project?.title ? "" : validateEntityName(title);
+    if (validation) { setError(validation); return; }
+    if (projects.some((item) => item.id !== project?.id && item.title.trim().toLocaleLowerCase("ru-RU") === title.trim().toLocaleLowerCase("ru-RU"))) {
+      setError("Проект с таким названием уже существует."); return;
+    }
     setBusy(true);
     setError("");
     try {
       await onSave(title.trim(), description.trim());
-    } catch {
-      setError("Не удалось сохранить проект. Проверьте название и попробуйте ещё раз.");
+    } catch (cause) {
+      setError(cause instanceof PublicCommandError && (cause.code === "PROJECT_TITLE_EXISTS" || cause.code === "TITLE_TOO_LONG") ? cause.message : "Не удалось сохранить проект. Проверьте название и попробуйте ещё раз.");
     } finally {
       setBusy(false);
     }
@@ -178,7 +193,7 @@ function ProjectEditorModal({ onClose, onSave, project }: ProjectEditorModalProp
       titleId="project-editor-title"
     >
       <form className="new-note-form" id="project-editor-form" onSubmit={(event) => void submit(event)}>
-        <label>Название<input maxLength={180} onChange={(event) => setTitle(event.currentTarget.value)} placeholder="Например, Исследование рынка" ref={titleInputRef} value={title} /></label>
+        <label>Название<input aria-invalid={Boolean(error)} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder="Например, Исследование рынка" ref={titleInputRef} value={title} /><small>{entityNameLength(title)}/25</small></label>
         <label>Описание<input maxLength={500} onChange={(event) => setDescription(event.currentTarget.value)} placeholder="Короткое описание проекта" value={description} /></label>
         {error ? <div className="field-error" role="alert">{error}</div> : null}
       </form>

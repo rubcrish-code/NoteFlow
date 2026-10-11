@@ -8,6 +8,7 @@ export type EditorToolbarActionId =
   | "align-center"
   | "align-left"
   | "align-right"
+  | "align-justify"
   | "bold"
   | "clear"
   | "code-block"
@@ -73,7 +74,8 @@ export const EDITOR_TOOLBAR_ACTIONS: readonly EditorToolbarAction[] = [
   { group: "alignment", id: "align-left", tip: "По левому краю", icon: "alignLeft", priority: 57 },
   { group: "alignment", id: "align-center", tip: "По центру", icon: "alignCenter", priority: 56 },
   { group: "alignment", id: "align-right", tip: "По правому краю", icon: "alignRight", priority: 55 },
-  { group: "insert", id: "link", tip: "Ссылка", icon: "link", priority: 59 },
+  { group: "alignment", id: "align-justify", tip: "По ширине", icon: "alignJustify", priority: 55 },
+  { group: "insert", id: "link", tip: "Гиперссылка", icon: "link", priority: 59 },
   { group: "style", id: "clear", tip: "Очистить форматирование", icon: "clear", priority: 52 },
   { group: "ai", id: "ai", tip: "ИИ-помощник", label: "AI", priority: 99 },
 ];

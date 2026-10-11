@@ -50,8 +50,8 @@ describe("Phase B project selector", () => {
       return h(ProjectScopeSelector, { projects, selectedIds: ids, includeStandalone: standalone, busy: false, onChange: async (next, flag) => { saved.push({ ids: next, standalone: flag }); setIds(next); setStandalone(flag); } });
     }
     await act(async () => root.render(h(Harness)));
-    assert.equal(btn("Вся база").getAttribute("aria-label"), "Область поиска: Вся база");
-    await click(btn("Вся база"));
+assert.equal(btn("Все заметки").getAttribute("aria-label"), "Область поиска: Все заметки");
+    await click(btn("Все заметки"));
     assert.equal(document.querySelector('[role="dialog"]')?.parentElement, document.body);
     assert.doesNotMatch(document.querySelector('[role="dialog"]')!.textContent!, /ARCHIVED/);
     assert.equal(checkbox("ALPHA").checked, true);
@@ -64,8 +64,8 @@ describe("Phase B project selector", () => {
     await click(checkbox("Заметки вне проектов"));
     await click(checkbox("BETA"));
     assert.match(container.textContent!, /2 проекта/);
-    assert.equal(btn("Вся база").getAttribute("aria-pressed"), "false", "an explicit snapshot does not include future projects");
-    await click(btn("Вся база"));
+    assert.equal(btn("Все заметки").getAttribute("aria-pressed"), "false", "an explicit snapshot does not include future projects");
+    await click(btn("Все заметки"));
     assert.deepEqual(saved, [{ ids: ["a", "b"], standalone: false }, { ids: ["a"], standalone: false }, { ids: ["a"], standalone: true }, { ids: ["a", "b"], standalone: true }, { ids: null, standalone: true }]);
     assert.equal(checkbox("ALPHA").checked, true);
     assert.equal(checkbox("BETA").checked, true);
@@ -73,7 +73,7 @@ describe("Phase B project selector", () => {
   it("automatically checks a newly created project in ALL and excludes archived/deleted rows", async () => {
     const render = async (items: ProjectCard[]) => act(async () => root.render(h(ProjectScopeSelector, { projects: items, selectedIds: null, busy: false, onChange: async () => {} })));
     await render(projects);
-    await click(btn("Вся база"));
+    await click(btn("Все заметки"));
     const gamma = { ...projects[0], id: "c", title: "GAMMA" };
     await render([...projects, gamma]);
     assert.equal(checkbox("GAMMA").checked, true);
@@ -84,7 +84,7 @@ describe("Phase B project selector", () => {
   it("keeps an empty explicit scope distinct from a valid ALL scope with no projects", async () => {
     await act(async () => root.render(h(ProjectScopeSelector, { projects: [], selectedIds: [], busy: false, onChange: async () => {} })));
     await click(btn("Выберите область поиска"));
-    assert.equal(btn("Вся база").getAttribute("aria-pressed"), "false");
+    assert.equal(btn("Все заметки").getAttribute("aria-pressed"), "false");
     assert.match(document.body.textContent!, /Выберите хотя бы один проект или заметки вне проектов/);
     assert.match(document.body.textContent!, /Активных проектов пока нет/);
     await act(async () => root.render(h(ProjectScopeSelector, { projects: [], selectedIds: null, busy: false, onChange: async () => {} })));
@@ -94,7 +94,7 @@ describe("Phase B project selector", () => {
   it("unchecking a project from ALL retains standalone and restored mixed scope checks only its rows", async () => {
     let saved: unknown;
     await act(async () => root.render(h(ProjectScopeSelector, { projects, selectedIds: null, busy: false, onChange: async (ids, flag) => { saved = { ids, flag }; } })));
-    await click(btn("Вся база"));
+    await click(btn("Все заметки"));
     await click(checkbox("BETA"));
     assert.deepEqual(saved, { ids: ["a"], flag: true });
     await act(async () => root.render(h(ProjectScopeSelector, { projects, selectedIds: ["a"], includeStandalone: true, busy: false, onChange: async () => {} })));
@@ -105,7 +105,7 @@ describe("Phase B project selector", () => {
   it("supports standalone-only even when no project or standalone note exists yet", async () => {
     let saved: unknown;
     await act(async () => root.render(h(ProjectScopeSelector, { projects: [], selectedIds: null, busy: false, onChange: async (ids, flag) => { saved = { ids, flag }; } })));
-    await click(btn("Вся база"));
+    await click(btn("Все заметки"));
     await click(checkbox("Заметки вне проектов"));
     assert.deepEqual(saved, { ids: [], flag: false });
     await act(async () => root.render(h(ProjectScopeSelector, { projects: [], selectedIds: [], includeStandalone: false, busy: false, onChange: async (ids, flag) => { saved = { ids, flag }; } })));
@@ -132,7 +132,7 @@ describe("Phase B project selector", () => {
   it("disables scope writes during persistence", async () => {
     let calls = 0;
     await act(async () => root.render(h(ProjectScopeSelector, { projects, selectedIds: null, busy: true, onChange: async () => { calls++; } })));
-    await click(btn("Вся база"));
+    await click(btn("Все заметки"));
     assert.equal(checkbox("ALPHA").disabled, true);
     await click(checkbox("ALPHA"));
     assert.equal(calls, 0);

@@ -103,7 +103,7 @@ export function EditorContextMenu({ editor, onToast, onPaste }: { editor: Editor
             <span>{action.tip.replace(/\s*\(Ctrl\+[^)]+\)/, "")}</span>
           </button>
         </div>)}
-        {editor.isActive("link") ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) editor.chain().focus().extendMarkRange("link").unsetLink().run(); close(); }}>Убрать ссылку</button> : null}
+        {editor.isActive("link") ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) editor.chain().focus().extendMarkRange("link").unsetLink().run(); close(); }}><Icon name="unlink" />Убрать гиперссылку</button> : null}
       </>}
     </MenuPopover>
   </>, document.body);

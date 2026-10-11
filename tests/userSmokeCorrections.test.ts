@@ -49,7 +49,7 @@ function noteWithTags(tags: Note["tags"]): Note {
 
 describe("final user smoke corrective pass", () => {
   it("keeps one collapsed rail geometry policy at every 5 percent zoom step", () => {
-    assert.match(sidebarCss, /--collapsed-rail-control-size: 44px/);
+    assert.match(sidebarCss, /--collapsed-rail-control-size: var\(--control-height-default\)/);
     assert.match(sidebarCss, /--collapsed-rail-icon-size: 18px/);
     assert.match(sidebarCss, /flex: 0 0 var\(--collapsed-rail-icon-size\)/);
     assert.match(sidebarCss, /padding-inline: 0/);

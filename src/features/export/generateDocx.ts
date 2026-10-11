@@ -33,8 +33,8 @@ export async function generateDocx(input: ExportDocument): Promise<Uint8Array> {
     const alignment = node.attrs?.textAlign ?? node.attrs?.alignment;
     return new Paragraph({ children: [...(prefix ? [new TextRun(prefix)] : []), ...runs(node)],
       heading: node.type === "heading" ? [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][Math.min(2, Math.max(0, Number(node.attrs?.level ?? 1) - 1))] : undefined,
-      alignment: alignment === "center" ? AlignmentType.CENTER : alignment === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
-      indent: { left: Math.min(6, Math.max(0, Number(node.attrs?.indent ?? 0))) * 360 },
+      alignment: alignment === "justify" ? AlignmentType.JUSTIFIED : alignment === "center" ? AlignmentType.CENTER : alignment === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
+      indent: { left: Math.min(20, Math.max(0, Number(node.attrs?.indent ?? 0))) * 360 },
       spacing: { after: 120 }, numbering: list,
     });
   }

@@ -116,20 +116,19 @@ describe("unified model settings UI", () => {
     assert.match(stylesSource, /\.css-zoom-fallback \.settings-modal-shell\s*\{[\s\S]*max-height: calc\(var\(--app-viewport-height\) - 24px\);/);
   });
 
-  it("keeps info popovers accessible by hover, focus, click, outside click and Escape", () => {
+  it("shares non-actionable information hints with hover, keyboard focus and Escape", () => {
     assert.match(chatSource, /Эти модели создают текст: отвечают на вопросы, редактируют заметки, сокращают, объясняют/);
     assert.match(semanticSource, /Модель смыслового поиска не создаёт ответы\. Она находит связанные по смыслу фрагменты во всей базе заметок/);
     assert.match(semanticSource, /В RAG найденные фрагменты используются как источники для ответа ИИ/);
-    assert.match(sharedSource, /aria-expanded=\{isOpen\}/);
-    assert.match(sharedSource, /role="tooltip"/);
-    assert.match(sharedSource, /setIsOpen\(\(current\) => !current\)/);
-    assert.match(sharedSource, /window\.addEventListener\("pointerdown", handlePointerDown\)/);
-    assert.match(sharedSource, /event\.key === "Escape"/);
-    assert.match(sharedSource, /setIsDismissed\(true\)/);
-    assert.match(sharedSource, /querySelector<HTMLButtonElement>\("button"\)\?\.blur\(\)/);
-    assert.match(stylesSource, /\.settings-info-control:hover \.settings-info-popover/);
-    assert.match(stylesSource, /\.settings-info-control:focus-within \.settings-info-popover/);
-    assert.match(stylesSource, /\.settings-info-control\.dismissed \.settings-info-popover/);
+    assert.match(sharedSource, /<InfoHint/);
+    const hint = readFileSync("src/shared/InfoHint.tsx", "utf8");
+    const tooltip = readFileSync("src/shared/TooltipPortal.tsx", "utf8");
+    assert.match(hint, /tabIndex=\{0\}/);
+    assert.match(hint, /data-tooltip=\{text\}/);
+    assert.doesNotMatch(hint, /onClick|<button/);
+    assert.match(tooltip, /role="tooltip"/);
+    assert.match(tooltip, /focusin/);
+    assert.match(tooltip, /Escape/);
   });
 
   it("keeps all model configuration in settings and only compact status in RAG chat", () => {

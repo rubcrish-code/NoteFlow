@@ -10,7 +10,9 @@ import { createPortal } from "react-dom";
 import type { Selection } from "@tiptap/pm/state";
 import { useEditorState, type Editor } from "@tiptap/react";
 import { Icon } from "../../shared/Icon";
+import { MenuPopover } from "../../shared/MenuPopover";
 import { getActiveTableEmphasizedBorders, setActiveTableEmphasizedBorders } from "./tableExtensions";
+import { toggleSelectedTableHeader } from "./tableSelectionHeaders";
 
 type TableCommand =
   | "addColumnAfter"
@@ -101,7 +103,7 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
   const [anchorElement, setAnchorElement] = useState<HTMLElement | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [popoverPosition, setPopoverPosition] = useState<TableToolsPosition | null>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const lastTableSelectionRef = useRef<Selection | null>(null);
   const tableState =
     useEditorState({
@@ -192,32 +194,6 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
     };
   }, [anchorElement]);
 
-  useEffect(() => {
-    if (!isMenuOpen) {
-      return undefined;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (isTableToolsEventTarget(event.target, popoverRef.current)) {
-        return;
-      }
-      setIsMenuOpen(false);
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsMenuOpen(false);
-      }
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [isMenuOpen]);
-
   if (!editor || !tableState.isInTable || !anchorElement || !popoverPosition) {
     return null;
   }
@@ -296,8 +272,8 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
                         : command === "toggleHeaderCell"
                           ? chain.toggleHeaderCell().run()
                           : command === "toggleHeaderColumn"
-                            ? chain.toggleHeaderColumn().run()
-                            : chain.toggleHeaderRow().run();
+                            ? toggleSelectedTableHeader("column", editor.state, (tr) => editor.view.dispatch(tr))
+                            : toggleSelectedTableHeader("row", editor.state, (tr) => editor.view.dispatch(tr));
 
     if (!didRun) {
       onToast(unavailableTableActionMessage);
@@ -331,11 +307,10 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
       contentEditable={false}
       onMouseDown={preserveTableToolSelection}
       onPointerDown={stopInternalTableToolPointer}
-      ref={popoverRef}
       style={popoverStyle}
     >
       <div className="table-tools-mini" role="toolbar" aria-label="Быстрые инструменты таблицы">
-        <button className="table-tools-trigger" aria-expanded={isMenuOpen} onClick={() => setIsMenuOpen((currentValue) => !currentValue)} type="button">
+        <button ref={triggerRef} className="table-tools-trigger" aria-expanded={isMenuOpen} onClick={() => setIsMenuOpen((currentValue) => !currentValue)} type="button">
           <Icon name="table" />
           <span>Таблица</span>
           <Icon name="caret" />
@@ -349,7 +324,8 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
       </div>
 
       {isMenuOpen ? (
-        <div className="table-tools-menu" role="menu" aria-label="Расширенные инструменты таблицы">
+        <MenuPopover anchorRef={triggerRef} ariaLabel="Расширенные инструменты таблицы" className="table-tools-menu" isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} preferredWidth={380} maxHeight={520} role="dialog" initialFocusSelector="button:not([disabled])">
+        <div className="table-tools-content" onMouseDown={preserveTableToolSelection} onPointerDown={stopInternalTableToolPointer}>
           <div className="table-tools-section">
             <button
               aria-pressed={tableState.emphasizedBorders}
@@ -404,6 +380,7 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
             Удалить таблицу
           </button>
         </div>
+        </MenuPopover>
       ) : null}
     </div>,
     document.body,
@@ -425,14 +402,4 @@ function findAnchoredTableElement(anchorElement: HTMLElement) {
     sibling = sibling.nextElementSibling;
   }
   return null;
-}
-
-function isTableToolsEventTarget(target: EventTarget | null, popoverElement: HTMLElement | null) {
-  if (!(target instanceof Node)) {
-    return false;
-  }
-  if (popoverElement?.contains(target)) {
-    return true;
-  }
-  return target instanceof Element && target.closest('[data-noteflow-table-tools-anchor="true"]') !== null;
 }

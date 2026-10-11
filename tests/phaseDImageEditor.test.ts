@@ -413,10 +413,11 @@ describe("Phase D real TipTap insertion and sidecar roundtrip", () => {
   it("inserts the selected calendar date at the captured cursor, not at the document end", async () => {
     const editor = editorFor();
     await mount(h(BlockInsertMenu, { editor, editTarget: null, selection: { from: 8, to: 8 }, onClose() {}, onToast() {}, onPickAndStoreAttachment: async () => null }));
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".block-menu-tools button")].find((button) => button.querySelector("b")?.textContent === "Вставить дату")!.click());
     await act(async () => document.querySelector<HTMLButtonElement>(".date-picker-trigger")!.click());
     await click("Год"); await click("2030");
     const date = document.querySelector<HTMLButtonElement>('[data-date="2030-10-05"]') ?? document.querySelector<HTMLButtonElement>('[data-date^="2030-"][data-date$="-05"]')!;
-    const value = date.getAttribute("data-date"); await act(async () => date.click()); await click("Вставить дату");
+    const value = date.getAttribute("data-date"); await act(async () => date.click()); await click("Вставить");
     const content = editor.getJSON().content![0].content!;
     assert.equal(content[1].type, "inlineDate"); assert.equal(content[1].attrs?.value, value); assert.equal(content[2].text, " конец");
   });
