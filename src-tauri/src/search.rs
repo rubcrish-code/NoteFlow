@@ -162,6 +162,8 @@ pub struct SearchNotesRequest {
     pub limit: i64,
     #[serde(default)]
     pub offset: i64,
+    #[serde(default)]
+    pub title_only: bool,
 }
 
 fn default_search_limit() -> i64 {
@@ -234,6 +236,9 @@ pub fn search_notes(
     conn: &Connection,
     request: &SearchNotesRequest,
 ) -> DataResult<Vec<SearchNoteResultDto>> {
+    if request.title_only {
+        return search_note_titles(conn, request);
+    }
     let Some(fts_query) = build_fts_query(&request.query) else {
         return Ok(Vec::new());
     };
@@ -338,6 +343,60 @@ pub fn search_notes(
             .then_with(|| right.updated_at.cmp(&left.updated_at))
     });
     Ok(results)
+}
+
+// The link picker pages metadata only; ordinary FTS relevance and body search stay unchanged.
+fn search_note_titles(
+    conn: &Connection,
+    request: &SearchNotesRequest,
+) -> DataResult<Vec<SearchNoteResultDto>> {
+    let query = if request.query.trim().is_empty() {
+        String::new()
+    } else if let Some(query) = build_fts_query(&request.query) {
+        format!("title : ({query})")
+    } else {
+        return Ok(Vec::new());
+    };
+    let mut statement = conn.prepare(
+        "SELECT n.id, n.title, n.project_id, COALESCE(p.title, ''),
+                n.updated_at, n.archived_at IS NOT NULL, n.is_favorite
+         FROM notes n LEFT JOIN projects p ON p.id = n.project_id
+         WHERE n.deleted_at IS NULL AND (?2 OR n.archived_at IS NULL)
+           AND (?1 = '' OR n.id IN (
+               SELECT note_id FROM note_search_fts WHERE note_search_fts MATCH ?1))
+           AND (?3 = '' OR n.project_id = ?3)
+           AND (?4 = '' OR EXISTS (SELECT 1 FROM note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?4))
+           AND (NOT ?5 OR n.is_favorite = 1)
+         ORDER BY n.updated_at DESC, n.id
+         LIMIT ?6 OFFSET ?7",
+    )?;
+    let rows = statement.query_map(
+        params![
+            query,
+            request.include_archived,
+            request.project_id.as_deref().unwrap_or(""),
+            request.tag_id.as_deref().unwrap_or(""),
+            request.favorites_only,
+            request.limit.clamp(1, SEARCH_RESULT_LIMIT_MAX),
+            request.offset.clamp(0, SEARCH_RESULT_OFFSET_MAX)
+        ],
+        |row| {
+            Ok(SearchNoteResultDto {
+                note_id: row.get(0)?,
+                title: row.get(1)?,
+                project_id: row.get(2)?,
+                project: row.get(3)?,
+                updated_at: row.get(4)?,
+                archived: row.get::<_, i64>(5)? != 0,
+                favorite: row.get::<_, i64>(6)? != 0,
+                snippet: String::new(),
+                match_source: "title".into(),
+                tags: Vec::new(),
+                relevance_score: 0.0,
+            })
+        },
+    )?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 fn determine_match_source(
@@ -598,7 +657,70 @@ mod tests {
             favorites_only: false,
             limit: 50,
             offset: 0,
+            title_only: false,
         }
+    }
+
+    #[test]
+    fn link_picker_pages_metadata_and_searches_titles_across_the_entire_profile() {
+        let conn = create_connection();
+        conn.execute_batch(SEARCH_MIGRATION_SQL)
+            .expect("search schema");
+        conn.execute_batch("BEGIN").expect("transaction");
+        for index in 0..10_000 {
+            insert_note(
+                &conn,
+                &format!("note-{index:05}"),
+                &format!("Заметка {index:05}"),
+                "Body match unrelated private content",
+                None,
+                index % 2 == 0,
+                false,
+            );
+        }
+        conn.execute_batch("COMMIT").expect("commit");
+        let mut filter = request("");
+        filter.title_only = true;
+        filter.include_archived = true;
+        filter.limit = 81;
+        let started = std::time::Instant::now();
+        let first = search_notes(&conn, &filter).expect("initial metadata");
+        assert_eq!(first.len(), 81);
+        assert!(first
+            .iter()
+            .all(|note| note.snippet.is_empty() && note.tags.is_empty()));
+        assert_eq!(first[0].note_id, "note-00000");
+        filter.offset = 9_920;
+        assert_eq!(search_notes(&conn, &filter).expect("last page").len(), 80);
+        filter.offset = 0;
+        // FTS prefixes are intentional; a full title finds a note beyond the first page.
+        filter.query = "ЗАМЕТКА 09999".into();
+        let last = search_notes(&conn, &filter).expect("Russian title search");
+        assert_eq!(last.len(), 1);
+        assert_eq!(last[0].note_id, "note-09999");
+        filter.query = "unrelated".into();
+        assert!(search_notes(&conn, &filter)
+            .expect("not body search")
+            .is_empty());
+        filter.query.clear();
+        filter.include_archived = false;
+        assert!(search_notes(&conn, &filter)
+            .expect("archive policy")
+            .iter()
+            .all(|note| !note.archived));
+        conn.execute(
+            "UPDATE notes SET deleted_at = '2026-10-27' WHERE id = 'note-00001'",
+            [],
+        )
+        .expect("soft delete");
+        assert!(search_notes(&conn, &filter)
+            .expect("no deleted notes")
+            .iter()
+            .all(|note| note.note_id != "note-00001"));
+        eprintln!(
+            "link picker 10k metadata + paging + title queries: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

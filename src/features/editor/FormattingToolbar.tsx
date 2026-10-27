@@ -20,6 +20,8 @@ import { FontFormatPopover, type FontFormatDraft } from "./FontFormatPopover";
 import { findFontFamilyValue, formatFontSize, normalizeFontSizeValue } from "./fontFormatOptions";
 
 interface FormattingToolbarProps {
+  onChooseNote?: () => void;
+  onCopyFragment?: () => void;
   aiStatus: NoteAiStatus | null;
   editor: Editor | null;
   onAiAction: (actionId: NoteAiActionId) => void;
@@ -33,6 +35,7 @@ interface ToolbarRuntimeState {
   active: Partial<Record<EditorToolbarActionId, boolean>>;
   canRedo: boolean;
   canUndo: boolean;
+  selectionEmpty: boolean;
   fontFamily: string;
   fontSize: string;
 }
@@ -41,11 +44,12 @@ const emptyToolbarState: ToolbarRuntimeState = {
   active: {},
   canRedo: false,
   canUndo: false,
+  selectionEmpty: true,
   fontFamily: "",
   fontSize: "",
 };
 
-export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettings, pendingAiActionId }: FormattingToolbarProps) {
+export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, editor, onAiAction, onOpenAiSettings, pendingAiActionId }: FormattingToolbarProps) {
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
@@ -164,6 +168,15 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
       return;
     }
 
+    if (toolId === "note-link" || toolId === "fragment-link") {
+      setIsFontMenuOpen(false);
+      setIsOverflowMenuOpen(false);
+      setPopoverMode(null);
+      if (toolId === "note-link") onChooseNote?.();
+      else onCopyFragment?.();
+      return;
+    }
+
     if (toolId === "link" || toolId === "color" || toolId === "highlight") {
       setIsFontMenuOpen(false);
       setIsOverflowMenuOpen(false);
@@ -233,7 +246,8 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
     >
       <div aria-label="Лента форматирования" className="toolbar" role="toolbar">
         {visibleActions.map((tool, index) => {
-          const disabled = isToolDisabled(tool.id, editor, toolbarState);
+          const disabled = isToolDisabled(tool.id, editor, toolbarState)
+            || (tool.id === "note-link" && !onChooseNote) || (tool.id === "fragment-link" && !onCopyFragment);
           const nextTool = visibleActions[index + 1];
           const separatorAfter = nextTool !== undefined && nextTool.group !== tool.group;
 
@@ -266,10 +280,11 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
             <span className="toolbar-slot" key={tool.id}>
               <button
                 aria-label={tool.tip}
+                aria-description={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Сначала выделите фрагмент текста" : undefined}
                 aria-pressed={toolbarState.active[tool.id] === undefined ? undefined : toolbarState.active[tool.id]}
                 className={`tb ${toolbarState.active[tool.id] ? "active" : ""} ${tool.id === "ai" ? "ai" : ""}`}
                 data-toolbar-action={tool.id}
-                data-tooltip={tool.tip}
+                data-tooltip={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Ссылка на фрагмент: выделите текст" : tool.tip}
                 disabled={disabled}
                 ref={tool.id === "ai" ? aiButtonRef : undefined}
                 onClick={() => {
@@ -284,6 +299,10 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
                     return;
                   }
                   event.preventDefault();
+                  if (tool.id === "note-link" || tool.id === "fragment-link") {
+                    mouseCommandRef.current = false;
+                    return;
+                  }
                   mouseCommandRef.current = true;
                   runCommand(tool.id);
                 }}
@@ -337,8 +356,10 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
                     ) : null}
                     <button
                       aria-checked={isToggle ? toolbarState.active[tool.id] : undefined}
+                      aria-description={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Сначала выделите фрагмент текста" : undefined}
+                      data-tooltip={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Ссылка на фрагмент: выделите текст" : undefined}
                       data-toolbar-overflow-action={tool.id}
-                      disabled={isToolDisabled(tool.id, editor, toolbarState)}
+                      disabled={isToolDisabled(tool.id, editor, toolbarState) || (tool.id === "note-link" && !onChooseNote) || (tool.id === "fragment-link" && !onCopyFragment)}
                       onClick={() => runCommand(tool.id)}
                       onMouseDown={(event) => event.preventDefault()}
                       role={isToggle ? "menuitemcheckbox" : "menuitem"}
@@ -439,6 +460,9 @@ export function FormattingToolbar({ aiStatus, editor, onAiAction, onOpenAiSettin
 
       {popoverMode ? (
         <EditorCommandPopover
+          onChooseNote={onChooseNote ? () => { setPopoverMode(null); onChooseNote(); } : undefined}
+          onCopyFragment={onCopyFragment ? () => { setPopoverMode(null); onCopyFragment(); } : undefined}
+          initialHref={String(editor?.getAttributes("link").href ?? "")}
           currentColor={getCurrentPopoverColor(editor, popoverMode)}
           initialText={selectedText}
           mode={popoverMode}
@@ -524,6 +548,7 @@ function buildToolbarState(editor: Editor | null): ToolbarRuntimeState {
     },
     canRedo: editor.can().redo(),
     canUndo: editor.can().undo(),
+    selectionEmpty: editor.state.selection.empty,
     fontFamily,
     fontSize,
   };
@@ -539,5 +564,6 @@ function isToolDisabled(toolId: EditorToolbarActionId, editor: Editor | null, to
   if (toolId === "redo") {
     return !toolbarState.canRedo;
   }
+  if (toolId === "fragment-link") return toolbarState.selectionEmpty;
   return false;
 }

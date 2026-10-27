@@ -486,6 +486,7 @@
 }
 
 .nf-tooltip {
+  text-align: left;
   animation: nf-tooltip-in var(--motion-fast) var(--ease-standard) both;
   background: color-mix(in srgb, var(--text-primary) 94%, transparent);
   border: 1px solid color-mix(in srgb, var(--surface-panel) 15%, transparent);

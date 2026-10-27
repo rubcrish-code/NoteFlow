@@ -312,6 +312,7 @@ function mapNote(note: NoteDto): Note {
   });
   return {
     attachments: note.attachments.map(mapAttachment),
+    archivedAt: note.archivedAt ?? undefined,
     contentHtml: note.contentHtml,
     contentMarkdown: note.contentMarkdown,
     contentVersion: note.contentVersion,
@@ -409,7 +410,11 @@ export async function loadWorkspace() {
 }
 
 export async function getFirstRunState() {
-  return await invoke<{ required: boolean }>("get_first_run_state");
+  return await invoke<{ required: boolean; needsProfileName?: boolean }>("get_first_run_state");
+}
+
+export async function saveFirstRunProfile(profileName: string) {
+  return invoke<{ localProfileName: string }>("save_first_run_profile", { request: { profileName } });
 }
 
 export async function completeFirstRun(profileName: string): Promise<FirstRunCompletion> {

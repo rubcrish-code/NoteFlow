@@ -13,7 +13,7 @@ import { pasteEditorContent } from "./editorPaste";
 
 interface ContextTarget { x: number; y: number; bookmark: SelectionBookmark; document: DocumentNode }
 
-export function EditorContextMenu({ editor, onToast, onPaste }: { editor: Editor | null; onToast: (text: string) => void; onPaste?: () => Promise<boolean> }) {
+export function EditorContextMenu({ editor, onToast, onPaste, onChooseNote, onCopyFragment }: { editor: Editor | null; onToast: (text: string) => void; onPaste?: () => Promise<boolean>; onChooseNote?: () => void; onCopyFragment?: () => void }) {
   const [target, setTarget] = useState<ContextTarget | null>(null);
   const [mode, setMode] = useState<EditorCommandPopoverMode | null>(null);
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -84,7 +84,7 @@ export function EditorContextMenu({ editor, onToast, onPaste }: { editor: Editor
   }
 
   if (!target || !editor) return null;
-  const actions = EDITOR_TOOLBAR_ACTIONS.filter((action) => !["ai", "font", "undo", "redo"].includes(action.id));
+  const actions = EDITOR_TOOLBAR_ACTIONS.filter((action) => !["ai", "font", "undo", "redo", "note-link", "fragment-link"].includes(action.id));
   const selectedText = editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, " ");
   return createPortal(<>
     <span className="editor-context-anchor" ref={anchorRef} style={{ left: target.x, top: target.y }} tabIndex={-1} />
@@ -96,6 +96,8 @@ export function EditorContextMenu({ editor, onToast, onPaste }: { editor: Editor
           disabled={action === "paste" ? !canReadEditorClipboard() : !canWriteEditorClipboard() || editor.state.selection.empty}
           onClick={() => void clipboard(action)}>{action === "copy" ? "Копировать" : action === "cut" ? "Вырезать" : "Вставить"}</button>)}
         <span className="toolbar-overflow-separator" role="separator" />
+        {onChooseNote ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) onChooseNote(); close(); }}><Icon name="doc" />Ссылка на заметку</button> : null}
+        {onCopyFragment ? <button role="menuitem" type="button" disabled={editor.state.selection.empty} onClick={() => { if (restoreSelection()) onCopyFragment(); close(); }}><Icon name="copy" />Ссылка на фрагмент</button> : null}
         {actions.map((action, index) => <div key={action.id}>
           {index > 0 && actions[index - 1].group !== action.group ? <span className="toolbar-overflow-separator" role="separator" /> : null}
           <button onMouseDown={(event) => event.preventDefault()} onClick={() => command(action.id)} role="menuitem" type="button" data-context-action={action.id}>

@@ -6,7 +6,8 @@ import { ModalShell } from "../../shared/ModalShell";
 import { FILE_COUNT_FORMS, formatRussianCount, NOTE_COUNT_FORMS } from "../../shared/russianPlural";
 import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
-import { entityNameLength, validateEntityName } from "../../shared/entityName";
+import { normalizeEntityName, validateEntityName } from "../../shared/entityName";
+import { EntityNameCounter } from "../../shared/EntityNameCounter";
 import { PublicCommandError } from "../../services/safeInvoke";
 
 interface ProjectsPageProps {
@@ -170,7 +171,7 @@ function ProjectEditorModal({ onClose, onSave, project, projects }: ProjectEdito
     setBusy(true);
     setError("");
     try {
-      await onSave(title.trim(), description.trim());
+      await onSave(normalizeEntityName(title), description.trim());
     } catch (cause) {
       setError(cause instanceof PublicCommandError && (cause.code === "PROJECT_TITLE_EXISTS" || cause.code === "TITLE_TOO_LONG") ? cause.message : "Не удалось сохранить проект. Проверьте название и попробуйте ещё раз.");
     } finally {
@@ -184,7 +185,7 @@ function ProjectEditorModal({ onClose, onSave, project, projects }: ProjectEdito
       className="new-note-dialog project-dialog"
       closeDisabled={busy}
       description="Проект хранится локально вместе со связанными заметками."
-      footer={<div className="new-note-actions"><button className="secondary-btn" disabled={busy} onClick={onClose} type="button">Отмена</button><button className="primary-btn" disabled={!title.trim() || busy} form="project-editor-form" type="submit">{busy ? "Сохраняем…" : project ? "Сохранить" : "Создать"}</button></div>}
+      footer={<div className="new-note-actions"><button className="secondary-btn" disabled={busy} onClick={onClose} type="button">Отмена</button><button className="primary-btn" disabled={busy || Boolean(validateEntityName(title)) && title.trim() !== project?.title} form="project-editor-form" type="submit">{busy ? "Сохраняем…" : project ? "Сохранить" : "Создать"}</button></div>}
       initialFocusRef={titleInputRef}
       onClose={onClose}
       open
@@ -193,7 +194,7 @@ function ProjectEditorModal({ onClose, onSave, project, projects }: ProjectEdito
       titleId="project-editor-title"
     >
       <form className="new-note-form" id="project-editor-form" onSubmit={(event) => void submit(event)}>
-        <label>Название<input aria-invalid={Boolean(error)} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder="Например, Исследование рынка" ref={titleInputRef} value={title} /><small>{entityNameLength(title)}/25</small></label>
+        <label>Название<input aria-invalid={Boolean(error) || Boolean(validateEntityName(title)) && title.trim() !== project?.title} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder="Например, Исследование рынка" ref={titleInputRef} value={title} /><EntityNameCounter value={title} /></label>
         <label>Описание<input maxLength={500} onChange={(event) => setDescription(event.currentTarget.value)} placeholder="Короткое описание проекта" value={description} /></label>
         {error ? <div className="field-error" role="alert">{error}</div> : null}
       </form>

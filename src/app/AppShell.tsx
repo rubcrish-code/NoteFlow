@@ -10,6 +10,7 @@ import { exportAfterFlush } from "../features/export/savedExportFlow";
 import * as searchService from "../services/searchService";
 import type { SearchNoteResult } from "../services/searchService";
 import type { SemanticSearchResult } from "../services/embeddingService";
+import type { InternalNoteLink } from "../shared/internalNoteLink";
 import { EditorArea } from "../features/editor/EditorArea";
 import { MainSidebar } from "../features/navigation/MainSidebar";
 import type { PageShellSidebarProps } from "../features/navigation/PageShell";
@@ -113,12 +114,15 @@ export function AppShell() {
   const [projectScope, setProjectScope] = useState<{ id: string; title: string } | null>(null);
   const [searchResults, setSearchResults] = useState<SearchNoteResult[]>([]);
   const [semanticOpenTarget, setSemanticOpenTarget] = useState<SemanticSearchResult | null>(null);
+  const [internalOpenTarget, setInternalOpenTarget] = useState<(InternalNoteLink & { navigationId: number }) | undefined>();
+  const navigationSequenceRef = useRef(0);
   const [searchStatus, setSearchStatus] = useState<NoteSearchStatus>("idle");
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(true);
   const [searchRevision, setSearchRevision] = useState(0);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isSettingsLoading, setIsSettingsLoading] = useState(true);
   const [firstRunRequired, setFirstRunRequired] = useState(false);
+  const [needsProfileName, setNeedsProfileName] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [editorSelectionText, setEditorSelectionText] = useState("");
   const [isFocusMode, setIsFocusMode] = useState(false);
@@ -166,8 +170,8 @@ export function AppShell() {
     sidebarWidth,
   });
 
-  const scopedNotes = projectScope ? notes.filter((note) => note.projectId === projectScope.id) : notes;
-  const activeNote = scopedNotes.find((note) => note.id === activeNoteId) ?? scopedNotes[0] ?? null;
+  const scopedNotes = notes.filter((note) => !note.archivedAt && (!projectScope || note.projectId === projectScope.id));
+  const activeNote = notes.find((note) => note.id === activeNoteId && (!projectScope || note.projectId === projectScope.id)) ?? scopedNotes[0] ?? null;
 
   useEffect(() => {
     notes.forEach((note) => noteContentVersionsRef.current.set(note.id, note.contentVersion));
@@ -234,6 +238,7 @@ export function AppShell() {
         }
         applyWorkspaceSnapshot(snapshot);
         setFirstRunRequired(firstRun.required);
+        setNeedsProfileName(firstRun.needsProfileName ?? firstRun.required);
       } catch (error) {
         showToast(`Не удалось открыть локальную базу: ${String(error)}`);
       } finally {
@@ -774,16 +779,21 @@ export function AppShell() {
   }
 
   async function openNote(noteId: string, archivedHint?: boolean, failureMessage?: string) {
-    if (!await tryFlushPendingSave()) return false;
+    const navigationId = ++navigationSequenceRef.current;
+    if (!await tryFlushPendingSave() || navigationId !== navigationSequenceRef.current) return false;
+    setSemanticOpenTarget(null);
+    setInternalOpenTarget(undefined);
     const generation = notesGenerationRef.current;
     const archivedResult = archivedHint ?? searchResults.find((result) => result.noteId === noteId)?.archived;
     openedArchivedNoteIdRef.current = archivedResult ? noteId : null;
     if (!notes.some((note) => note.id === noteId)) {
       try {
         const loadedNote = await dataService.getNote(noteId);
-        if (generation !== notesGenerationRef.current || bulkDeleteInProgressRef.current) return false;
+        if (loadedNote.archivedAt) openedArchivedNoteIdRef.current = noteId;
+        if (generation !== notesGenerationRef.current || bulkDeleteInProgressRef.current || navigationId !== navigationSequenceRef.current) return false;
         setNotes((currentNotes) => sortNotesForDisplay([loadedNote, ...currentNotes.filter((note) => note.id !== noteId)]));
       } catch (error) {
+        if (navigationId !== navigationSequenceRef.current) return false;
         showToast(failureMessage ?? `Не удалось открыть заметку: ${String(error)}`);
         return false;
       }
@@ -803,7 +813,7 @@ export function AppShell() {
       "Заметка больше недоступна. Сохранённый фрагмент остаётся в источниках.",
     );
     if (opened) {
-      setSemanticOpenTarget(result);
+      setSemanticOpenTarget({ ...result });
     }
   }
 
@@ -1226,6 +1236,14 @@ export function AppShell() {
       onCloseProfileName={() => setIsProfileNameModalOpen(false)}
       onCreateNote={createNote}
       onCompleteFirstRun={completeFirstRun}
+      needsProfileName={needsProfileName}
+      onSaveFirstRunProfile={async (name) => {
+        await flushUiSettings();
+        const saved = await dataService.saveFirstRunProfile(name);
+        updateUiSettings({ localProfileName: saved.localProfileName });
+        await flushUiSettings();
+        setNeedsProfileName(false);
+      }}
       onDismissFirstRun={async () => {
         if (isTrainingOpen) { setIsTrainingOpen(false); return; }
         await dataService.dismissFirstRun(); setFirstRunRequired(false);
@@ -1462,6 +1480,7 @@ export function AppShell() {
             note={activeNote}
             searchQuery={query}
             semanticOpenTarget={semanticOpenTarget}
+            internalOpenTarget={internalOpenTarget}
             onArchiveNote={(noteId) => removeNote(noteId, "archive")}
             onDeleteNote={(noteId) => removeNote(noteId, "delete")}
             onDuplicateNote={duplicateNote}
@@ -1484,7 +1503,7 @@ export function AppShell() {
             onImportMarkdown={importMarkdown}
             onOpenChat={() => setIsChatOpen(true)}
             onOpenAttachment={dataService.openAttachment}
-            onOpenNote={(noteId) => void openNote(noteId)}
+            onOpenNote={(noteId, fragment) => { void openNote(noteId, undefined, "Заметка по ссылке больше недоступна.").then((opened) => { if (opened) setInternalOpenTarget({ noteId, fragment, navigationId: navigationSequenceRef.current }); }); }}
             onOpenSettingsModels={() => {
               navigate("settings");
             }}
@@ -1562,6 +1581,8 @@ function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFram
 }
 
 interface SharedOverlaysProps {
+  needsProfileName: boolean;
+  onSaveFirstRunProfile: (name: string) => Promise<void>;
   isFirstRunOpen: boolean;
   replayTraining: boolean;
   isNewNoteModalOpen: boolean;
@@ -1577,10 +1598,10 @@ interface SharedOverlaysProps {
   onSaveProfileName: (name: string) => void;
 }
 
-function SharedOverlays({ isFirstRunOpen, replayTraining, isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onCompleteFirstRun, onDismissFirstRun, onSaveProfileName }: SharedOverlaysProps) {
+function SharedOverlays({ needsProfileName, onSaveFirstRunProfile, isFirstRunOpen, replayTraining, isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onCompleteFirstRun, onDismissFirstRun, onSaveProfileName }: SharedOverlaysProps) {
   return (
     <>
-      {isFirstRunOpen ? <FirstRunModal onClose={onDismissFirstRun} onCreate={onCompleteFirstRun} open replay={replayTraining} /> : null}
+      {isFirstRunOpen ? <FirstRunModal onClose={onDismissFirstRun} onCreate={onCompleteFirstRun} onSaveProfile={onSaveFirstRunProfile} needsProfileName={needsProfileName} initialName={localProfileName} open replay={replayTraining} /> : null}
       <NewNoteModal isOpen={isNewNoteModalOpen} onClose={onCloseNewNote} onCreate={onCreateNote} />
       <LocalProfileModal name={localProfileName} onClose={onCloseProfileName} onSave={onSaveProfileName} open={isProfileNameModalOpen} />
       <Toast action={toastAction} message={toastMessage} />

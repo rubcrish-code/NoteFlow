@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import { samplePanelMotion, settlePanelLayout } from "./panel-motion.mjs";
 
 const { chromium } = await import(process.env.NOTEFLOW_QA_PLAYWRIGHT || "playwright");
 const browser = await chromium.launch({ channel: "msedge", headless: true });
@@ -84,23 +85,15 @@ async function resizeTo(width) {
   return samples;
 }
 async function motion(direction, baseline) {
-  const frames = await page.evaluate(async (source) => {
-    const read = new Function(`return (${source})()`);
-    const start = performance.now(), frames = [{ t: 0, ...read() }];
-    document.querySelector(".sb .col").click();
-    await new Promise((resolve) => {
-      function sample() { frames.push({ t: performance.now() - start, ...read() }); if (performance.now() - start < 330) requestAnimationFrame(sample); else resolve(); }
-      requestAnimationFrame(sample);
-    });
-    return frames;
-  }, capture.toString());
-  frames.forEach((g) => verify(g, baseline));
+  const sampled = await samplePanelMotion(page, ".sb .col", capture);
+  const { frames, playback } = sampled;
+  [...frames, ...playback].forEach((g) => verify(g, baseline));
   assert.ok(new Set(frames.map((g) => Math.round(g.sidebar.w))).size > 3);
-  for (let i = 1; i < frames.length; i++) {
-    assert.ok(direction * (frames[i].sidebar.w - frames[i - 1].sidebar.w) >= -0.7);
-    assert.ok(direction * (frames[i].rows[0].button.w - frames[i - 1].rows[0].button.w) >= -0.7);
+  for (const trajectory of [frames, playback]) for (let i = 1; i < trajectory.length; i++) {
+    assert.ok(direction * (trajectory[i].sidebar.w - trajectory[i - 1].sidebar.w) >= -0.7);
+    assert.ok(direction * (trajectory[i].rows[0].button.w - trajectory[i - 1].rows[0].button.w) >= -0.7);
     const endpoints = [frames[0].rows[0].icon.x, frames.at(-1).rows[0].icon.x];
-    assert.ok(frames[i].rows[0].icon.x >= Math.min(...endpoints) - 0.7 && frames[i].rows[0].icon.x <= Math.max(...endpoints) + 0.7);
+    assert.ok(trajectory[i].rows[0].icon.x >= Math.min(...endpoints) - 0.7 && trajectory[i].rows[0].icon.x <= Math.max(...endpoints) + 0.7);
   }
   assert.equal(frames[0].duration, "0.24s");
   assert.equal(frames[0].easing, "cubic-bezier(0.22, 1, 0.36, 1)");
@@ -109,7 +102,7 @@ async function motion(direction, baseline) {
   assert.ok(Math.abs(icon.x + icon.w / 2 - button.x - button.w / 2) < 0.7);
   assert.ok(compact.rows[0].opacity < 0.001, "Compact label is invisible, allowing compositor float precision");
   const checkpoints = [0, 60, 120, 180, 240].map((target) => ({ target, frame: frames.reduce((best, f) => Math.abs(f.t - target) < Math.abs(best.t - target) ? f : best) }));
-  return { checkpoints, frames };
+  return { checkpoints, frames, playback, events: sampled.events, requestedAt: sampled.requestedAt, foundAt: sampled.foundAt, viewport: sampled.viewport };
 }
 
 try {
@@ -158,7 +151,7 @@ try {
     await page.evaluate(() => { document.querySelector(".nav-i .sidebar-action-label").textContent = "Очень длинное название раздела для проверки устойчивости геометрии"; });
     await snapshot(`long-cyrillic-${id}`, baseline);
     await page.emulateMedia({ reducedMotion: "reduce" }); await page.locator(".sb .col").click();
-    await page.waitForTimeout(50); const reduced = await snapshot(`reduced-motion-${id}`, baseline); assert.equal(reduced.duration, "0s");
+    await settlePanelLayout(page); const reduced = await snapshot(`reduced-motion-${id}`, baseline); assert.equal(reduced.duration, "0s");
     assert.ok(Math.abs(reduced.rows[0].button.w - reduced.rows[0].button.h) < 0.7);
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.screenshot({ path: `${output}/collapsed-${id}.png` });

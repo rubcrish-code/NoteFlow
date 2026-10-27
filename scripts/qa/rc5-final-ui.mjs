@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import { samplePanelMotion } from "./panel-motion.mjs";
 const { chromium } = await import(process.env.NOTEFLOW_QA_PLAYWRIGHT || "playwright");
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage();
@@ -10,23 +11,15 @@ const output = "releases/qa/rc5-final-ui";
 await mkdir(output, { recursive: true });
 function record(name, details = {}) { results.push({ name, ...details }); console.log(name, JSON.stringify(details)); }
 async function measureToggle(selector, track, expectMotion = true) {
-  const frames = await page.evaluate(async ({ selector, track }) => {
+  const sampled = await samplePanelMotion(page, selector, (track) => {
     const shell = document.querySelector(".workspace") || document.querySelector(".rag-page");
-    const frames = []; const start = performance.now();
-    document.querySelector(selector).click();
-    await new Promise((resolve) => {
-      function sample() {
-        frames.push({ t: performance.now() - start, w: parseFloat(getComputedStyle(shell).gridTemplateColumns.split(" ")[track]), nav: [...document.querySelectorAll(".sb .nav-i svg")].map((icon) => icon.getBoundingClientRect().top), overflow: document.documentElement.scrollWidth > innerWidth, scroll: document.querySelector(".ed-scroll")?.scrollTop, anchor: document.querySelector(".ed-scroll") ? getComputedStyle(document.querySelector(".ed-scroll")).overflowAnchor : null, moving: [...document.querySelectorAll('[data-panel-moving="true"]')].length });
-        if (performance.now() - start < 310) requestAnimationFrame(sample); else resolve();
-      }
-      requestAnimationFrame(sample);
-    });
-    return frames;
-  }, { selector, track });
-  assert.ok(frames.every((frame) => !frame.overflow), JSON.stringify(frames));
+    return { w: parseFloat(getComputedStyle(shell).gridTemplateColumns.split(" ")[track]), nav: [...document.querySelectorAll(".sb .nav-i svg")].map((icon) => icon.getBoundingClientRect().top), overflow: document.documentElement.scrollWidth > innerWidth, scroll: document.querySelector(".ed-scroll")?.scrollTop, anchor: document.querySelector(".ed-scroll") ? getComputedStyle(document.querySelector(".ed-scroll")).overflowAnchor : null, moving: [...document.querySelectorAll('[data-panel-moving="true"]')].length };
+  }, track, { samplePhases: false });
+  const { frames, playback } = sampled;
+  assert.ok([...frames, ...playback].every((frame) => !frame.overflow), JSON.stringify(sampled));
   if (expectMotion) assert.ok(new Set(frames.map((frame) => Math.round(frame.w * 10))).size > 2, JSON.stringify(frames));
-  for (const frame of frames) for (let index = 0; index < frame.nav.length; index++) assert.ok(Math.abs(frame.nav[index] - frames[0].nav[index]) < 1, JSON.stringify(frames));
-  return { first: frames[0].w, last: frames.at(-1).w, intermediateWidths: new Set(frames.map((frame) => Math.round(frame.w * 10))).size, frames: frames.length, scrollFirst: frames[0].scroll, scrollLast: frames.at(-1).scroll, anchoring: [...new Set(frames.map((frame) => frame.anchor))] };
+  for (const frame of [...frames, ...playback]) for (let index = 0; index < frame.nav.length; index++) assert.ok(Math.abs(frame.nav[index] - frames[0].nav[index]) < 1, JSON.stringify(sampled));
+  return { first: frames[0].w, last: frames.at(-1).w, intermediateWidths: new Set(frames.map((frame) => Math.round(frame.w * 10))).size, frames: frames.length, scrollFirst: frames[0].scroll, scrollLast: frames.at(-1).scroll, anchoring: [...new Set(frames.map((frame) => frame.anchor))], playback, events: sampled.events, viewport: sampled.viewport };
 }
 try {
   for (const width of [1440, 1100]) for (const zoom of process.env.QA_ZOOM ? [Number(process.env.QA_ZOOM)] : [100, 160]) for (const theme of ["light", "dark"]) {

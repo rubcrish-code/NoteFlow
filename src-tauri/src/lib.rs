@@ -124,6 +124,8 @@ pub fn run() {
             data::create_note,
             data::create_project,
             data::complete_first_run,
+            data::save_first_run_profile,
+            data::fingerprint_fragment_context,
             data::dismiss_first_run,
             data::create_rag_chat,
             data::create_tag,

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ModalShell } from "./ModalShell";
-import { LOCAL_PROFILE_NAME_MAX_LENGTH, normalizeLocalProfileName, validateLocalProfileName } from "./localProfile";
+import { normalizeLocalProfileName, validateLocalProfileName } from "./localProfile";
 
 interface LocalProfileModalProps {
   name: string;
@@ -55,7 +55,6 @@ export function LocalProfileModal({ name, onClose, onSave, open }: LocalProfileM
           Имя
           <input
             aria-invalid={Boolean(error)}
-            maxLength={LOCAL_PROFILE_NAME_MAX_LENGTH}
             onChange={(event) => {
               setDraft(event.currentTarget.value);
               setError("");

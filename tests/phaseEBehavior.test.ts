@@ -82,8 +82,8 @@ describe("Phase E export workflow", () => {
     mockIPC((command, args) => { assert.equal(command, "plugin:dialog|save"); const options = args?.options as { defaultPath: string; filters: { name: string; extensions: string[] }[] }; assert.equal(options.defaultPath, "_CON.zip"); assert.deepEqual(options.filters, [{ name: "ZIP-архив (*.zip)", extensions: ["zip"] }]); return null; });
     assert.equal(await service.exportProject("project", "CON"), null);
   });
-  it("writes portable Markdown through the backend rather than a second serializer", async () => {
-    mockIPC((command, args) => { if (command === "get_note") return dto; if (command === "plugin:dialog|save") return "D:/QA/note.md"; assert.equal(command, "export_note_markdown_at_path"); assert.deepEqual(args, { noteId: "note", path: "D:/QA/note.md" }); return { path: "D:/QA/note.md", message: "Заметка сохранена.", relativePath: "" }; });
+  it("writes the standard projection of saved Markdown through the version-checked backend", async () => {
+    mockIPC((command, args) => { if (command === "get_note") return dto; if (command === "plugin:dialog|save") return "D:/QA/note.md"; assert.equal(command, "export_note_markdown_at_path"); assert.deepEqual(args, { noteId: "note", path: "D:/QA/note.md", contentVersion: dto.contentVersion, markdown: "# Канонический текст" }); return { path: "D:/QA/note.md", message: "Заметка сохранена.", relativePath: "" }; });
     assert.equal((await service.exportNote("note", "md"))?.path, "D:/QA/note.md");
   });
   it("passes only a canonical saved document to the worker and writes returned bytes", async () => {

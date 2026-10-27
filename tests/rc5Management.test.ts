@@ -160,6 +160,7 @@ it("inline note rename shows a counter, protects long legacy titles, and rejects
   await act(async () => title.focus()); assert.ok(document.querySelector(".entity-name-counter"));
   await act(async () => title.blur()); assert.deepEqual(renamed, []); assert.equal(title.textContent, legacy);
   await act(async () => { title.focus(); title.textContent = "я".repeat(26); title.dispatchEvent(new dom.window.Event("input", { bubbles: true })); });
-  assert.equal(document.querySelector(".entity-name-counter")?.textContent, "26/25");
-  await act(async () => title.blur()); assert.deepEqual(renamed, []); assert.equal(title.textContent, legacy); assert.match(document.querySelector('[role="alert"]')?.textContent ?? "", /25 символов/);
+  assert.match(document.querySelector(".entity-name-counter")?.textContent ?? "", /^26 \/ 25/);
+  assert.equal(document.querySelector(".entity-name-counter")?.classList.contains("exceeded"), true);
+  await act(async () => title.blur()); assert.deepEqual(renamed, []); assert.equal(title.textContent, "я".repeat(26)); assert.match(document.querySelector('[role="alert"]')?.textContent ?? "", /25 символов/);
 });

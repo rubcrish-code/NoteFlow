@@ -1,7 +1,8 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
-import { entityNameLength, validateEntityName } from "../../shared/entityName";
+import { validateEntityName } from "../../shared/entityName";
+import { EntityNameCounter } from "../../shared/EntityNameCounter";
 import { prepareMarkdownFiles, type PreparedMarkdownNote } from "./markdownImport";
 
 interface MarkdownImportControlProps {
@@ -115,7 +116,7 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
                     setNotes((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title } : item));
                     setError("");
                   }} value={note.title} />
-                  <small>{entityNameLength(note.title)}/25</small>
+                  <EntityNameCounter value={note.title} />
                   {validateEntityName(note.title) ? <span className="field-error">{validateEntityName(note.title)}</span> : null}
                 </label>
               ))}</div> : null}

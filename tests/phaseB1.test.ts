@@ -101,12 +101,9 @@ describe("first-run dialog", () => {
     await act(async () => root.render(h(FirstRunModal, {
       open: true, onClose: () => {}, onCreate: async () => { created += 1; },
     })));
-    assert.match(document.body.textContent ?? "", /хранятся на этом устройстве/);
-    for (let step = 0; step < 5; step += 1) {
-      await act(async () => Array.from(document.querySelectorAll("button")).find((button) => button.textContent === "Далее")!.click());
-    }
-    assert.match(document.body.textContent ?? "", /Создать первую заметку/);
-    await act(async () => document.querySelector<HTMLFormElement>("#first-run-form")!.requestSubmit());
+    assert.match(document.body.textContent ?? "", /локальном профиле/);
+    assert.equal(document.querySelector(".onboarding-steps"), null);
+    await act(async () => document.querySelector<HTMLFormElement>("#first-run-profile")!.requestSubmit());
     assert.equal(created, 0);
     assert.match(document.body.textContent ?? "", /Введите имя локального профиля/);
   });

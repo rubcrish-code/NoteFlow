@@ -1,6 +1,7 @@
 import type { EditorContentSidecarInput, EditorDocument } from "../../app/types";
 import { serializeEditorDocumentForStorage } from "../editor/editorContentSerializer";
 import { markdownToTiptapDoc, type EditorNode } from "../editor/markdownService";
+import { parseInternalNoteLink } from "../../shared/internalNoteLink";
 
 export const MAX_MARKDOWN_IMPORT_FILES = 32;
 export const MAX_MARKDOWN_IMPORT_FILE_BYTES = 8 * 1024 * 1024;
@@ -17,7 +18,7 @@ export interface PreparedMarkdownNote {
 }
 
 function isPortableLink(href: string) {
-  return /^(https?:\/\/|mailto:|#)/i.test(href.trim());
+  return Boolean(parseInternalNoteLink(href.trim())) || /^(https?:\/\/|mailto:|#)/i.test(href.trim());
 }
 
 function removeUnmanagedReferences(node: EditorNode, skipped: { count: number }): EditorNode {

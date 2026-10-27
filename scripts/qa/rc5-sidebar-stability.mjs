@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import { samplePanelMotion, settlePanelLayout } from "./panel-motion.mjs";
 const { chromium } = await import(process.env.NOTEFLOW_QA_PLAYWRIGHT || "playwright");
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage();
@@ -56,25 +57,22 @@ async function drag(handle, delta, panel, property) {
   return samples;
 }
 async function motion(baseline, direction) {
-  // Collect real start/middle/end frames; no screenshot-only assertions.
-  const frames = await page.evaluate(async () => {
+  const sampled = await samplePanelMotion(page, ".sb .col", () => {
     const rect = (element) => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom }; };
-    const capture = () => { const sidebar = document.querySelector(".sb"); return { sidebar: rect(sidebar), scrollWidth: sidebar.scrollWidth, clientWidth: sidebar.clientWidth, overflow: document.documentElement.scrollWidth > innerWidth, rows: [...sidebar.querySelectorAll(".sidebar-action")].map((button) => ({ button: rect(button), icon: rect(button.querySelector("svg")), label: rect(button.querySelector("span")), opacity: +getComputedStyle(button.querySelector("span")).opacity, position: getComputedStyle(button.querySelector("span")).position })) }; };
-    const frames = [capture()], start = performance.now(); document.querySelector(".sb .col").click();
-    await new Promise((resolve) => { function sample() { frames.push(capture()); if (performance.now() - start < 320) requestAnimationFrame(sample); else resolve(); } requestAnimationFrame(sample); });
-    return frames;
+    const sidebar = document.querySelector(".sb"); return { sidebar: rect(sidebar), scrollWidth: sidebar.scrollWidth, clientWidth: sidebar.clientWidth, overflow: document.documentElement.scrollWidth > innerWidth, rows: [...sidebar.querySelectorAll(".sidebar-action")].map((button) => ({ button: rect(button), icon: rect(button.querySelector("svg")), label: rect(button.querySelector("span")), opacity: +getComputedStyle(button.querySelector("span")).opacity, position: getComputedStyle(button.querySelector("span")).position })) };
   });
+  const { frames, playback } = sampled;
   const initial = frames[0];
   const final = frames.at(-1);
-  frames.forEach((g) => validGeometry(g, baseline));
+  [...frames, ...playback].forEach((g) => validGeometry(g, baseline));
   assert.ok(new Set(frames.map((g) => Math.round(g.sidebar.w * 10))).size > 3);
-  for (let i = 1; i < frames.length; i++) {
-    assert.ok(direction * (frames[i].sidebar.w - frames[i - 1].sidebar.w) >= -0.6);
+  for (const trajectory of [frames, playback]) for (let i = 1; i < trajectory.length; i++) {
+    assert.ok(direction * (trajectory[i].sidebar.w - trajectory[i - 1].sidebar.w) >= -0.6);
     // Padding is zoom-aware; icon X must remain between its endpoints, never jump to the wide panel centre.
-    assert.ok(frames[i].rows[0].icon.x >= Math.min(initial.rows[0].icon.x, final.rows[0].icon.x) - 0.6);
-    assert.ok(frames[i].rows[0].icon.x <= Math.max(initial.rows[0].icon.x, final.rows[0].icon.x) + 0.6);
+    assert.ok(trajectory[i].rows[0].icon.x >= Math.min(initial.rows[0].icon.x, final.rows[0].icon.x) - 0.6);
+    assert.ok(trajectory[i].rows[0].icon.x <= Math.max(initial.rows[0].icon.x, final.rows[0].icon.x) + 0.6);
   }
-  return { frames: frames.length, widths: frames.map((g) => +g.sidebar.w.toFixed(2)), iconX: frames.map((g) => +g.rows[0].icon.x.toFixed(2)), labelX: frames.map((g) => +g.rows[0].label.x.toFixed(2)) };
+  return { frames: frames.length, widths: frames.map((g) => +g.sidebar.w.toFixed(2)), iconX: frames.map((g) => +g.rows[0].icon.x.toFixed(2)), labelX: frames.map((g) => +g.rows[0].label.x.toFixed(2)), playback, events: sampled.events, viewport: sampled.viewport };
 }
 async function description(modal, text, singleLine) {
   await page.getByText(text, { exact: true }).waitFor();
@@ -146,7 +144,7 @@ try {
     await page.locator(".rag-project-trigger").waitFor(); await page.waitForTimeout(650);
     assert.deepEqual(await page.evaluate(() => Object.fromEntries(["sidebarWidth", "listWidth", "chatWidth", "ragConversationWidth", "ragSourcesWidth"].map((key) => [key, window.qaSettings[key]]))), panelWidths);
     record(`all-panel-widths-persist-${id}`, panelWidths);
-    await page.emulateMedia({ reducedMotion: "reduce" }); await page.locator(".sb .col").click(); await page.waitForTimeout(30);
+    await page.emulateMedia({ reducedMotion: "reduce" }); await page.locator(".sb .col").click(); await settlePanelLayout(page);
     assert.equal(await page.locator(".page-shell").evaluate((el) => getComputedStyle(el).transitionDuration), "0s"); record(`reduced-${id}`); await page.emulateMedia({ reducedMotion: "no-preference" });
   }
   assert.deepEqual(errors, []); console.log(`PASS ${results.length} sidebar stability cases`);

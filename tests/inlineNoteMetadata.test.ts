@@ -53,7 +53,7 @@ after(() => {
 });
 
 describe("inline note metadata", () => {
-  it("edits title in place with Enter, ignores unchanged blur, and uses the empty fallback", async () => {
+  it("edits title in place with Enter, ignores unchanged blur, and rejects an empty rename", async () => {
     const saves: string[] = [];
     let title = "Старая заметка";
     const onRename = async (_noteId: string, nextTitle: string) => { saves.push(nextTitle); title = nextTitle; };
@@ -74,7 +74,8 @@ describe("inline note metadata", () => {
 
     await act(async () => { heading().focus(); heading().textContent = "   "; heading().blur(); });
     await render();
-    assert.deepEqual(saves, ["Новое имя", "Без названия"]);
+    assert.deepEqual(saves, ["Новое имя"]);
+    assert.match(container.textContent ?? "", /Введите название/);
   });
 
   it("cancels an inline rename with Escape", async () => {

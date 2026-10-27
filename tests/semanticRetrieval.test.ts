@@ -179,8 +179,9 @@ describe("semantic retrieval placement and RAG chat contracts", () => {
     assert.match(workspaceSource, /onOpenResult\(source\)/);
     assert.match(workspaceSource, /<ResizeHandle[\s\S]*onResize=\{onSourcesResize\}/);
     assert.match(appShellSource, /await openNote\([\s\S]*?result\.noteId,[\s\S]*?result\.archived,[\s\S]*?Заметка больше недоступна/);
-    assert.match(appShellSource, /setSemanticOpenTarget\(result\)/);
-    assert.match(editorSource, /classList\.add\("semantic-search-target"\)/);
+    assert.match(appShellSource, /setSemanticOpenTarget\(\{ \.\.\.result \}\)/);
+    assert.match(editorSource, /resolveDocumentFragment\(document, quote, anchor\)/);
+    assert.match(editorSource, /setMeta\(fragmentNavigationKey, range\)/);
   });
 
   it("renders source metadata and assistant Markdown safely", () => {

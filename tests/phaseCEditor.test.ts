@@ -378,7 +378,7 @@ describe("Phase C actual editor behavior", () => {
     for (const command of ["bold", "italic", "inline-code", "underline", "strike"] as const) assert.equal(runEditorFormattingCommand(editor, command), true);
     const types = editor.getJSON().content![0].content![0].marks!.map((mark) => mark.type).sort();
     assert.deepEqual(types, ["bold", "code", "italic", "strike", "underline"]);
-    assert.equal(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, "`Сочетание`");
+    assert.match(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, /<code>Сочетание<\/code>/);
     editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
     assert.equal(editor.getText(), "Сочетание");
     assert.deepEqual(editor.getJSON().content![0].content![0].marks!.map((mark) => mark.type).sort(), types);
@@ -902,7 +902,8 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const children = Array.from(menu.children);
     assert.deepEqual(children.slice(0, 3).map((child) => child.textContent), ["Вырезать", "Копировать", "Вставить"]);
     assert.equal(children[3].getAttribute("role"), "separator");
-    assert.ok(children[4].querySelector("[data-context-action]"));
+    assert.ok(menu.querySelector("[data-context-action]"));
+    assert.match(menu.textContent ?? "", /Ссылка на заметку/);
     assert.deepEqual(editor.state.selection.toJSON(), selection);
     const escape = new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     await act(async () => document.dispatchEvent(escape));

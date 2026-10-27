@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import type { Note, ProjectCard } from "../../app/types";
 import type { SearchNoteResult } from "../../services/searchService";
 import { Icon } from "../../shared/Icon";
-import { getTagDisplayColor } from "../tags/tagPalette";
+import { getTagDisplayColor, tagColorStyle } from "../tags/tagPalette";
 import { getNextSearchResultIndex, splitSearchText } from "./searchText";
 import { MenuPopover } from "../../shared/MenuPopover";
 import { ModalShell } from "../../shared/ModalShell";
@@ -156,7 +156,7 @@ export function NoteListPanel({
                       <span className="cs">{note.summary}</span>
                       {project ? <span className="card-project">{project.title}</span> : null}
                       <span className="cf">
-                        {note.tags.map((tag) => <span className={`tag tag-${tag.color}`} key={tag.id}>{tag.name}</span>)}
+                        {note.tags.map((tag) => <span className={`tag tag-${tag.color}`} key={tag.id} style={tagColorStyle(tag)}>{tag.name}</span>)}
                       </span>
                     </span>
                   </button>
@@ -202,7 +202,7 @@ function SearchResultCard({ active, onSelect, query, result }: { active: boolean
       <span className="search-result-snippet"><HighlightedText query={query} text={result.snippet} /></span>
       <span className="search-result-meta">
         {result.projectId ? <span>{result.project}</span> : null}
-        {result.tags.map((tag) => <span className={`tag tag-${tag.color}`} key={tag.id}>{tag.name}</span>)}
+        {result.tags.map((tag) => <span className={`tag tag-${tag.color}`} key={tag.id} style={tagColorStyle({ color: tag.color, customColor: tag.customColor ?? undefined })}>{tag.name}</span>)}
         {result.archived ? <span className="search-result-archived">Архив</span> : null}
       </span>
     </button>

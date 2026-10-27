@@ -55,6 +55,7 @@ export interface EditorContentSidecarInput {
 }
 
 export interface Note {
+  archivedAt?: string;
   attachments: NoteAttachment[];
   contentHtml: string;
   contentMarkdown: string;

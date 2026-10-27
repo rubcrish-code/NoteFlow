@@ -33,7 +33,7 @@ import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, Inli
 import { serializeEditorDocumentForStorage } from "./editorContentSerializer";
 import { shouldReloadEditorDocument, type EditorDocumentLoadToken } from "./editorDocumentReload";
 import { handleEditorLinkClick } from "./editorLinkClick";
-import { EditorIndent, NoteFlowLink } from "./editorInteractions";
+import { EditorIndent, NoteFlowLink, PassiveEditorTransactions } from "./editorInteractions";
 import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
 import { isTauri } from "@tauri-apps/api/core";
 import { readEditorClipboard, importClipboardFiles, type EditorClipboardContent } from "../../services/clipboardService";
@@ -57,13 +57,21 @@ import { HeadingAnchors, scrollToNoteHeading } from "./headingAnchors";
 import { NoteOutline } from "./NoteOutline";
 import { NoteExportDialog } from "../export/NoteExportDialog";
 import type { NoteExportFormat } from "../export/exportDocument";
-import { entityNameLength, validateEntityName } from "../../shared/entityName";
+import { validateEntityName } from "../../shared/entityName";
+import { EntityNameCounter } from "../../shared/EntityNameCounter";
 import { PublicCommandError } from "../../services/safeInvoke";
 import { NoteSearch } from "./noteSearch";
 import { NoteSearchBar } from "./NoteSearchBar";
 import { captureMarkdownImportSelection, insertImportedMarkdown, type MarkdownImportSelection } from "./insertImportedMarkdown";
+import { internalNoteHref, type InternalNoteLink, type FragmentAnchor } from "../../shared/internalNoteLink";
+import { captureFragmentAnchor, FragmentNavigation, fragmentNavigationKey, resolveDocumentFragment, sourceSnapshotIsCurrent } from "./fragmentNavigation";
+import { scrollToSearchMatch } from "./scrollToSearchMatch";
+import { tiptapJsonToPlainText } from "./markdownService";
+import { NoteLinkPicker } from "./NoteLinkPicker";
+import { writeEditorClipboard } from "../../services/clipboardService";
 
 interface EditorAreaProps {
+  internalOpenTarget?: InternalNoteLink & { navigationId: number };
   searchQuery?: string;
   documentReloadGeneration: number;
   editorContentOffset: number;
@@ -93,7 +101,7 @@ interface EditorAreaProps {
   onImportMarkdown: (notes: readonly PreparedMarkdownNote[]) => Promise<number>;
   onOpenChat: () => void;
   onOpenAttachment: (attachmentId: string) => Promise<void>;
-  onOpenNote: (noteId: string) => void;
+  onOpenNote: (noteId: string, fragment?: FragmentAnchor) => void;
   onOpenSettingsModels: () => void;
   onCreateNoteTag: (noteId: string, value: TagEditorValue) => Promise<void>;
   onPickAndStoreAttachment: (kind: "file" | "image") => Promise<{ attachment: NoteAttachment; sizeLabel: string } | null>;
@@ -182,8 +190,10 @@ export function createEditorExtensions(options: {
     TextStyle,
     FontFormat,
     EditorIndent,
+    PassiveEditorTransactions,
     HeadingAnchors,
     NoteSearch,
+    FragmentNavigation,
     Color,
     Highlight.configure({ multicolor: true }),
     Superscript,
@@ -199,6 +209,7 @@ export function createEditorExtensions(options: {
       types: ["heading", "paragraph"],
     }),
     NoteFlowLink.configure({
+      protocols: ["noteflow"],
       autolink: true,
       linkOnPaste: true,
       openOnClick: false,
@@ -260,9 +271,12 @@ export function EditorArea({
   projectOptions,
   saveStatus,
   semanticOpenTarget,
+  internalOpenTarget,
   tagOptions,
 }: EditorAreaProps) {
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
+  const [isNoteLinkPickerOpen, setIsNoteLinkPickerOpen] = useState(false);
+  const noteLinkSelectionRef = useRef<{ noteId: string; from: number; to: number; document: Editor["state"]["doc"] } | null>(null);
   const [blockInsertSelection, setBlockInsertSelection] = useState<EditorInsertSelection | null>(null);
   const [blockInsertTarget, setBlockInsertTarget] = useState<EditorInsertTarget | null>(null);
   const [isNoteMenuOpen, setIsNoteMenuOpen] = useState(false);
@@ -327,7 +341,7 @@ export function EditorArea({
           void openUrl(url).catch(() => onToast("Не удалось открыть ссылку"));
         }, (anchor) => {
           if (!scrollToNoteHeading(view, anchor)) onToast("Заголовок по этой ссылке не найден.");
-        }),
+        }, (link) => onOpenNoteRef.current(link.noteId, link.fragment)),
       },
       handleClickOn: (_view, _pos, node, _nodePos, event, direct) => {
         if (!direct) {
@@ -524,26 +538,60 @@ export function EditorArea({
   }, [documentReloadGeneration, editor, note.contentVersion, note.editorDocument, note.id]);
 
   useEffect(() => {
-    if (!editor || semanticOpenTarget?.noteId !== note.id || loadedDocumentTokenRef.current?.noteId !== note.id) {
-      return;
-    }
+    setIsNoteLinkPickerOpen(false); noteLinkSelectionRef.current = null;
+  }, [note.id, documentReloadGeneration]);
 
-    const editorElement = editor.view.dom;
-    const targetElement = findSemanticTargetElement(editorElement, semanticOpenTarget);
-    if (!targetElement) {
-      return;
-    }
+  useEffect(() => {
+    if (!editor || loadedDocumentTokenRef.current?.noteId !== note.id) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const anchor = internalOpenTarget?.noteId === note.id ? internalOpenTarget.fragment : undefined;
+    const source = semanticOpenTarget?.noteId === note.id ? semanticOpenTarget : null;
+    const quote = anchor?.quote ?? (source ? tiptapJsonToPlainText(markdownToTiptapDoc(source.snippet.replace(/^…\s*|\s*…$/gu, ""))) : "");
+    editor.view.dispatch(editor.state.tr.setMeta(fragmentNavigationKey, null).setMeta("addToHistory", false));
+    if (!quote) return;
+    const document = editor.state.doc;
+    const rangePromise = source && !sourceSnapshotIsCurrent(source.updatedAt, note.updatedAt) ? Promise.resolve(null) : resolveDocumentFragment(document, quote, anchor);
+    void rangePromise.then((range) => {
+      if (cancelled || editor.isDestroyed || !document.eq(editor.state.doc)) return;
+      if (!range) { onToast("Фрагмент изменён или не может быть найден однозначно. Открыта заметка."); return; }
+      editor.view.dispatch(editor.state.tr.setMeta(fragmentNavigationKey, range).setMeta("addToHistory", false));
+      scrollToSearchMatch(editor.view, range, null);
+      timer = window.setTimeout(() => { if (!editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(fragmentNavigationKey, null).setMeta("addToHistory", false)); }, 4000);
+    }).catch(() => { if (!cancelled) onToast("Не удалось найти фрагмент. Открыта заметка."); });
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [editor, note.id, documentReloadGeneration, semanticOpenTarget, internalOpenTarget]);
 
-    editorElement.querySelectorAll(".semantic-search-target").forEach((element) => {
-      element.classList.remove("semantic-search-target");
-    });
-    targetElement.classList.add("semantic-search-target");
-    targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
-    const timeoutId = window.setTimeout(() => {
-      targetElement.classList.remove("semantic-search-target");
-    }, 2200);
-    return () => window.clearTimeout(timeoutId);
-  }, [editor, note.id, semanticOpenTarget]);
+  function chooseNoteLink() {
+    if (!editor) return;
+    if (editor.isActive("link") && editor.state.selection.empty) editor.commands.extendMarkRange("link");
+    noteLinkSelectionRef.current = { noteId: note.id, from: editor.state.selection.from, to: editor.state.selection.to, document: editor.state.doc };
+    editor.view.focus();
+    setIsNoteLinkPickerOpen(true);
+  }
+
+  function insertNoteLink(noteId: string, title: string) {
+    const selected = noteLinkSelectionRef.current;
+    setIsNoteLinkPickerOpen(false);
+    if (!editor || !selected || selected.noteId !== note.id || !selected.document.eq(editor.state.doc)) { onToast("Заметка изменилась. Выберите место для ссылки ещё раз."); return; }
+    const href = internalNoteHref({ noteId });
+    if (selected.from !== selected.to) editor.chain().focus().setTextSelection(selected).setLink({ href }).run();
+    else editor.chain().focus().insertContentAt(selected.from, { type: "text", text: title, marks: [{ type: "link", attrs: { href } }] }).run();
+  }
+
+  async function copyFragmentLink() {
+    if (!editor || editor.state.selection.empty) { onToast("Выделите текст фрагмента."); return; }
+    const { from, to } = editor.state.selection;
+    const document = editor.state.doc;
+    const noteId = note.id;
+    try {
+      const fragment = await captureFragmentAnchor(document, from, to);
+      if (!fragment) { onToast("Выделите от 1 до 2000 символов текста."); return; }
+      const label = fragment.quote.replace(/[\\[\]]/g, "\\$&");
+      await writeEditorClipboard(`[${label}](${internalNoteHref({ noteId, fragment })})`);
+      onToast("Ссылка скопирована");
+    } catch { onToast("Не удалось скопировать ссылку на фрагмент"); }
+  }
 
   async function refreshAiStatus() {
     try {
@@ -829,6 +877,8 @@ export function EditorArea({
       )}
 
       <FormattingToolbar
+        onChooseNote={chooseNoteLink}
+        onCopyFragment={() => void copyFragmentLink()}
         aiStatus={aiStatus}
         editor={editor}
         onAiAction={handleAiAction}
@@ -836,6 +886,7 @@ export function EditorArea({
         onToast={onToast}
         pendingAiActionId={pendingAiActionId}
       />
+      {isNoteLinkPickerOpen ? <NoteLinkPicker onClose={() => setIsNoteLinkPickerOpen(false)} onChoose={insertNoteLink} /> : null}
       {exportNoteId ? <NoteExportDialog onClose={() => setExportNoteId(null)} onExport={(format) => onExportNote(exportNoteId, format)} /> : null}
 
       <div className="editor-writing-viewport">
@@ -857,7 +908,7 @@ export function EditorArea({
             <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
               {!isBlockMenuOpen ? <TableToolsPopover editor={editor} onToast={onToast} /> : null}
               <EditorContent editor={editor} />
-              <EditorContextMenu key={`${note.id}:${documentReloadGeneration}`} editor={editor} onToast={onToast} onPaste={() => pasteClipboard()} />
+              <EditorContextMenu key={`${note.id}:${documentReloadGeneration}`} editor={editor} onToast={onToast} onPaste={() => pasteClipboard()} onChooseNote={chooseNoteLink} onCopyFragment={() => void copyFragmentLink()} />
               {isEmptyNote ? <NewNoteHelper /> : null}
             </div>
           </div>
@@ -972,7 +1023,7 @@ export function EditorArea({
         <ModalShell
           closeDisabled={projectCreateBusy}
           description="Заметка будет добавлена в новый проект."
-          footer={<div className="new-note-actions"><button className="secondary-btn" disabled={projectCreateBusy} onClick={() => setIsCreateProjectOpen(false)} type="button">Отмена</button><button className="primary-btn" disabled={!newProjectTitle.trim() || projectCreateBusy} form="create-note-project-form" type="submit">{projectCreateBusy ? "Создаём…" : "Создать проект"}</button></div>}
+          footer={<div className="new-note-actions"><button className="secondary-btn" disabled={projectCreateBusy} onClick={() => setIsCreateProjectOpen(false)} type="button">Отмена</button><button className="primary-btn" disabled={Boolean(validateEntityName(newProjectTitle)) || projectCreateBusy} form="create-note-project-form" type="submit">{projectCreateBusy ? "Создаём…" : "Создать проект"}</button></div>}
           onClose={() => setIsCreateProjectOpen(false)} open size="compact" title="Новый проект"
         >
           <form className="new-note-form" id="create-note-project-form" onSubmit={(event) => {
@@ -984,7 +1035,7 @@ export function EditorArea({
             setProjectCreateError("");
             void onCreateProjectForNote(note.id, newProjectTitle.trim()).then(() => setIsCreateProjectOpen(false)).catch((error: unknown) => setProjectCreateError(error instanceof PublicCommandError && error.code === "PROJECT_TITLE_EXISTS" ? error.message : error instanceof Error && error.message.startsWith("Проект создан,") ? error.message : "Не удалось создать проект. Проверьте название и попробуйте ещё раз.")).finally(() => setProjectCreateBusy(false));
           }}>
-            <label>Название проекта<input autoFocus aria-invalid={Boolean(projectCreateError)} onChange={(event) => { setNewProjectTitle(event.currentTarget.value); setProjectCreateError(""); }} value={newProjectTitle} /><small>{entityNameLength(newProjectTitle)}/25</small></label>
+            <label>Название проекта<input autoFocus aria-invalid={Boolean(projectCreateError)} onChange={(event) => { setNewProjectTitle(event.currentTarget.value); setProjectCreateError(""); }} value={newProjectTitle} /><EntityNameCounter value={newProjectTitle} /></label>
             {projectCreateError ? <span className="field-error" role="alert">{projectCreateError}</span> : null}
           </form>
         </ModalShell>
@@ -1036,38 +1087,6 @@ function selectionStillMatches(editor: Editor, selection: AiSelectionSnapshot) {
     return false;
   }
   return editor.state.doc.textBetween(selection.from, selection.to, "\n").trim() === selection.text;
-}
-
-function findSemanticTargetElement(editorElement: HTMLElement, target: SemanticSearchResult) {
-  const elements = Array.from(editorElement.querySelectorAll<HTMLElement>("h1, h2, h3, h4, p, li, td, th, blockquote, pre"));
-  const heading = target.headingPath[target.headingPath.length - 1];
-  if (heading) {
-    const normalizedHeading = normalizeSearchTargetText(heading);
-    const headingElement = elements.find((element) => normalizeSearchTargetText(element.textContent ?? "") === normalizedHeading);
-    if (headingElement) {
-      return headingElement;
-    }
-  }
-
-  const snippetWords = normalizeSearchTargetText(target.snippet.replace(/^…|…$/g, ""))
-    .split(" ")
-    .filter((word) => word.length >= 3);
-  const phrase = snippetWords.slice(0, 6).join(" ");
-  if (phrase) {
-    const phraseElement = elements.find((element) => normalizeSearchTargetText(element.textContent ?? "").includes(phrase));
-    if (phraseElement) {
-      return phraseElement;
-    }
-  }
-
-  return snippetWords
-    .slice(0, 12)
-    .map((word) => elements.find((element) => normalizeSearchTargetText(element.textContent ?? "").includes(word)))
-    .find((element): element is HTMLElement => Boolean(element));
-}
-
-function normalizeSearchTargetText(value: string) {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
 function AiScopeChoicePanel({

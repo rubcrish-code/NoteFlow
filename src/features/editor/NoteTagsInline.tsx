@@ -4,7 +4,7 @@ import type { NoteTag, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
 import { TagEditorModal, type TagEditorValue } from "../tags/TagEditorModal";
-import { getTagDisplayColor } from "../tags/tagPalette";
+import { getTagDisplayColor, tagColorStyle } from "../tags/tagPalette";
 
 interface NoteTagsInlineProps {
   noteId: string;
@@ -89,7 +89,7 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMake
     <>
       <div className="ed-tags">
         {tags.map((tag) => (
-          <span className={`tag tag-${tag.color} ed-tag-chip`} key={tag.id}>
+          <span className={`tag tag-${tag.color} ed-tag-chip`} key={tag.id} style={tagColorStyle(tag)}>
             <span>{tag.name}</span>
             <button
               aria-label={`Убрать тег «${tag.name}» с этой заметки`}

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import { samplePanelMotion, settlePanelLayout } from "./panel-motion.mjs";
 
 const { chromium } = await import(process.env.NOTEFLOW_QA_PLAYWRIGHT || "playwright");
 const browser = await chromium.launch({ channel: "msedge", headless: true });
@@ -71,29 +72,21 @@ async function resize(delta, expected) {
   return { samples };
 }
 async function motion(direction) {
-  const frames = await page.evaluate(async ({ source }) => {
-    const read = new Function(`return (${source})()`) ;
-    const frames = [read()], start = performance.now();
-    document.querySelector(".sb .col").click();
-    await new Promise((resolve) => {
-      function sample() { frames.push(read()); if (performance.now() - start < 340) requestAnimationFrame(sample); else resolve(); }
-      requestAnimationFrame(sample);
-    });
-    return frames;
-  }, { source: capture.toString() });
-  frames.forEach(verify);
+  const sampled = await samplePanelMotion(page, ".sb .col", capture);
+  const { frames, playback } = sampled;
+  [...frames, ...playback].forEach(verify);
   assert.ok(new Set(frames.map((g) => Math.round(g.sidebar.w * 10))).size > 3);
   const first = frames[0], last = frames.at(-1);
-  for (let i = 1; i < frames.length; i++) {
-    assert.ok(direction * (frames[i].sidebar.w - frames[i - 1].sidebar.w) >= -0.6);
-    for (let row = 0; row < frames[i].rows.length; row++) {
-      const r = frames[i].rows[row];
+  for (const trajectory of [frames, playback]) for (let i = 1; i < trajectory.length; i++) {
+    assert.ok(direction * (trajectory[i].sidebar.w - trajectory[i - 1].sidebar.w) >= -0.6);
+    for (let row = 0; row < trajectory[i].rows.length; row++) {
+      const r = trajectory[i].rows[row];
       assert.ok(Math.abs(r.icon.y - first.rows[row].icon.y) < 0.6);
       assert.ok(r.icon.x >= Math.min(first.rows[row].icon.x, last.rows[row].icon.x) - 0.6);
       assert.ok(r.icon.x <= Math.max(first.rows[row].icon.x, last.rows[row].icon.x) + 0.6);
     }
   }
-  return { frames };
+  return { frames, playback, events: sampled.events, viewport: sampled.viewport };
 }
 
 try {
@@ -147,7 +140,7 @@ try {
     }
     await openSection("Внешний вид");
     await page.emulateMedia({ reducedMotion: "reduce" }); await page.locator(".sb .col").click();
-    await page.waitForTimeout(40); const reduced = await snapshot(`reduced-motion-${id}`); assert.equal(reduced.duration, "0s");
+    await settlePanelLayout(page); const reduced = await snapshot(`reduced-motion-${id}`); assert.equal(reduced.duration, "0s");
     await page.emulateMedia({ reducedMotion: "no-preference" });
   }
   assert.deepEqual(errors, []); console.log(`PASS ${results.length} settings overflow cases`);

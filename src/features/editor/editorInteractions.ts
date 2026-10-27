@@ -1,9 +1,24 @@
 import { Extension } from "@tiptap/core";
 import Link from "@tiptap/extension-link";
-import { TextSelection } from "@tiptap/pm/state";
+import { Plugin, TextSelection } from "@tiptap/pm/state";
 import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
+import { parseInternalNoteLink } from "../../shared/internalNoteLink";
 
 export const MAX_PARAGRAPH_INDENT = 100;
+
+export const PassiveEditorTransactions = Extension.create({
+  name: "passiveEditorTransactions",
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      filterTransaction(transaction) {
+        // TipTap's TrailingNode otherwise appends content even on search,
+        // selection or decoration updates after loading a terminal block.
+        if (!transaction.docChanged) transaction.setMeta("skipTrailingNode", true);
+        return true;
+      },
+    })];
+  },
+});
 
 export function paragraphIndentLimit(width: number) {
   return Math.min(MAX_PARAGRAPH_INDENT, Math.max(0, Math.floor((width - 120) / 24)));
@@ -76,7 +91,8 @@ export const NoteFlowLink = Link.extend({
     const result = this.parent!(props);
     // Keep the parent's URI/XSS validation; only annotate safe anchors.
     if (typeof href === "string" && sanitizeMarkdownLinkHref(href) && Array.isArray(result) && typeof result[1] === "object" && result[1] !== null) {
-      Object.assign(result[1], { "data-tooltip": href.startsWith("#") ? "Перейти к заголовку" : href });
+      const internal = parseInternalNoteLink(href);
+      Object.assign(result[1], { "data-tooltip": internal ? internal.fragment ? "Перейти к фрагменту заметки" : "Открыть заметку" : href.startsWith("#") ? "Перейти к заголовку" : href, ...(internal ? { "data-note-link": "true" } : {}) });
     }
     return result;
   },

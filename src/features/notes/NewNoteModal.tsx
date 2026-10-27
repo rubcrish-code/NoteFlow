@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ModalShell } from "../../shared/ModalShell";
-import { entityNameLength, validateEntityName } from "../../shared/entityName";
-import { formatDisplayDate, DatePicker as NoteDatePicker, todayIsoDate, type DatePickerHandle } from "../../shared/DatePicker";
+import { normalizeEntityName, validateEntityName } from "../../shared/entityName";
+import { EntityNameCounter } from "../../shared/EntityNameCounter";
+import { DatePicker as NoteDatePicker, todayIsoDate, type DatePickerHandle } from "../../shared/DatePicker";
 
 interface NewNoteModalProps {
   isOpen: boolean;
@@ -29,9 +30,9 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const validation = validateEntityName(title.trim() || "Без названия");
+    const validation = validateEntityName(title);
     if (validation) { setError(validation); return; }
-    onCreate(title.trim() || "Без названия", noteDate || todayIsoDate());
+    onCreate(normalizeEntityName(title), noteDate || todayIsoDate());
   }
 
   const handleEscapeKeyDown = useCallback(() => {
@@ -53,7 +54,7 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
           <button className="cancel secondary-btn" onClick={onClose} type="button">
             Отмена
           </button>
-          <button className="create primary-btn" form="new-note-form" type="submit">
+          <button className="create primary-btn" disabled={Boolean(validateEntityName(title))} form="new-note-form" type="submit">
             Создать заметку
           </button>
         </div>
@@ -70,13 +71,12 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
         <label>
           Название заметки
           <input aria-invalid={Boolean(error)} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder="Например, Итоги встречи" ref={titleInputRef} type="text" value={title} />
-          <small>{entityNameLength(title)}/25</small>
+          <EntityNameCounter value={title} />
           {error ? <span className="field-error" role="alert">{error}</span> : null}
         </label>
         <label>
           Дата заметки
           <NoteDatePicker ref={datePickerRef} isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} triggerRef={dateTriggerRef} value={noteDate} />
-          <span className="date-picker-readable">Выбрана дата: {formatDisplayDate(noteDate)}</span>
         </label>
       </form>
     </ModalShell>

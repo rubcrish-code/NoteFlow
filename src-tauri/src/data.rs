@@ -331,6 +331,7 @@ pub struct DeleteAllNotesResultDto {
 #[serde(rename_all = "camelCase")]
 pub struct FirstRunStateDto {
     pub required: bool,
+    pub needs_profile_name: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1156,8 +1157,10 @@ impl DataStore {
     }
 
     fn first_run_required(&self) -> DataResult<bool> {
-        if self.get_setting(FIRST_RUN_COMPLETED_KEY)?.is_some()
-            || self.get_setting("seed.demo.v1")?.is_some()
+        if let Some(completed) = self.get_setting(FIRST_RUN_COMPLETED_KEY)? {
+            return Ok(completed != json!(true));
+        }
+        if self.get_setting("seed.demo.v1")?.is_some()
             || self.get_ui_settings()?.local_profile_name != default_ui_local_profile_name()
         {
             return Ok(false);
@@ -1173,6 +1176,11 @@ impl DataStore {
     }
 
     fn dismiss_first_run(&mut self) -> DataResult<()> {
+        if self.first_run_required()? && self.get_setting(FIRST_RUN_COMPLETED_KEY)?.is_none() {
+            return Err(DataError::InvalidInput(
+                "Сначала укажите имя локального профиля".into(),
+            ));
+        }
         let transaction = self.conn.transaction()?;
         set_setting_tx(&transaction, FIRST_RUN_COMPLETED_KEY, json!(true))?;
         transaction.commit()?;
@@ -1189,7 +1197,9 @@ impl DataStore {
             ));
         }
         let profile_name = normalize_required_text(&request.profile_name, "Имя профиля")?;
-        if profile_name.chars().count() > 48 {
+        if unicode_segmentation::UnicodeSegmentation::graphemes(profile_name.as_str(), true).count()
+            > 48
+        {
             return Err(DataError::InvalidInput(
                 "Имя профиля слишком длинное".to_string(),
             ));
@@ -1215,6 +1225,34 @@ impl DataStore {
             note: self.get_note(&note_id)?,
             settings,
         })
+    }
+
+    fn save_first_run_profile(
+        &mut self,
+        request: CompleteFirstRunRequest,
+    ) -> DataResult<UiSettingsDto> {
+        if !self.first_run_required()? {
+            return Err(DataError::InvalidInput(
+                "Локальный профиль уже создан".into(),
+            ));
+        }
+        let name = normalize_required_text(&request.profile_name, "Имя профиля")?;
+        if unicode_segmentation::UnicodeSegmentation::graphemes(name.as_str(), true).count() > 48 {
+            return Err(DataError::InvalidInput(
+                "Имя профиля слишком длинное".into(),
+            ));
+        }
+        let mut settings = self.get_ui_settings()?;
+        settings.local_profile_name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        let transaction = self.conn.transaction()?;
+        set_setting_tx(
+            &transaction,
+            UI_SETTINGS_KEY,
+            serde_json::to_value(&settings)?,
+        )?;
+        set_setting_tx(&transaction, FIRST_RUN_COMPLETED_KEY, json!(false))?;
+        transaction.commit()?;
+        Ok(settings)
     }
 
     fn get_ui_settings(&self) -> DataResult<UiSettingsDto> {
@@ -2438,7 +2476,9 @@ impl DataStore {
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 'doc', ?9, ?10, ?10, ?10)",
                 params![
                     new_id,
-                    if source_title.chars().count() + " - копия".chars().count() <= 25 {
+                    if normalize_entity_title(&format!("{source_title} - копия"), "Название")
+                        .is_ok()
+                    {
                         format!("{source_title} - копия")
                     } else {
                         "Копия заметки".to_string()
@@ -2944,7 +2984,16 @@ impl DataStore {
     }
 
     fn update_tag(&mut self, request: UpdateTagRequest) -> DataResult<Vec<TagRowDto>> {
-        let name = normalize_tag_name(&request.name)?;
+        let previous: String = self.conn.query_row(
+            "SELECT name FROM tags WHERE id = ?1",
+            params![request.tag_id],
+            |row| row.get(0),
+        )?;
+        let name = if request.name == previous {
+            previous
+        } else {
+            normalize_tag_name(&request.name)?
+        };
         if tag_name_exists(&self.conn, &name, Some(&request.tag_id))? {
             return Err(DataError::InvalidInput(
                 "Тег с таким названием уже существует".to_string(),
@@ -2969,7 +3018,12 @@ impl DataStore {
     }
 
     fn rename_tag(&mut self, request: RenameTagRequest) -> DataResult<Vec<TagRowDto>> {
-        let name = normalize_required_text(&request.name, "Название тега")?;
+        let name = normalize_tag_name(&request.name)?;
+        if tag_name_exists(&self.conn, &name, Some(&request.tag_id))? {
+            return Err(DataError::InvalidInput(
+                "Тег с таким названием уже существует".into(),
+            ));
+        }
         self.conn.execute(
             "UPDATE tags SET name = ?1, updated_at = ?2 WHERE id = ?3",
             params![name, now_iso(), request.tag_id],
@@ -3451,6 +3505,30 @@ impl DataStore {
             relative_path,
             "Markdown-экспорт заметки создан",
         ))
+    }
+
+    fn portable_markdown_snapshot(
+        &self,
+        note_id: &str,
+        content_version: Option<i64>,
+        markdown: Option<String>,
+    ) -> DataResult<crate::document_export::PortableNote> {
+        let mut snapshot = self.portable_note_snapshot(note_id)?;
+        if let Some(markdown) = markdown {
+            let note = self.get_note(note_id)?;
+            if content_version != Some(note.content_version) {
+                return Err(DataError::InvalidInput(
+                    "Заметка изменилась. Повторите экспорт.".into(),
+                ));
+            }
+            if markdown.len() > crate::document_export::MAX_EXPORT_BYTES {
+                return Err(DataError::InvalidInput(
+                    "Документ слишком большой для экспорта.".into(),
+                ));
+            }
+            snapshot.markdown = markdown;
+        }
+        Ok(snapshot)
     }
 
     fn portable_note_snapshot(
@@ -6244,14 +6322,7 @@ fn normalize_required_text(value: &str, field_name: &str) -> DataResult<String> 
 }
 
 fn normalize_tag_name(value: &str) -> DataResult<String> {
-    let name = normalize_required_text(value, "Название тега")?;
-    let normalized = name.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() > 80 {
-        return Err(DataError::InvalidInput(
-            "Название тега не должно быть длиннее 80 символов".to_string(),
-        ));
-    }
-    Ok(normalized)
+    normalize_entity_title(value, "Название тега")
 }
 
 fn tag_name_exists(
@@ -6343,7 +6414,8 @@ fn default_ui_local_profile_name() -> String {
 
 fn normalize_entity_title(value: &str, field: &str) -> DataResult<String> {
     let title = normalize_required_text(value, field)?;
-    if title.chars().count() > 25 {
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if unicode_segmentation::UnicodeSegmentation::graphemes(title.as_str(), true).count() > 25 {
         return Err(DataError::InvalidInput(
             "Название не должно превышать 25 символов.".into(),
         ));
@@ -6377,7 +6449,9 @@ fn normalize_local_profile_name(value: &str) -> String {
     if normalized.is_empty() {
         return default_ui_local_profile_name();
     }
-    normalized.chars().take(48).collect()
+    unicode_segmentation::UnicodeSegmentation::graphemes(normalized.as_str(), true)
+        .take(48)
+        .collect()
 }
 
 fn default_ui_editor_content_width() -> i64 {
@@ -7922,10 +7996,35 @@ pub fn get_first_run_state(
 ) -> Result<FirstRunStateDto, PublicCommandError> {
     state
         .with_store(|store| {
-            store
-                .first_run_required()
-                .map(|required| FirstRunStateDto { required })
+            store.first_run_required().and_then(|required| {
+                Ok(FirstRunStateDto {
+                    required,
+                    needs_profile_name: required
+                        && store.get_setting(FIRST_RUN_COMPLETED_KEY)?.is_none(),
+                })
+            })
         })
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn fingerprint_fragment_context(context: String) -> Result<String, PublicCommandError> {
+    use sha2::Digest;
+    if context.len() > 256 {
+        return Err(command_error(DataError::InvalidInput(
+            "Контекст фрагмента слишком длинный".into(),
+        )));
+    }
+    Ok(format!("{:x}", sha2::Sha256::digest(context.as_bytes())))
+}
+
+#[tauri::command]
+pub fn save_first_run_profile(
+    request: CompleteFirstRunRequest,
+    state: State<'_, AppState>,
+) -> Result<UiSettingsDto, PublicCommandError> {
+    state
+        .with_store(|store| store.save_first_run_profile(request))
         .map_err(command_error)
 }
 
@@ -8166,13 +8265,15 @@ pub async fn create_backup(
 pub async fn export_note_markdown_at_path(
     note_id: String,
     path: String,
+    content_version: Option<i64>,
+    markdown: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ExportResultDto, PublicCommandError> {
     let destination = PathBuf::from(path);
     let check_path = destination.clone();
     let snapshot = with_store_blocking(Arc::clone(&state.store), move |store| {
         crate::document_export::validate_destination(&check_path, "md", &store.base_dir)?;
-        store.portable_note_snapshot(&note_id)
+        store.portable_markdown_snapshot(&note_id, content_version, markdown)
     })
     .await
     .map_err(command_error)?;
@@ -8392,6 +8493,218 @@ mod tests {
     use super::*;
     use crate::llm::SecretStorage;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn stable_entity_limits_count_graphemes_for_notes_projects_and_tags() {
+        for symbol in ["я", "😀", "👩🏽‍💻", "e\u{301}", "🇷🇺", "👨‍👩‍👧‍👦"]
+        {
+            assert!(normalize_entity_title(&symbol.repeat(25), "Название").is_ok());
+            assert!(normalize_entity_title(&symbol.repeat(26), "Название").is_err());
+            assert!(normalize_tag_name(&symbol.repeat(25)).is_ok());
+            assert!(normalize_tag_name(&symbol.repeat(26)).is_err());
+        }
+        assert!(normalize_entity_title(" \t ", "Название").is_err());
+        assert_eq!(
+            normalize_entity_title("  Мой   проект  ", "Название").expect("valid"),
+            "Мой проект"
+        );
+    }
+
+    #[test]
+    fn stable_fragment_fingerprint_is_bounded_and_does_not_echo_private_context() {
+        assert_eq!(
+            fingerprint_fragment_context(String::new()).expect("empty boundary"),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let error = fingerprint_fragment_context("PRIVATE_CONTEXT".repeat(50))
+            .expect_err("bounded context");
+        assert!(!serde_json::to_string(&error)
+            .expect("public error")
+            .contains("PRIVATE_CONTEXT"));
+        assert_eq!(
+            fingerprint_fragment_context("Контекст 👩🏽‍💻".into())
+                .expect("unicode")
+                .len(),
+            64
+        );
+    }
+
+    #[test]
+    fn stable_duplicate_uses_the_shared_grapheme_limit() {
+        let mut store = DataStore::open(temp_store_dir()).expect("temporary store");
+        let title = "👩🏽‍💻".repeat(6);
+        let note = store
+            .create_note(CreateNoteRequest {
+                title: title.clone(),
+                note_date: "2026-10-25".into(),
+            })
+            .expect("note");
+        assert_eq!(
+            store.duplicate_note(&note.id).expect("duplicate").title,
+            format!("{title} - копия")
+        );
+        assert_eq!(store.get_note(&note.id).expect("original").title, title);
+    }
+
+    #[test]
+    fn stable_tag_boundary_and_legacy_color_edit_are_safe() {
+        let mut store = temp_store();
+        let tag = store
+            .create_tag(CreateTagRequest {
+                name: "👩🏽‍💻".repeat(25),
+                color: "green".into(),
+                custom_color: Some("#0F9F8F".into()),
+            })
+            .expect("25 graphemes");
+        assert!(store
+            .rename_tag(RenameTagRequest {
+                tag_id: tag.id.clone(),
+                name: "x".repeat(26)
+            })
+            .is_err());
+        let legacy = "Старый тег ".repeat(5);
+        store
+            .conn
+            .execute(
+                "UPDATE tags SET name = ?1 WHERE id = ?2",
+                params![legacy, tag.id],
+            )
+            .expect("legacy fixture");
+        store
+            .update_tag(UpdateTagRequest {
+                tag_id: tag.id.clone(),
+                name: legacy.clone(),
+                color: "green".into(),
+                custom_color: Some("#65A30D".into()),
+            })
+            .expect("appearance only");
+        let saved = store
+            .list_tags(None)
+            .expect("tags")
+            .into_iter()
+            .find(|item| item.id == tag.id)
+            .expect("tag");
+        assert_eq!(saved.name, legacy);
+        assert_eq!(saved.custom_color.as_deref(), Some("#65A30D"));
+    }
+
+    #[test]
+    fn stable_profile_is_required_before_skip_and_persists_before_training() {
+        let dir = temp_store_dir();
+        let mut store = DataStore::open(dir.clone()).expect("temporary store");
+        assert!(store.dismiss_first_run().is_err());
+        assert!(store
+            .save_first_run_profile(CompleteFirstRunRequest {
+                profile_name: " \t ".into()
+            })
+            .is_err());
+        assert!(store
+            .get_setting(FIRST_RUN_COMPLETED_KEY)
+            .expect("setting")
+            .is_none());
+        let saved = store
+            .save_first_run_profile(CompleteFirstRunRequest {
+                profile_name: "  Анна   👩🏽‍💻  ".into(),
+            })
+            .expect("save profile");
+        assert_eq!(saved.local_profile_name, "Анна 👩🏽‍💻");
+        assert!(store.first_run_required().expect("training pending"));
+        assert!(store
+            .list_notes(None, false)
+            .expect("no premature note")
+            .is_empty());
+        drop(store);
+        let mut store = DataStore::open(dir.clone()).expect("restart between steps");
+        assert!(store.first_run_required().expect("pending after restart"));
+        assert_eq!(
+            store.get_ui_settings().expect("name").local_profile_name,
+            "Анна 👩🏽‍💻"
+        );
+        store
+            .complete_first_run(CompleteFirstRunRequest {
+                profile_name: "Анна 👩🏽‍💻".into(),
+            })
+            .expect("finish");
+        drop(store);
+        assert!(!DataStore::open(dir)
+            .expect("restart")
+            .first_run_required()
+            .expect("completed"));
+    }
+
+    #[test]
+    fn stable_profile_stage_rolls_back_on_setting_failure() {
+        let mut store = DataStore::open(temp_store_dir()).expect("temporary store");
+        store.conn.execute_batch("CREATE TEMP TRIGGER fail_profile BEFORE INSERT ON app_settings WHEN new.key = 'onboarding.completed.v1' BEGIN SELECT RAISE(ABORT, 'injected'); END;").expect("fault injection");
+        assert!(store
+            .save_first_run_profile(CompleteFirstRunRequest {
+                profile_name: "Тест".into()
+            })
+            .is_err());
+        assert_eq!(
+            store
+                .get_ui_settings()
+                .expect("old settings")
+                .local_profile_name,
+            default_ui_local_profile_name()
+        );
+        assert!(store
+            .get_setting(FIRST_RUN_COMPLETED_KEY)
+            .expect("marker")
+            .is_none());
+    }
+
+    #[test]
+    fn stable_internal_links_survive_save_rename_backup_and_restore() {
+        let mut store = DataStore::open(temp_store_dir()).expect("temporary store");
+        let target = store
+            .create_note(CreateNoteRequest {
+                title: "Целевая заметка".into(),
+                note_date: "2026-10-25".into(),
+            })
+            .expect("target");
+        let source = store
+            .create_note(CreateNoteRequest {
+                title: "Ссылка".into(),
+                note_date: "2026-10-25".into(),
+            })
+            .expect("source");
+        let markdown = format!("[Целевая заметка](noteflow://note/{})", target.id);
+        store.update_note_content(UpdateNoteContentRequest { note_id: source.id.clone(), expected_content_version: source.content_version, content_json: json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Целевая заметка","marks":[{"type":"link","attrs":{"href":format!("noteflow://note/{}",target.id)}}]}]}]}), content_markdown: markdown.clone(), content_html: String::new(), plain_text: "Целевая заметка".into(), content_sidecars: vec![] }).expect("atomic save");
+        store
+            .rename_note(RenameNoteRequest {
+                note_id: target.id.clone(),
+                title: "Новое имя".into(),
+            })
+            .expect("rename target");
+        assert_eq!(
+            store
+                .portable_note_snapshot(&source.id)
+                .expect("export")
+                .markdown,
+            markdown
+        );
+        let backup = store.create_backup().expect("backup");
+        let bytes = fs::read(backup.path).expect("backup bytes");
+        let mut restored = DataStore::open(temp_store_dir()).expect("new profile");
+        restored
+            .import_backup(ImportBackupRequest {
+                file_name: "links.zip".into(),
+                bytes,
+            })
+            .expect("restore");
+        assert_eq!(
+            restored
+                .get_note(&source.id)
+                .expect("source")
+                .content_markdown,
+            markdown
+        );
+        assert_eq!(
+            restored.get_note(&target.id).expect("stable ID").title,
+            "Новое имя"
+        );
+    }
 
     #[test]
     fn rc5_project_names_are_case_insensitive_and_length_bounded_without_touching_legacy() {
@@ -10105,6 +10418,12 @@ mod tests {
         let dir = temp_store_dir();
         let mut store = DataStore::open(dir.clone()).expect("open");
         assert!(store.first_run_required().expect("fresh"));
+        assert!(store.dismiss_first_run().is_err());
+        store
+            .save_first_run_profile(CompleteFirstRunRequest {
+                profile_name: "Local user".into(),
+            })
+            .expect("required name before skip");
         store.dismiss_first_run().expect("skip");
         assert!(store.list_notes(None, false).expect("notes").is_empty());
         drop(store);
@@ -11118,6 +11437,7 @@ mod tests {
         let first_results = store
             .search_notes(search::SearchNotesRequest {
                 query: "first searchable".to_string(),
+                title_only: false,
                 project_id: None,
                 tag_id: None,
                 include_archived: false,
@@ -11130,6 +11450,7 @@ mod tests {
         let second_results = store
             .search_notes(search::SearchNotesRequest {
                 query: "second searchable".to_string(),
+                title_only: false,
                 project_id: None,
                 tag_id: None,
                 include_archived: false,
@@ -12145,6 +12466,7 @@ mod tests {
         let search_results = imported_store
             .search_notes(search::SearchNotesRequest {
                 query: "backup sidecar".to_string(),
+                title_only: false,
                 project_id: None,
                 tag_id: None,
                 include_archived: false,
@@ -15550,6 +15872,41 @@ mod tests {
         let noncanonical_archive =
             backup_bytes_from_value(&noncanonical, &[(wrong_entry.as_str(), bytes.as_slice())]);
         assert!(validate_backup_archive(&noncanonical_archive).is_err());
+    }
+
+    #[test]
+    fn standard_markdown_projection_is_version_checked_and_does_not_update_storage() {
+        let mut store = temp_store();
+        let note =
+            create_note_with_content(&mut store, "Export QA", "<strong><code>код</code></strong>");
+        let result = store
+            .portable_markdown_snapshot(
+                &note.id,
+                Some(note.content_version),
+                Some("**`код`**".into()),
+            )
+            .expect("projection");
+        assert_eq!(result.markdown, "**`код`**");
+        let after = store.get_note(&note.id).expect("unchanged note");
+        assert_eq!(after.content_markdown, note.content_markdown);
+        assert_eq!(after.content_version, note.content_version);
+        assert!(store
+            .portable_markdown_snapshot(
+                &note.id,
+                Some(note.content_version + 1),
+                Some("stale".into())
+            )
+            .is_err());
+        assert!(store
+            .portable_markdown_snapshot(&note.id, None, Some("unversioned".into()))
+            .is_err());
+        assert_eq!(
+            store
+                .portable_markdown_snapshot(&note.id, None, None)
+                .expect("legacy export")
+                .markdown,
+            note.content_markdown
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { Lexer, Marked, type MarkedToken, type Token } from "marked";
 import type { EditorMark, EditorNode } from "./markdownService";
+import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
 
 interface NoteFlowToken { type: "noteFlowInline"; raw: string; kind: "date" | "mention" | "highlight"; value: string; tokens?: Token[] }
 
@@ -17,14 +18,36 @@ const parser = new Marked({ gfm: true, extensions: [{
 }] });
 
 export function parseMarkdownInline(source: string): EditorNode[] {
-  return convertTokens(new Lexer(parser.defaults).inlineTokens(source));
+  // Avoid repeatedly scanning long ordinary text for extensions that are absent.
+  const hasExtensions = source.includes("{{date:") || source.includes("@[[") || source.includes("==");
+  return convertTokens(new Lexer(hasExtensions ? parser.defaults : { gfm: true }).inlineTokens(source));
 }
 
 function convertTokens(tokens: Token[], marks: EditorMark[] = []): EditorNode[] {
+  const htmlMarks: Array<{ tag: string; mark: EditorMark }> = [];
   return tokens.flatMap((raw): EditorNode[] => {
+    if (raw.type === "html") {
+      const closing = /^<\/(strong|b|em|i|s|del|u|mark|code|a)>$/i.exec(raw.raw);
+      if (closing && htmlMarks[htmlMarks.length - 1]?.tag === closing[1].toLowerCase()) { htmlMarks.pop(); return []; }
+      const opening = /^<(strong|b|em|i|s|del|u|mark|code)>$/i.exec(raw.raw);
+      if (opening) {
+        const tag = opening[1].toLowerCase();
+        const type = ({ strong: "bold", b: "bold", em: "italic", i: "italic", s: "strike", del: "strike", u: "underline", mark: "highlight", code: "code" } as Record<string, string>)[tag];
+        htmlMarks.push({ tag, mark: { type } }); return [];
+      }
+      const highlight = /^<mark style="background-color: (#[\da-f]{6})">$/i.exec(raw.raw);
+      if (highlight) { htmlMarks.push({ tag: "mark", mark: { type: "highlight", attrs: { color: highlight[1] } } }); return []; }
+      const link = /^<a href="([^"<>]+)">$/i.exec(raw.raw);
+      const href = link && sanitizeMarkdownLinkHref(decodeInlineEntities(link[1]));
+      if (href) { htmlMarks.push({ tag: "a", mark: { type: "link", attrs: { href } } }); return []; }
+    }
+    const inheritedMarks = [...new Map([...marks, ...htmlMarks.map((item) => item.mark)].map((mark) => [mark.type, mark])).values()];
+    if (htmlMarks.some((item) => item.tag === "code")) {
+      return [{ type: "text", text: decodeInlineEntities(raw.raw), marks: inheritedMarks }];
+    }
     if (raw.type === "noteFlowInline") {
       const token = raw as NoteFlowToken;
-      if (token.kind === "highlight") return convertTokens(token.tokens ?? [], [...marks, { type: "highlight" }]);
+      if (token.kind === "highlight") return convertTokens(token.tokens ?? [], [...inheritedMarks, { type: "highlight" }]);
       return [token.kind === "date" ? { type: "inlineDate", attrs: { value: token.value } }
         : { type: "noteMention", attrs: { label: token.value, noteId: token.value } }];
     }
@@ -33,9 +56,11 @@ function convertTokens(tokens: Token[], marks: EditorMark[] = []): EditorNode[] 
     if (token.type === "checkbox") return [];
     if (token.type === "html" && /^<br\s*\/?\s*>$/i.test(token.raw)) return [{ type: "hardBreak" }];
     if (token.type === "strong" || token.type === "em" || token.type === "del" || token.type === "link") {
-      const mark: EditorMark = token.type === "link" ? { type: "link", attrs: { href: token.href } }
+      const href = token.type === "link" ? sanitizeMarkdownLinkHref(token.href) : undefined;
+      if (token.type === "link" && !href) return convertTokens(token.tokens, inheritedMarks);
+      const mark: EditorMark = token.type === "link" ? { type: "link", attrs: { href } }
         : { type: token.type === "strong" ? "bold" : token.type === "em" ? "italic" : "strike" };
-      return convertTokens(token.tokens, [...marks, mark]);
+      return convertTokens(token.tokens, [...inheritedMarks, mark]);
     }
     if (token.type === "br") return [{ type: "hardBreak" }];
     const rawText = "text" in token ? token.text : token.raw;
@@ -45,13 +70,28 @@ function convertTokens(tokens: Token[], marks: EditorMark[] = []): EditorNode[] 
       const char = String.fromCodePoint(value);
       return /\s/u.test(char) ? char : match;
     }).replace(/\n/g, " ") : rawText;
-    const nextMarks = token.type === "codespan" ? [...marks, { type: "code" }] : marks;
-    return text ? [{ type: "text", text, ...(nextMarks.length ? { marks: nextMarks } : {}) }] : [];
+    const nextMarks = token.type === "codespan" ? [...inheritedMarks, { type: "code" }] : inheritedMarks;
+    const value = token.type !== "codespan" ? decodeInlineEntities(text) : text;
+    return value ? [{ type: "text", text: value, ...(nextMarks.length ? { marks: nextMarks } : {}) }] : [];
   });
+}
+
+function decodeInlineEntities(text: string) {
+  return text.replace(/&(amp|lt|gt|quot|#39);/g, (_, entity: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" })[entity] ?? "");
 }
 
 export function readMarkdownList(source: string) {
   return parser.lexer(source).find((token): token is import("marked").Tokens.List => token.type === "list");
+}
+
+export function readMarkdownTable(source: string): { node: EditorNode; lineCount: number } | undefined {
+  const token = parser.lexer(source).find((item): item is import("marked").Tokens.Table => item.type === "table");
+  if (!token) return undefined;
+  const row = (cells: import("marked").Tokens.TableCell[], header: boolean): EditorNode => ({
+    type: "tableRow",
+    content: cells.map((cell, column) => ({ type: header ? "tableHeader" : "tableCell", attrs: token.align[column] ? { align: token.align[column] } : {}, content: [{ type: "paragraph", content: convertTokens(cell.tokens) }] })),
+  });
+  return { node: { type: "table", content: [row(token.header, true), ...token.rows.map((cells) => row(cells, false))] }, lineCount: token.raw.trimEnd().split("\n").length };
 }
 
 export function convertMarkdownList(token: import("marked").Tokens.List, parseBlocks: (source: string) => EditorNode[]): EditorNode[] {

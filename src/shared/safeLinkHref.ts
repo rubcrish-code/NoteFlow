@@ -1,6 +1,9 @@
+import { parseInternalNoteLink } from "./internalNoteLink";
+
 export function sanitizeMarkdownLinkHref(href: string): string | undefined {
   const trimmed = href.trim();
   if (!trimmed || trimmed.startsWith("//") || /[\u0000-\u001f\u007f]/.test(trimmed)) return undefined;
+  if (parseInternalNoteLink(trimmed)) return trimmed;
   if (trimmed.startsWith("#") || trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) return trimmed;
   try {
     const url = new URL(trimmed);

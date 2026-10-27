@@ -1,6 +1,7 @@
-import { parseMarkdownInline, readMarkdownList, convertMarkdownList } from "./markdownInline";
+import { parseMarkdownInline, readMarkdownList, convertMarkdownList, readMarkdownTable } from "./markdownInline";
 import { projectTable } from "./tableDocumentLayout";
 import { formatDisplayDate } from "../../shared/displayDate";
+import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
 
 export interface EditorMark {
   attrs?: Record<string, unknown>;
@@ -18,6 +19,8 @@ export interface EditorNode {
 export type EditorDocument = EditorNode & {
   type: "doc";
 };
+
+const MAX_QUOTE_NESTING = 64;
 
 const markdownSignals = [
   /^#{1,3}\s+\S/m,
@@ -144,23 +147,6 @@ function getFileAttachment(line: string): EditorNode | null {
   };
 }
 
-function splitTableRow(line: string) {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split(/(?<!\\)\|/)
-    .map((cell) => cell.trim());
-}
-
-function tableCell(type: "tableCell" | "tableHeader", value: string): EditorNode {
-  return {
-    type,
-    attrs: {},
-    content: [paragraph(value)],
-  };
-}
-
 function isSpecialBlockStart(lines: string[], index: number) {
   const line = lines[index];
   return (
@@ -210,6 +196,8 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
 
   while (index < lines.length) {
     const line = lines[index];
+
+    if (line.trim() === "<p></p>") { content.push(paragraph()); index += 1; continue; }
 
     if (isBlank(line)) {
       index += 1;
@@ -271,11 +259,13 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
       continue;
     }
 
-    if (line.startsWith("```")) {
-      const language = line.replace(/^```/, "").trim();
+    const codeFence = /^(`{3,}|~{3,})(.*)$/.exec(line);
+    if (codeFence) {
+      const language = codeFence[2].trim();
+      const closingFence = new RegExp(`^${codeFence[1][0]}{${codeFence[1].length},}\\s*$`);
       const codeLines: string[] = [];
       index += 1;
-      while (index < lines.length && !lines[index].startsWith("```")) {
+      while (index < lines.length && !closingFence.test(lines[index])) {
         codeLines.push(lines[index]);
         index += 1;
       }
@@ -304,18 +294,14 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
     }
 
     if (isTableStart(lines, index)) {
-      const rows: EditorNode[] = [];
-      const headerCells = splitTableRow(lines[index]).map((cell) => tableCell("tableHeader", cell));
-      rows.push({ type: "tableRow", content: headerCells });
-      index += 2;
-
-      while (index < lines.length && hasTablePipe(lines[index]) && !isBlank(lines[index])) {
-        rows.push({ type: "tableRow", content: splitTableRow(lines[index]).map((cell) => tableCell("tableCell", cell)) });
-        index += 1;
+      let end = index + 2;
+      while (end < lines.length && hasTablePipe(lines[end]) && !isBlank(lines[end])) end++;
+      const table = readMarkdownTable(lines.slice(index, end).join("\n"));
+      if (table) {
+        content.push(table.node);
+        index += table.lineCount;
+        continue;
       }
-
-      content.push({ type: "table", content: rows });
-      continue;
     }
 
     if (isTaskLine(line) || isBulletLine(line) || isOrderedLine(line)) {
@@ -333,7 +319,9 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
         quoteLines.push(lines[index].replace(/^\s{0,3}>\s?/, ""));
         index += 1;
       }
-      content.push({ type: "blockquote", content: [paragraph(quoteLines.join(" "))] });
+      const source = quoteLines.join("\n");
+      const deeplyNested = new RegExp(`^\\s*(?:>\\s*){${MAX_QUOTE_NESTING}}`, "m").test(source);
+      content.push({ type: "blockquote", content: deeplyNested ? [paragraph(source)] : markdownToTiptapDoc(source).content });
       continue;
     }
 
@@ -353,8 +341,8 @@ export function parseInlineMarkdown(text: string): EditorNode[] {
   return parseMarkdownInline(text);
 }
 
-function inlineToMarkdown(nodes: EditorNode[] | undefined) {
-  const projection = projectInlineMarkdown(nodes ?? []);
+function inlineToMarkdown(nodes: EditorNode[] | undefined, standard = false) {
+  const projection = projectInlineMarkdown(nodes ?? [], standard);
   return projection.markdown;
 }
 
@@ -364,16 +352,16 @@ export function inlineNeedsFormattingSidecar(nodes: EditorNode[]) {
   return projectInlineMarkdown(nodes).needsSidecar;
 }
 
-function projectInlineMarkdown(nodes: EditorNode[]) {
-  const markdown = renderInlineMarkdown(nodes);
+function projectInlineMarkdown(nodes: EditorNode[], standard = false) {
+  if (standard) nodes = portableEmphasisWhitespace(nodes);
+  const markdown = renderInlineMarkdown(nodes, standard);
   if (nodes.some((node) => node.type !== "text" && node.type !== "hardBreak")) return { markdown, needsSidecar: false };
   const canonicalRuns = (content: EditorNode[]) => {
     const runs: Array<{ text: string; marks: string }> = [];
     for (const node of content) {
       const text = node.type === "hardBreak" ? "\n" : node.text ?? "";
-      const marks = (node.marks ?? []).filter((mark) => ["bold", "italic", "strike", "highlight", "code", "link"].includes(mark.type));
-      const key = marks.some((mark) => mark.type === "code") ? "code"
-        : marks.map((mark) => mark.type === "link" ? `link:${String(mark.attrs?.href ?? "")}` : mark.type).sort().join("|");
+      const marks = (node.marks ?? []).filter((mark) => ["bold", "italic", "strike", "highlight", "code", "link", "underline"].includes(mark.type));
+      const key = marks.map((mark) => mark.type === "link" ? `link:${String(mark.attrs?.href ?? "")}` : mark.type === "highlight" && mark.attrs?.color ? `highlight:${String(mark.attrs.color)}` : mark.type).sort().join("|");
       const last = runs[runs.length - 1];
       if (last?.marks === key) last.text += text;
       else if (text) runs.push({ text, marks: key });
@@ -383,11 +371,65 @@ function projectInlineMarkdown(nodes: EditorNode[]) {
   const parsed = parseInlineMarkdown(markdown);
   const original = canonicalRuns(nodes);
   if (JSON.stringify(original) === JSON.stringify(canonicalRuns(parsed))) return { markdown, needsSidecar: false };
-  return { markdown: renderInlineMarkdown(nodes.map((node) => ({ ...node, marks: [] }))), needsSidecar: true };
+  if (standard) {
+    // Isolate unrepresentable ranges instead of turning unrelated Markdown into HTML.
+    const groups: EditorNode[][] = [];
+    for (const node of nodes) {
+      const last = groups[groups.length - 1];
+      if (last && Boolean(last[0].marks?.length) === Boolean(node.marks?.length)) last.push(node);
+      else groups.push([node]);
+    }
+    const pieces = groups.map((group, index) => {
+      const before = groups[index - 1]?.map((node) => node.text ?? "").join("").slice(-8) ?? "";
+      const after = groups[index + 1]?.map((node) => node.text ?? "").join("").slice(0, 8) ?? "";
+      const candidate = renderInlineMarkdown(group, true, false);
+      const context = [{ type: "text", text: before }, ...group, { type: "text", text: after }];
+      return JSON.stringify(canonicalRuns(parseInlineMarkdown(escapeInlineText(before) + candidate + escapeInlineText(after)))) === JSON.stringify(canonicalRuns(context))
+        ? candidate : safeInlineHtml(group);
+    });
+    const projected = pieces.join("");
+    if (JSON.stringify(original) === JSON.stringify(canonicalRuns(parseInlineMarkdown(projected)))) return { markdown: projected, needsSidecar: true };
+  }
+  return { markdown: safeInlineHtml(nodes), needsSidecar: true };
 }
 
-function renderInlineMarkdown(nodes: EditorNode[]) {
-  const order = ["link", "italic", "bold", "strike", "highlight", "code"];
+// A mouse selection often includes edge spaces. Their emphasis is invisible, but
+// lossless storage compares it exactly; portable files put those spaces outside delimiters.
+function portableEmphasisWhitespace(nodes: EditorNode[]): EditorNode[] {
+  const runs = nodes.flatMap((node) => node.type === "text" && !node.marks?.some((mark) => mark.type === "code")
+    ? (node.text?.match(/\s+|\S+/gu) ?? []).map((text) => ({ ...node, text })) : [node]);
+  return runs.map((node, index) => {
+    if (node.type !== "text" || node.marks?.some((mark) => mark.type === "code") || !/^\s+$/u.test(node.text ?? "")) return node;
+    const marks = node.marks?.filter((mark) => !["bold", "italic", "strike"].includes(mark.type)
+      || (runs[index - 1]?.marks?.some((other) => sameInlineMark(mark, other))
+        && runs[index + 1]?.marks?.some((other) => sameInlineMark(mark, other))));
+    return { ...node, marks };
+  });
+}
+
+// This allowlisted fallback preserves ranges that Markdown delimiters cannot represent.
+// Appearance beyond these marks remains in the existing sidecar, not hidden export metadata.
+function safeInlineHtml(nodes: EditorNode[]) {
+  return nodes.map((node) => {
+    if (node.type === "hardBreak") return "<br>";
+    let text = escapeHtml(node.text ?? "");
+    for (const mark of [...(node.marks ?? [])].sort((first, second) => Number(second.type === "code") - Number(first.type === "code"))) {
+      const tag = ({ bold: "strong", italic: "em", strike: "s", underline: "u", code: "code" } as Record<string, string>)[mark.type];
+      if (tag) text = `<${tag}>${text}</${tag}>`;
+      else if (mark.type === "highlight") {
+        const color = String(mark.attrs?.color ?? "");
+        text = /^#[\da-f]{6}$/i.test(color) ? `<mark style="background-color: ${color}">${text}</mark>` : `<mark>${text}</mark>`;
+      } else if (mark.type === "link") {
+        const href = sanitizeMarkdownLinkHref(String(mark.attrs?.href ?? ""));
+        if (href) text = `<a href="${escapeHtmlAttribute(href)}">${text}</a>`;
+      }
+    }
+    return text;
+  }).join("");
+}
+
+function renderInlineMarkdown(nodes: EditorNode[], standard = false, encodeEdges = true) {
+  const order = ["link", "italic", "bold", "strike", "highlight", "underline", "code"];
   const runs: Array<{ text: string; marks: EditorMark[]; atom?: EditorNode }> = [];
   for (const node of nodes ?? []) {
     if (node.type !== "text") {
@@ -395,7 +437,7 @@ function renderInlineMarkdown(nodes: EditorNode[]) {
       continue;
     }
     if (!node.text) continue;
-    const marks = node.marks?.some((mark) => mark.type === "code") ? [{ type: "code" }]
+    const marks = !standard && node.marks?.some((mark) => mark.type === "code") ? [{ type: "code" }]
       : (node.marks ?? []).filter((mark) => order.includes(mark.type)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
     const last = runs[runs.length - 1];
     // Sidecar-only marks must not interrupt a shared Markdown span.
@@ -406,6 +448,10 @@ function renderInlineMarkdown(nodes: EditorNode[]) {
   let output = "";
   const delimiter = (mark: EditorMark, opening: boolean) => {
     if (mark.type === "link") return opening ? "[" : `](${String(mark.attrs?.href ?? "").replace(/[\\()]/g, "\\$&")})`;
+    if (mark.type === "underline") return opening ? "<u>" : "</u>";
+    if (standard && mark.type === "highlight") return opening
+      ? /^#[\da-f]{6}$/i.test(String(mark.attrs?.color ?? "")) ? `<mark style="background-color: ${mark.attrs!.color}">` : "<mark>"
+      : "</mark>";
     return mark.type === "bold" ? "**" : mark.type === "italic" ? "*" : mark.type === "strike" ? "~~" : "==";
   };
   const transition = (marks: EditorMark[]) => {
@@ -418,26 +464,33 @@ function renderInlineMarkdown(nodes: EditorNode[]) {
     for (let index = keep; index < next.length; index++) output += delimiter(next[index], true);
     active = next;
   };
-  for (const run of runs) {
+  for (const [runIndex, run] of runs.entries()) {
     if (run.atom) {
       transition([]);
       output += run.atom.type === "hardBreak" ? (run === runs[runs.length - 1] ? "<br>" : "  \n")
         : tiptapJsonToMarkdown({ type: "doc", content: [run.atom] }).trim();
     } else if (run.marks.some((mark) => mark.type === "code")) {
-      transition([]);
+      transition(standard ? run.marks.filter((mark) => mark.type !== "code") : []);
       const fence = "`".repeat(Math.max(1, ...Array.from(run.text.matchAll(/`+/g), (match) => match[0].length + 1)));
       const padding = run.text.startsWith("`") || run.text.endsWith("`") || (/^ | $/.test(run.text) && /\S/.test(run.text)) ? " " : "";
       output += `${fence}${padding}${run.text}${padding}${fence}`;
     } else {
       const [, leading, text, trailing] = /^(\s*)([\s\S]*?)(\s*)$/.exec(run.text)!;
-      if (leading) { transition([]); output += escapeInlineText(leading); }
-      if (text) { transition(run.marks); output += escapeInlineText(text); }
-      if (trailing) { transition([]); output += escapeInlineText(trailing); }
+      if (leading) {
+        transition(standard ? active.filter((mark) => run.marks.some((item) => sameInlineMark(mark, item))) : []);
+        output += escapeInlineText(leading);
+      }
+      if (text) { transition(run.marks); output += escapeInlineText(text, !standard || !output.trim()); }
+      if (trailing) {
+        const next = runs[runIndex + 1];
+        transition(standard ? active.filter((mark) => next?.marks.some((item) => sameInlineMark(mark, item))) : []);
+        output += escapeInlineText(trailing);
+      }
     }
   }
   transition([]);
   // Encode edge whitespace so block parsing cannot treat it as indentation or discard it.
-  return output.replace(/^\s+|\s+$/g, (space) => [...space].map((char) => `&#${char.charCodeAt(0)};`).join(""));
+  return encodeEdges ? output.replace(/^\s+|\s+$/g, (space) => [...space].map((char) => `&#${char.charCodeAt(0)};`).join("")) : output;
 }
 
 function sameInlineMark(a: EditorMark, b: EditorMark) {
@@ -448,10 +501,11 @@ function sameInlineMarks(a: EditorMark[], b: EditorMark[]) {
   return a.length === b.length && a.every((mark, index) => sameInlineMark(mark, b[index]));
 }
 
-function escapeInlineText(text: string) {
-  return text.replace(/[\\`*_{}\[\]<>~=&]/g, "\\$&")
+function escapeInlineText(text: string, blockStart = true) {
+  const escaped = text.replace(/[\\`*_{}\[\]<>~=&]/g, "\\$&");
+  return blockStart ? escaped
     .replace(/^([#+-])(?=\s|$)|^(-)(?=--+$)/, "\\$&")
-    .replace(/^(\d+)([.)])(?=\s)/, "$1\\$2");
+    .replace(/^(\d+)([.)])(?=\s)/, "$1\\$2") : escaped;
 }
 
 function nodeText(node: EditorNode | undefined): string {
@@ -481,60 +535,70 @@ export function tiptapJsonToPlainText(document: EditorDocument): string {
     .trim();
 }
 
-function listToMarkdown(node: EditorNode): string {
+function listToMarkdown(node: EditorNode, standard = false): string {
   return (node.content ?? []).map((item, index) => {
     const prefix = node.type === "orderedList" ? `${Number(node.attrs?.start ?? 1) + index}. `
       : node.type === "taskList" ? `- [${item.attrs?.checked ? "x" : " "}] ` : "- ";
     const [first, ...remaining] = item.content ?? [];
-    const firstText = first?.type === "paragraph" ? inlineToMarkdown(first.content) : "";
+    const firstText = first?.type === "paragraph" ? inlineToMarkdown(first.content, standard) : "";
     const nested = (first?.type === "paragraph" ? remaining : item.content ?? [])
       .map((child) => {
         const separator = ["bulletList", "orderedList", "taskList"].includes(child.type) ? "\n" : "\n\n";
-        const markdown = tiptapJsonToMarkdown({ type: "doc", content: [child] });
+        const markdown = tiptapJsonToMarkdown({ type: "doc", content: [child] }, standard);
         return separator + markdown.split("\n").map((line) => " ".repeat(node.type === "taskList" ? 2 : prefix.length) + line).join("\n");
       });
     return prefix + firstText + nested.join("");
   }).join("\n");
 }
 
-function tableToMarkdown(node: EditorNode) {
+function tableToMarkdown(node: EditorNode, standard = false) {
   const { grid } = projectTable(node);
   if (!grid.length) return "";
-  const rows = grid.map((row) => row.map((cell) => cell ? inlineToMarkdown(cell.content?.flatMap((block) => block.content ?? [])).replace(/  \n/g, "<br>").replace(/\|/g, "\\|") : ""));
-  return [`| ${rows[0].join(" | ")} |`, `| ${rows[0].map(() => "---").join(" | ")} |`, ...rows.slice(1).map((row) => `| ${row.join(" | ")} |`)].join("\n");
+  const rows = grid.map((row) => row.map((cell) => cell ? inlineToMarkdown(cell.content?.flatMap((block) => block.content ?? []), standard).replace(/  \n/g, "<br>").replace(/\|/g, "\\|") : ""));
+  const alignments = grid[0].map((cell) => {
+    const alignment = cell?.content?.[0]?.attrs?.textAlign ?? cell?.attrs?.align;
+    return alignment === "left" ? ":---" : alignment === "center" ? ":---:" : alignment === "right" ? "---:" : "---";
+  });
+  return [`| ${rows[0].join(" | ")} |`, `| ${alignments.join(" | ")} |`, ...rows.slice(1).map((row) => `| ${row.join(" | ")} |`)].join("\n");
 }
 
-export function tiptapJsonToMarkdown(document: EditorDocument): string {
+export function tiptapJsonToStandardMarkdown(document: EditorDocument): string {
+  return tiptapJsonToMarkdown(document, true);
+}
+
+export function tiptapJsonToMarkdown(document: EditorDocument, standard = false): string {
   return (document.content ?? [])
     .map((node, index) => {
       if (node.type === "paragraph") {
-        return inlineToMarkdown(node.content);
+        return node.content?.length ? inlineToMarkdown(node.content, standard) : standard || index === (document.content?.length ?? 0) - 1 ? "" : "<p></p>";
       }
       if (node.type === "heading") {
         const level = Number(node.attrs?.level ?? 1);
-        return `${"#".repeat(Math.min(3, Math.max(1, level)))} ${inlineToMarkdown(node.content)}`;
+        return `${"#".repeat(Math.min(3, Math.max(1, level)))} ${inlineToMarkdown(node.content, standard)}`;
       }
       if (node.type === "horizontalRule") {
         return "---";
       }
       if (node.type === "blockquote") {
-        return (node.content ?? []).map((child) => `> ${inlineToMarkdown(child.content)}`).join("\n");
+        if (standard) return tiptapJsonToMarkdown({ type: "doc", content: node.content ?? [] }, true).split("\n").map((line) => `> ${line}`).join("\n");
+        return (node.content ?? []).map((child) => `> ${inlineToMarkdown(child.content, standard)}`).join("\n");
       }
       if (node.type === "codeBlock") {
         const language = String(node.attrs?.language ?? "");
-        return `\`\`\`${language}\n${nodeText(node)}\n\`\`\``;
+        const fence = "`".repeat(standard ? Math.max(3, ...Array.from(nodeText(node).matchAll(/`+/g), (match) => match[0].length + 1)) : 3);
+        return `${fence}${language}\n${nodeText(node)}\n${fence}`;
       }
       if (node.type === "bulletList") {
-        return listToMarkdown(node);
+        return listToMarkdown(node, standard);
       }
       if (node.type === "orderedList") {
-        return listToMarkdown(node);
+        return listToMarkdown(node, standard);
       }
       if (node.type === "taskList") {
-        return listToMarkdown(node);
+        return listToMarkdown(node, standard);
       }
       if (node.type === "table") {
-        return tableToMarkdown(node);
+        return tableToMarkdown(node, standard);
       }
       if (node.type === "image") {
         const alt = String(node.attrs?.alt ?? "");
@@ -549,12 +613,12 @@ export function tiptapJsonToMarkdown(document: EditorDocument): string {
       }
       if (node.type === "callout") {
         const variant = String(node.attrs?.variant ?? "info");
-        return `:::${variant}\n${tiptapJsonToMarkdown({ type: "doc", content: node.content ?? [] })}\n:::`;
+        return `:::${variant}\n${tiptapJsonToMarkdown({ type: "doc", content: node.content ?? [] }, standard)}\n:::`;
       }
       if (node.type === "detailsBlock") {
         const summary = node.content?.find((child) => child.type === "detailsSummary");
         const detailsContent = node.content?.find((child) => child.type === "detailsContent");
-        return `:::details ${inlineToMarkdown(summary?.content) || "Заголовок блока"}\n${tiptapJsonToMarkdown({ type: "doc", content: detailsContent?.content ?? [] })}\n:::`;
+        return `:::details ${inlineToMarkdown(summary?.content, standard) || "Заголовок блока"}\n${tiptapJsonToMarkdown({ type: "doc", content: detailsContent?.content ?? [] }, standard)}\n:::`;
       }
       if (node.type === "fileAttachment") {
         return `[file:${String(node.attrs?.name ?? "Файл")}](noteflow-file://${String(node.attrs?.storageId ?? "")})`;

@@ -141,9 +141,9 @@ assert.equal(btn("Все заметки").getAttribute("aria-label"), "Обла�
 });
 
 describe("Phase B unified first-run introduction", () => {
-  it("has six short steps, preserves Back, and creates the local profile only on completion", async () => {
+  it("has six short steps, preserves Back, and creates the first note only after training", async () => {
     const created: string[] = [];
-    await act(async () => root.render(h(FirstRunModal, { open: true, onClose: async () => {}, onCreate: async (name) => { created.push(name); } })));
+    await act(async () => root.render(h(FirstRunModal, { open: true, needsProfileName: false, initialName: "QA", onClose: async () => {}, onCreate: async (name) => { created.push(name); } })));
     await click(btn("Далее"));
     assert.match(document.body.textContent!, /Создавайте заметки/);
     await click(btn("Назад"));
@@ -152,24 +152,20 @@ describe("Phase B unified first-run introduction", () => {
     assert.match(document.body.textContent!, /согласие/);
     assert.deepEqual(created, []);
     assert.equal(document.querySelector('[role="alert"]'), null, "Next must not submit the newly mounted final form");
-    const input = document.querySelector<HTMLInputElement>('input[autocomplete="name"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!.call(input, "  QA  ");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    assert.equal(document.querySelector('input[autocomplete="name"]'), null, "persisted profile does not ask for a second name");
     await click(btn("Создать первую заметку"));
     assert.deepEqual(created, ["QA"]);
   });
-  it("skip calls the persisted completion handler without creating a note", async () => {
+  it("replay skip calls the completion handler without creating a note", async () => {
     let skipped = 0;
     let created = 0;
-    await act(async () => root.render(h(FirstRunModal, { open: true, onClose: async () => { skipped++; }, onCreate: async () => { created++; } })));
+    await act(async () => root.render(h(FirstRunModal, { open: true, replay: true, onClose: async () => { skipped++; }, onCreate: async () => { created++; } })));
     await click(btn("Пропустить"));
     assert.equal(skipped, 1);
     assert.equal(created, 0);
   });
   it("keeps the flow open and explains a skip persistence failure", async () => {
-    await act(async () => root.render(h(FirstRunModal, { open: true, onClose: async () => { throw new Error("private data"); }, onCreate: async () => {} })));
+    await act(async () => root.render(h(FirstRunModal, { open: true, replay: true, onClose: async () => { throw new Error("private data"); }, onCreate: async () => {} })));
     await click(btn("Пропустить"));
     assert.match(document.querySelector('[role="alert"]')!.textContent!, /Не удалось завершить/);
     assert.equal(btn("Пропустить").disabled, false);

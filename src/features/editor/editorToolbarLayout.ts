@@ -21,6 +21,8 @@ export type EditorToolbarActionId =
   | "inline-code"
   | "italic"
   | "link"
+  | "note-link"
+  | "fragment-link"
   | "ol"
   | "p"
   | "quote"
@@ -76,6 +78,8 @@ export const EDITOR_TOOLBAR_ACTIONS: readonly EditorToolbarAction[] = [
   { group: "alignment", id: "align-right", tip: "По правому краю", icon: "alignRight", priority: 55 },
   { group: "alignment", id: "align-justify", tip: "По ширине", icon: "alignJustify", priority: 55 },
   { group: "insert", id: "link", tip: "Гиперссылка", icon: "link", priority: 59 },
+  { group: "insert", id: "note-link", tip: "Ссылка на заметку", icon: "noteLink", priority: 94 },
+  { group: "insert", id: "fragment-link", tip: "Ссылка на фрагмент", icon: "copy", priority: 91 },
   { group: "style", id: "clear", tip: "Очистить форматирование", icon: "clear", priority: 52 },
   { group: "ai", id: "ai", tip: "ИИ-помощник", label: "AI", priority: 99 },
 ];

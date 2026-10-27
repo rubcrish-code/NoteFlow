@@ -33,6 +33,7 @@ export interface SearchNotesInput {
   favoritesOnly?: boolean;
   limit?: number;
   offset?: number;
+  titleOnly?: boolean;
 }
 
 export interface RebuildSearchIndexResult {
@@ -68,6 +69,7 @@ export async function searchNotes(input: SearchNotesInput) {
       projectId: input.projectId,
       query: input.query,
       tagId: input.tagId,
+      ...(input.titleOnly ? { titleOnly: true } : {}),
     },
   });
 }

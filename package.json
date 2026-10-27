@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx --test --test-concurrency=4 tests/**/*.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

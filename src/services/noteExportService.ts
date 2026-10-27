@@ -3,6 +3,7 @@ import { invoke } from "./safeInvoke";
 import * as dataService from "./dataService";
 import { exportFilename, managedImageUris, type ExportImage, type NoteExportFormat } from "../features/export/exportDocument";
 import { generateInWorker } from "../features/export/exportWorker";
+import { tiptapJsonToStandardMarkdown } from "../features/editor/markdownService";
 
 export const exportFormatLabels: Record<NoteExportFormat, string> = { md: "Markdown (.md)", txt: "Текст (.txt)", docx: "Word (.docx)", pdf: "PDF (.pdf)" };
 
@@ -10,7 +11,10 @@ export async function exportNote(noteId: string, format: NoteExportFormat): Prom
   const note = await dataService.getNote(noteId);
   const path = await save({ title: "Экспортировать заметку", defaultPath: exportFilename(note.title, format), filters: [{ name: exportFormatLabels[format], extensions: [format] }] });
   if (!path) return null;
-  if (format === "md") return invoke<dataService.ExportResult>("export_note_markdown_at_path", { noteId, path });
+  if (format === "md") return invoke<dataService.ExportResult>("export_note_markdown_at_path", {
+    noteId, path, contentVersion: note.contentVersion,
+    markdown: tiptapJsonToStandardMarkdown(note.editorDocument),
+  });
   const images = format === "txt" ? [] : await invoke<Array<{ uri: string; mime: string; bytes: number[] }>>("get_note_export_images", { noteId, contentVersion: note.contentVersion, uris: managedImageUris(note.editorDocument) });
   const inputImages: ExportImage[] = images.map((image) => ({ ...image, bytes: new Uint8Array(image.bytes), width: 0, height: 0 }));
   const bytes = await generateInWorker(format, { title: note.title, document: note.editorDocument, images: inputImages });

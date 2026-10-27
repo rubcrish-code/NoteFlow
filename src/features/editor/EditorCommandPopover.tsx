@@ -11,6 +11,8 @@ export type EditorCommandSubmit =
   | { mode: "table"; cols: number; rows: number };
 
 interface EditorCommandPopoverProps {
+  onChooseNote?: () => void;
+  onCopyFragment?: () => void;
   currentColor?: string;
   initialText?: string;
   initialHref?: string;
@@ -55,7 +57,7 @@ function normalizeColor(value: string) {
   return /^#[0-9a-fA-F]{6}$/.test(trimmedValue) ? trimmedValue : "#3b6ef2";
 }
 
-export function EditorCommandPopover({ currentColor, initialHref = "", initialText = "", mode, onClose, onSubmit }: EditorCommandPopoverProps) {
+export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColor, initialHref = "", initialText = "", mode, onClose, onSubmit }: EditorCommandPopoverProps) {
   const [href, setHref] = useState(initialHref);
   const [linkText, setLinkText] = useState(initialText);
   const [imageSrc, setImageSrc] = useState("");
@@ -105,6 +107,8 @@ export function EditorCommandPopover({ currentColor, initialHref = "", initialTe
 
       {mode === "link" ? (
         <>
+          {onChooseNote ? <button className="secondary-btn" onClick={onChooseNote} type="button"><Icon name="doc" />Ссылка на заметку</button> : null}
+          {onCopyFragment ? <button className="ghost-btn" onClick={onCopyFragment} type="button"><Icon name="copy" />Ссылка на фрагмент</button> : null}
           <label>
             <span>Текст</span>
             <input autoFocus onChange={(event) => setLinkText(event.target.value)} placeholder="Название ссылки" type="text" value={linkText} />

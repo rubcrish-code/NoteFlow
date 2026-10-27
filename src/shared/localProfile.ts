@@ -1,10 +1,10 @@
+import { graphemeLength, takeGraphemes } from "./graphemes";
+
 export const DEFAULT_LOCAL_PROFILE_NAME = "Пользователь";
 export const LOCAL_PROFILE_NAME_MAX_LENGTH = 48;
 
 export function normalizeLocalProfileName(value: string) {
-  return Array.from(value.trim().replace(/\s+/gu, " "))
-    .slice(0, LOCAL_PROFILE_NAME_MAX_LENGTH)
-    .join("");
+  return takeGraphemes(value.trim().replace(/\s+/gu, " "), LOCAL_PROFILE_NAME_MAX_LENGTH);
 }
 
 export function validateLocalProfileName(value: string) {
@@ -12,7 +12,7 @@ export function validateLocalProfileName(value: string) {
   if (!normalized) {
     return "Введите имя локального профиля";
   }
-  if (Array.from(value.trim().replace(/\s+/gu, " ")).length > LOCAL_PROFILE_NAME_MAX_LENGTH) {
+  if (graphemeLength(value.trim().replace(/\s+/gu, " ")) > LOCAL_PROFILE_NAME_MAX_LENGTH) {
     return `Не больше ${LOCAL_PROFILE_NAME_MAX_LENGTH} символов`;
   }
   return "";

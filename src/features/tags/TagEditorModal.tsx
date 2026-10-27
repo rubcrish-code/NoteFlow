@@ -3,7 +3,8 @@ import type { TagColor, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
 import { DEFAULT_TAG_PALETTE_ITEM, findTagPaletteItem, TAG_COLOR_PALETTE } from "./tagPalette";
-import { normalizeTagName, TAG_NAME_MAX_LENGTH, validateTagName } from "./tagEditor";
+import { normalizeTagName, validateTagName } from "./tagEditor";
+import { EntityNameCounter } from "../../shared/EntityNameCounter";
 
 export interface TagEditorValue {
   color: TagColor;
@@ -38,7 +39,8 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
     return () => window.cancelAnimationFrame(frame);
   }, [initialPaletteItem.id, open, tag?.name]);
 
-  const selectedColor = TAG_COLOR_PALETTE.find((item) => item.id === selectedColorId) ?? DEFAULT_TAG_PALETTE_ITEM;
+  const palette = initialPaletteItem.id === "current" ? [initialPaletteItem, ...TAG_COLOR_PALETTE] : TAG_COLOR_PALETTE;
+  const selectedColor = palette.find((item) => item.id === selectedColorId) ?? initialPaletteItem;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,7 +76,7 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
       footer={(
         <div className="new-note-actions">
           <button className="secondary-btn" disabled={isSaving} onClick={onClose} type="button">Отмена</button>
-          <button className="primary-btn" disabled={isSaving} form="tag-editor-form" type="submit">
+          <button className="primary-btn" disabled={isSaving || Boolean(validateTagName(tags, tag?.id, draftName))} form="tag-editor-form" type="submit">
             {isSaving ? "Сохраняем…" : mode === "create" ? "Создать тег" : "Сохранить"}
           </button>
         </div>
@@ -91,7 +93,6 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
           Название
           <input
             aria-invalid={Boolean(error)}
-            maxLength={TAG_NAME_MAX_LENGTH}
             onChange={(event) => {
               setDraftName(event.currentTarget.value);
               setError("");
@@ -100,10 +101,11 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
             value={draftName}
           />
         </label>
+        <EntityNameCounter value={draftName} />
         <fieldset className="tag-editor-colors">
           <legend>Цвет</legend>
           <div aria-label="Цвет тега" className="tag-editor-palette" role="radiogroup">
-            {TAG_COLOR_PALETTE.map((item) => {
+            {palette.map((item) => {
               const selected = item.id === selectedColor.id;
               return (
                 <button
