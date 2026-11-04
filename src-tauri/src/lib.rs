@@ -9,6 +9,7 @@ mod knowledge;
 mod knowledge_agent;
 mod llm;
 mod llm_transport;
+mod native_shortcuts;
 mod project_scope;
 mod provider_url;
 mod rag;
@@ -103,6 +104,10 @@ pub fn run() {
             let state = data::init_state(app)?;
             app.manage(state);
             app.manage(ai_operations::AiOperations::default());
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                native_shortcuts::install(&window)?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

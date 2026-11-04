@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import type { SemanticSearchResult } from "../../services/embeddingService";
 import { RagGenerationError, type RagQueryPlan } from "../../services/ragChatService";
 
@@ -22,7 +23,7 @@ export async function retrieveForRagQuestion(
   if (!request.profileId || !request.canRetrieve) {
     throw new RagGenerationError(
       "retrieval_unavailable",
-      "Подключите модель смыслового поиска и дождитесь автоматической обработки заметок.",
+      translate("ui.4d24bda91f04"),
       true,
     );
   }

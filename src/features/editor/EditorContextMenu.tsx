@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
@@ -10,10 +11,12 @@ import { applyEditorFormattingValue, runEditorFormattingCommand } from "./editor
 import { EditorCommandPopover, type EditorCommandPopoverMode } from "./EditorCommandPopover";
 import { canReadEditorClipboard, canWriteEditorClipboard, readEditorClipboard, writeEditorClipboard } from "../../services/clipboardService";
 import { pasteEditorContent } from "./editorPaste";
+import { editorClipboardMarkdown } from "./editorClipboardMarkdown";
 
 interface ContextTarget { x: number; y: number; bookmark: SelectionBookmark; document: DocumentNode }
 
-export function EditorContextMenu({ editor, onToast, onPaste, onChooseNote, onCopyFragment }: { editor: Editor | null; onToast: (text: string) => void; onPaste?: () => Promise<boolean>; onChooseNote?: () => void; onCopyFragment?: () => void }) {
+export function EditorContextMenu({ editor, onToast, onPaste, onChooseNote, onCopyFragment }: { editor: Editor | null; onToast: (text: string) => void; onPaste?: (asMarkdown?: boolean) => Promise<boolean>; onChooseNote?: () => void; onCopyFragment?: () => void }) {
+  useInterfaceLanguage();
   const [target, setTarget] = useState<ContextTarget | null>(null);
   const [mode, setMode] = useState<EditorCommandPopoverMode | null>(null);
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -59,28 +62,28 @@ export function EditorContextMenu({ editor, onToast, onPaste, onChooseNote, onCo
     runEditorFormattingCommand(editor, id);
     close();
   }
-  async function clipboard(action: "copy" | "cut" | "paste") {
+  async function clipboard(action: "copy" | "cut" | "paste" | "paste-markdown") {
     if (!editor || !restoreSelection()) return;
     const token = ++operationRef.current;
     const document = editor.state.doc;
     const { from, to } = editor.state.selection;
     try {
-      if (action === "paste") {
+      if (action === "paste" || action === "paste-markdown") {
         if (onPaste) {
-          const inserted = await onPaste();
+          const inserted = await onPaste(action === "paste-markdown");
           if (inserted && !editor.isDestroyed) { close(); editor.view.focus(); }
           return;
         }
         const content = await readEditorClipboard();
         if (token !== operationRef.current || !document.eq(editor.state.doc) || editor.isDestroyed) return;
-        pasteEditorContent(editor, content);
+        pasteEditorContent(editor, action === "paste-markdown" ? { text: content.text, html: "", markdown: content.markdown || content.text } : content);
       } else {
-        await writeEditorClipboard(document.textBetween(from, to, "\n"));
+        await writeEditorClipboard(editorClipboardMarkdown(editor.state.selection.content()));
         if (token !== operationRef.current || !document.eq(editor.state.doc) || editor.isDestroyed) return;
         if (action === "cut") editor.commands.deleteRange({ from, to });
       }
       close(); editor.view.focus();
-    } catch { onToast("Не удалось обратиться к буферу обмена. Используйте сочетание клавиш."); }
+    } catch { onToast(translate("ui.f2c9d67823ee")); }
   }
 
   if (!target || !editor) return null;
@@ -88,16 +91,17 @@ export function EditorContextMenu({ editor, onToast, onPaste, onChooseNote, onCo
   const selectedText = editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, " ");
   return createPortal(<>
     <span className="editor-context-anchor" ref={anchorRef} style={{ left: target.x, top: target.y }} tabIndex={-1} />
-    <MenuPopover anchorRef={anchorRef} ariaLabel="Форматирование текста" className="editor-context-menu" role={mode ? "dialog" : "menu"} isOpen onClose={() => { close(); editor.view.focus(); }} preferredWidth={mode ? 306 : 252} maxHeight={540}>
+    <MenuPopover anchorRef={anchorRef} ariaLabel={translate("ui.2c6dd80c4cad")} className="editor-context-menu" role={mode ? "dialog" : "menu"} isOpen onClose={() => { close(); editor.view.focus(); }} preferredWidth={mode ? 306 : 252} maxHeight={540}>
       {mode ? <EditorCommandPopover key={mode} mode={mode} initialText={selectedText} initialHref={String(editor.getAttributes("link").href ?? "")}
         currentColor={editor.getAttributes(mode === "color" ? "textStyle" : "highlight").color as string | undefined}
         onClose={() => setMode(null)} onSubmit={(value) => { if (restoreSelection()) applyEditorFormattingValue(editor, value); close(); }} /> : <>
         {(["cut", "copy", "paste"] as const).map((action) => <button role="menuitem" type="button" key={action}
           disabled={action === "paste" ? !canReadEditorClipboard() : !canWriteEditorClipboard() || editor.state.selection.empty}
-          onClick={() => void clipboard(action)}>{action === "copy" ? "Копировать" : action === "cut" ? "Вырезать" : "Вставить"}</button>)}
+          onClick={() => void clipboard(action)}>{action === "copy" ? translate("ui.1ecddf40bfeb") : action === "cut" ? translate("ui.1ea87aea0a4f") : translate("ui.ec79f4d0c884")}</button>)}
+        <button role="menuitem" type="button" disabled={!canReadEditorClipboard()} onClick={() => void clipboard("paste-markdown")}>{translate("ui.7036e6ad8b06")}</button>
         <span className="toolbar-overflow-separator" role="separator" />
-        {onChooseNote ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) onChooseNote(); close(); }}><Icon name="doc" />Ссылка на заметку</button> : null}
-        {onCopyFragment ? <button role="menuitem" type="button" disabled={editor.state.selection.empty} onClick={() => { if (restoreSelection()) onCopyFragment(); close(); }}><Icon name="copy" />Ссылка на фрагмент</button> : null}
+        {onChooseNote ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) onChooseNote(); close(); }}><Icon name="doc" />{translate("ui.33b49d4149c0")}</button> : null}
+        {onCopyFragment ? <button role="menuitem" type="button" disabled={editor.state.selection.empty} onClick={() => { if (restoreSelection()) onCopyFragment(); close(); }}><Icon name="copy" />{translate("ui.b2352ddb98f5")}</button> : null}
         {actions.map((action, index) => <div key={action.id}>
           {index > 0 && actions[index - 1].group !== action.group ? <span className="toolbar-overflow-separator" role="separator" /> : null}
           <button onMouseDown={(event) => event.preventDefault()} onClick={() => command(action.id)} role="menuitem" type="button" data-context-action={action.id}>
@@ -105,7 +109,7 @@ export function EditorContextMenu({ editor, onToast, onPaste, onChooseNote, onCo
             <span>{action.tip.replace(/\s*\(Ctrl\+[^)]+\)/, "")}</span>
           </button>
         </div>)}
-        {editor.isActive("link") ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) editor.chain().focus().extendMarkRange("link").unsetLink().run(); close(); }}><Icon name="unlink" />Убрать гиперссылку</button> : null}
+        {editor.isActive("link") ? <button role="menuitem" type="button" onClick={() => { if (restoreSelection()) editor.chain().focus().extendMarkRange("link").unsetLink().run(); close(); }}><Icon name="unlink" />{translate("ui.387ddd571cf7")}</button> : null}
       </>}
     </MenuPopover>
   </>, document.body);

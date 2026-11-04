@@ -1,14 +1,15 @@
+import { translate, useInterfaceLanguage } from "./i18n";
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type Ref, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { useFloatingPopoverPosition } from "./useFloatingPopoverPosition";
 import { formatDisplayDate } from "./displayDate";
 import { getFocusableElements } from "./uiA11y";
-import { CalendarCaption, calendarMonths as monthNames, type CalendarCaptionHandle } from "./CalendarCaption";
+import { CalendarCaption, getCalendarMonths, type CalendarCaptionHandle } from "./CalendarCaption";
 
 export { formatDisplayDate } from "./displayDate";
 
-const dayNames = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+function getDayNames() { return [translate("ui.31a8ee2fb6b7"), translate("ui.839b2d5c5aa3"), translate("ui.7ec16b9e41ff"), translate("ui.956618723dd8"), translate("ui.4ca114c23be8"), translate("ui.95dab017a4da"), translate("ui.7971972c7cbb")]; }
 export interface DatePickerHandle { dismissTopLayer: () => void }
 
 interface DateParts {
@@ -105,6 +106,8 @@ export function getCalendarKeyboardTarget(value: string, key: string) {
 }
 
 export function DatePicker({ isOpen, onChange, onOpenChange, triggerRef, value, ref }: DatePickerProps) {
+  useInterfaceLanguage();
+  const dayNames = getDayNames(), monthNames = getCalendarMonths();
   const selectedDate = parseIsoDate(value);
   const [focusedDate, setFocusedDate] = useState(value);
   const [visibleYear, setVisibleYear] = useState(selectedDate.year);
@@ -195,7 +198,7 @@ export function DatePicker({ isOpen, onChange, onOpenChange, triggerRef, value, 
 
   const calendar = isOpen ? createPortal(
     <div
-      aria-label="Выбор даты"
+      aria-label={translate("ui.77a990b872f7")}
       data-date-picker="true"
       className="date-picker-popover nf-popover"
       onKeyDown={handleCalendarKeyDown}
@@ -204,13 +207,13 @@ export function DatePicker({ isOpen, onChange, onOpenChange, triggerRef, value, 
       style={{ ...popoverStyle, visibility: popoverStyle ? "visible" : "hidden" }}
     >
       <div className="date-picker-nav">
-        <button aria-label="Предыдущий месяц" data-tooltip="Предыдущий месяц" onClick={() => focusDate(moveIsoMonth(focusedDate, -1))} type="button"><Icon name="back" /></button>
+        <button aria-label={translate("ui.2f28d0718c1d")} data-tooltip={translate("ui.2f28d0718c1d")} onClick={() => focusDate(moveIsoMonth(focusedDate, -1))} type="button"><Icon name="back" /></button>
         <CalendarCaption ref={captionRef} monthIndex={visibleMonthIndex} year={visibleYear} onChange={(year, monthIndex) => {
           setVisibleYear(year); setVisibleMonthIndex(monthIndex);
           const day = Math.min(parseIsoDate(focusedDate).day, daysInMonth(year, monthIndex));
           setFocusedDate(toIsoDate({ year, monthIndex, day }));
         }} />
-        <button aria-label="Следующий месяц" className="next-month" data-tooltip="Следующий месяц" onClick={() => focusDate(moveIsoMonth(focusedDate, 1))} type="button"><Icon name="back" /></button>
+        <button aria-label={translate("ui.913b7bd73faa")} className="next-month" data-tooltip={translate("ui.913b7bd73faa")} onClick={() => focusDate(moveIsoMonth(focusedDate, 1))} type="button"><Icon name="back" /></button>
       </div>
       <div aria-hidden="true" className="date-picker-weekdays">{dayNames.map((dayName) => <span key={dayName}>{dayName}</span>)}</div>
       <div aria-label={`${monthNames[visibleMonthIndex]} ${visibleYear}`} className="date-picker-grid" role="grid">
@@ -231,7 +234,7 @@ export function DatePicker({ isOpen, onChange, onOpenChange, triggerRef, value, 
         ))}
       </div>
       <div className="date-picker-footer">
-        <button onClick={() => chooseDate(today)} type="button">Сегодня</button>
+        <button onClick={() => chooseDate(today)} type="button">{translate("ui.b688b4c0d783")}</button>
         <span>{formatDisplayDate(value)}</span>
       </div>
     </div>,

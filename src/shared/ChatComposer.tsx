@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "./i18n";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { Icon } from "./Icon";
 import { getChatComposerState, shouldSubmitChatComposerKey } from "./chatComposerState";
@@ -25,6 +26,7 @@ export function ChatComposer({
   placeholder,
   value,
 }: ChatComposerProps) {
+  useInterfaceLanguage();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const state = getChatComposerState({ disabled, isSubmitting, value });
 
@@ -71,11 +73,11 @@ export function ChatComposer({
         value={value}
       />
       <button
-        aria-label={isSubmitting && onStop ? "Остановить" : state.submitLabel}
+        aria-label={isSubmitting && onStop ? translate("ui.3396400da0c4") : state.submitLabel}
         className="chat-composer-send"
         disabled={isSubmitting && onStop ? false : !state.canSubmit}
         onClick={isSubmitting && onStop ? onStop : onSubmit}
-        data-tooltip={isSubmitting && onStop ? "Остановить" : disabled ? "Сначала подключите модель" : state.submitLabel}
+        data-tooltip={isSubmitting && onStop ? translate("ui.3396400da0c4") : disabled ? translate("ui.d133c1e21d4b") : state.submitLabel}
         type="button"
       >
         {isSubmitting && onStop ? <Icon name="x" /> : isSubmitting ? <span className="button-spinner" /> : <Icon name="send" />}

@@ -1,3 +1,4 @@
+import { translate } from "../shared/i18n";
 import { AiBackground } from "./aiBackground";
 import * as rag from "./ragChatService";
 import * as embedding from "./embeddingService";
@@ -25,7 +26,7 @@ export async function sendRagInBackground(chat: rag.RagChat, question: string, p
       recoveryRevision = ragDrafts.revision(chat.id);
     }
     job.update({ userMessageId: userId }); job.check();
-    if (chat.title === "Новый чат") {
+    if (chat.title === translate("ui.c44ad59fc33d")) {
       const title = question.replace(/\s+/g, " ").trim();
       await rag.renameRagChat(chat.id, title.length > 58 ? `${title.slice(0, 57).trimEnd()}…` : title); job.check();
     }
@@ -35,7 +36,7 @@ export async function sendRagInBackground(chat: rag.RagChat, question: string, p
         try { return await embedding.hybridSearch({ includeArchived: false, includeNeighbors: true, profileId,
           projectId: plan.projectId ?? undefined, projectIds: plan.projectIds ?? null, includeStandalone: plan.includeStandalone ?? false,
           tagId: plan.tagId ?? undefined, query: plan.searchQuery }); }
-        catch { throw new rag.RagGenerationError("retrieval_error", "Не удалось выполнить поиск по базе заметок. Повторите запрос.", true); }
+        catch { throw new rag.RagGenerationError("retrieval_error", translate("ui.3d631bc71995"), true); }
       },
     });
     job.check(); job.update({ phase: "generating" });

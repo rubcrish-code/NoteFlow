@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import type { ReactNode } from "react";
 import type { RagMessageSource } from "../../services/ragChatService";
 import { markdownToTiptapDoc, type EditorMark, type EditorNode } from "../editor/markdownService";
@@ -18,6 +19,7 @@ interface CitationRenderContext {
 }
 
 export function ChatMarkdown({ citations = [], content, onCitationClick }: ChatMarkdownProps) {
+  useInterfaceLanguage();
   const document = markdownToTiptapDoc(content);
   const citationContext = { citations, onCitationClick };
   return <div className="note-chat-markdown">{(document.content ?? []).map((node, index) => renderBlockNode(node, `b-${index}`, citationContext))}</div>;
@@ -25,10 +27,10 @@ export function ChatMarkdown({ citations = [], content, onCitationClick }: ChatM
 
 export function getNoteChatSourceTitle(title?: string) {
   if (title === undefined) {
-    return "текущая заметка";
+    return translate("ui.3971045fb8e2");
   }
   const trimmedTitle = title.trim();
-  return trimmedTitle || "Без названия";
+  return trimmedTitle || translate("ui.f5db3a12b79c");
 }
 
 function renderBlockNode(node: EditorNode, key: string, citationContext: CitationRenderContext): ReactNode {
@@ -156,7 +158,7 @@ function renderInlineNodes(nodes: EditorNode[] | undefined, citationContext: Cit
     if (node.type === "noteMention") {
       return (
         <span className="note-chat-token" key={`i-${index}`}>
-          @{String(node.attrs?.label ?? "Заметка")}
+          @{String(node.attrs?.label ?? translate("ui.025e14681a4c"))}
         </span>
       );
     }

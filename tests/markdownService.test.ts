@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { isMarkdownLike, markdownToHtml, markdownToTiptapDoc, tiptapJsonToHtml, tiptapJsonToMarkdown, type EditorDocument } from "../src/features/editor/markdownService.ts";
+import { buildEditorDocumentFromStoredNoteContent, serializeEditorDocumentForStorage } from "../src/features/editor/editorContentSerializer";
 
 describe("markdownService.isMarkdownLike", () => {
   it("does not treat ordinary text as Markdown", () => {
@@ -126,9 +127,12 @@ describe("markdownService conversion", () => {
   });
 
   it("keeps highlighted inline text round-trippable", () => {
-    const markdown = tiptapJsonToMarkdown(markdownToTiptapDoc("Текст с ==подсветкой=="));
-
-    assert.match(markdown, /==подсветкой==/);
+    const original = markdownToTiptapDoc("Текст с ==подсветкой==");
+    const saved = serializeEditorDocumentForStorage(original);
+    const reloaded = buildEditorDocumentFromStoredNoteContent({ contentJson: saved.editorDocument, contentMarkdown: saved.contentMarkdown, plainText: saved.plainText,
+      contentSidecars: saved.contentSidecars.map(sidecar => ({ ...sidecar, createdAt: "", updatedAt: "" })) }).editorDocument;
+    assert.ok(JSON.stringify(reloaded).includes('"type":"highlight"'));
+    assert.equal(tiptapJsonToMarkdown(reloaded), "Текст с подсветкой");
   });
 
   it("produces HTML for a Markdown document", () => {

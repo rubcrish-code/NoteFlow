@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import Image from "@tiptap/extension-image";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { useCallback, useEffect, useId, useRef, useState, type PointerEvent, type CSSProperties } from "react";
@@ -67,14 +68,14 @@ function renderNullableDataAttribute(name: string, value: unknown) {
 
 function getHandleLabel(handle: ResizeHandle) {
   const labels: Record<ResizeHandle, string> = {
-    e: "Изменить ширину справа",
-    n: "Изменить высоту сверху",
-    ne: "Изменить размер из правого верхнего угла",
-    nw: "Изменить размер из левого верхнего угла",
-    s: "Изменить высоту снизу",
-    se: "Изменить размер из правого нижнего угла",
-    sw: "Изменить размер из левого нижнего угла",
-    w: "Изменить ширину слева",
+    e: translate("ui.411a92969559"),
+    n: translate("ui.52aea93bd5b4"),
+    ne: translate("ui.82e580e78ef0"),
+    nw: translate("ui.9c960229b7a1"),
+    s: translate("ui.49003a6b2f8a"),
+    se: translate("ui.ae9616833184"),
+    sw: translate("ui.69e6bed0f733"),
+    w: translate("ui.bbe2f49ebc7d"),
   };
   return labels[handle];
 }
@@ -91,15 +92,16 @@ function getFigureStyle(width: number | null, height: number | null): CSSPropert
 
 function getImageAlignmentLabel(alignment: EditableImageAttributes["alignment"]) {
   if (alignment === "center") {
-    return "По центру";
+    return translate("ui.93f3d6b8dc12");
   }
   if (alignment === "right") {
-    return "Справа";
+    return translate("ui.98ab54c1c01f");
   }
-  return "Слева";
+  return translate("ui.d7f76a36c9fb");
 }
 
 function ImageNodeView(props: NodeViewProps) {
+  useInterfaceLanguage();
   const imageRef = useRef<HTMLImageElement>(null);
   const moreActionsRef = useRef<HTMLButtonElement>(null);
   const descriptionInputRef = useRef<HTMLInputElement>(null);
@@ -218,7 +220,7 @@ function ImageNodeView(props: NodeViewProps) {
   function resetImage() {
     if (!attrs.originalSrc) {
       updateImageAttrs({ height: null, width: null });
-      options.onToast?.("Размер изображения сброшен");
+      options.onToast?.(translate("ui.28362fdc3d5a"));
       return;
     }
 
@@ -230,7 +232,7 @@ function ImageNodeView(props: NodeViewProps) {
       src: attrs.originalSrc,
       width: null,
     });
-    options.onToast?.("Изображение сброшено к оригиналу");
+    options.onToast?.(translate("ui.ac08859c0ef1"));
   }
 
   function setAlignment(alignment: NonNullable<EditableImageAttributes["alignment"]>) {
@@ -241,11 +243,11 @@ function ImageNodeView(props: NodeViewProps) {
     if (transferBusy.current) return;
     transferBusy.current = true; setTransfer(action);
     try {
-      const completed = action === "copy" ? (await copyImage(attrs.src), true) : await saveImage(attrs.src, attrs.title || attrs.alt || "Изображение");
-      if (completed) options.onToast?.(action === "copy" ? "Изображение скопировано" : "Изображение сохранено");
+      const completed = action === "copy" ? (await copyImage(attrs.src), true) : await saveImage(attrs.src, attrs.title || attrs.alt || translate("ui.e5f534734c36"));
+      if (completed) options.onToast?.(action === "copy" ? translate("ui.608fb6053e4e") : translate("ui.f55302131338"));
       if (mounted.current) setIsMoreActionsOpen(false);
     } catch {
-      options.onToast?.(action === "copy" ? "Не удалось скопировать изображение" : "Не удалось сохранить изображение");
+      options.onToast?.(action === "copy" ? translate("ui.7d67e478535c") : translate("ui.fa52cbcdd62e"));
     } finally {
       transferBusy.current = false;
       if (mounted.current) setTransfer(null);
@@ -258,7 +260,7 @@ function ImageNodeView(props: NodeViewProps) {
     <NodeViewWrapper className={`note-image-node align-${alignment} ${props.selected ? "selected" : ""} ${draftSize ? "resizing" : ""}`} data-drag-handle>
       {props.selected ? (
         <div className="image-action-panel" contentEditable={false}>
-          <div className="image-align-actions" aria-label="Выравнивание изображения" role="group">
+          <div className="image-align-actions" aria-label={translate("ui.0be29a6af1d2")} role="group">
             {(["left", "center", "right"] as const).map((item) => (
               <button
                 aria-pressed={alignment === item}
@@ -272,18 +274,16 @@ function ImageNodeView(props: NodeViewProps) {
               </button>
             ))}
           </div>
-          <button onClick={() => options.onToast?.("Потяните маркеры по краям изображения")} type="button">
-            Размер
-          </button>
+          <button onClick={() => options.onToast?.(translate("ui.f1ffde43448d"))} type="button">
+            {translate("ui.572095d4a787")}</button>
           <button onClick={() => openEditor("crop")} type="button">
-            Обрезать
-          </button>
+            {translate("ui.1fe990f27562")}</button>
           <button
             aria-expanded={isMoreActionsOpen}
             aria-haspopup="menu"
-            aria-label="Другие действия с изображением"
+            aria-label={translate("ui.3849df359623")}
             className="image-more-actions"
-            data-tooltip="Другие действия"
+            data-tooltip={translate("ui.c4f678b17288")}
             onClick={() => setIsMoreActionsOpen((current) => !current)}
             ref={moreActionsRef}
             type="button"
@@ -292,19 +292,19 @@ function ImageNodeView(props: NodeViewProps) {
           </button>
           <MenuPopover
             anchorRef={moreActionsRef}
-            ariaLabel="Другие действия с изображением"
+            ariaLabel={translate("ui.3849df359623")}
             className="image-actions-menu"
             isOpen={isMoreActionsOpen}
             onClose={closeMoreActions}
             preferredWidth={220}
           >
-            <button onClick={() => { setIsMoreActionsOpen(false); openEditor("draw"); }} role="menuitem" type="button">Рисовать</button>
-            <button onClick={openDescription} role="menuitem" type="button">Описание изображения</button>
-            <button disabled={!attrs.width && !attrs.height && (!attrs.originalSrc || attrs.originalSrc === attrs.src)} onClick={() => { setIsMoreActionsOpen(false); setIsResetOpen(true); }} role="menuitem" type="button">Сбросить изменения</button>
-            <button disabled={transfer !== null} onClick={() => void transferImage("copy")} role="menuitem" type="button">{transfer === "copy" ? "Копируем…" : "Копировать"}</button>
-            <button disabled={transfer !== null} onClick={() => void transferImage("save")} role="menuitem" type="button">{transfer === "save" ? "Сохраняем…" : "Сохранить…"}</button>
+            <button onClick={() => { setIsMoreActionsOpen(false); openEditor("draw"); }} role="menuitem" type="button">{translate("ui.2cb442e7dd2b")}</button>
+            <button onClick={openDescription} role="menuitem" type="button">{translate("ui.af89df2ede7d")}</button>
+            <button disabled={!attrs.width && !attrs.height && (!attrs.originalSrc || attrs.originalSrc === attrs.src)} onClick={() => { setIsMoreActionsOpen(false); setIsResetOpen(true); }} role="menuitem" type="button">{translate("ui.3b7c443e5646")}</button>
+            <button disabled={transfer !== null} onClick={() => void transferImage("copy")} role="menuitem" type="button">{transfer === "copy" ? translate("ui.b121223a8e52") : translate("ui.1ecddf40bfeb")}</button>
+            <button disabled={transfer !== null} onClick={() => void transferImage("save")} role="menuitem" type="button">{transfer === "save" ? translate("ui.9c27c381dd8b") : translate("ui.ee96e239c644")}</button>
             <div className="nf-menu-separator" />
-            <button className="danger" onClick={() => { setIsMoreActionsOpen(false); props.deleteNode(); }} role="menuitem" type="button">Удалить изображение</button>
+            <button className="danger" onClick={() => { setIsMoreActionsOpen(false); props.deleteNode(); }} role="menuitem" type="button">{translate("ui.6e255893e722")}</button>
           </MenuPopover>
         </div>
       ) : null}
@@ -328,32 +328,31 @@ function ImageNodeView(props: NodeViewProps) {
           </div>
         ) : null}
       </figure>
-      {isResetOpen ? <ModalShell open title="Сбросить изменения?" size="compact" onClose={() => setIsResetOpen(false)}
-        footer={<><button className="secondary-btn" onClick={() => setIsResetOpen(false)} type="button">Отмена</button><button className="primary-btn" onClick={() => { resetImage(); setIsResetOpen(false); }} type="button">Сбросить</button></>}>
-        <p>Изображение будет восстановлено до оригинала. Изменения размера и аннотации будут отменены.</p>
+      {isResetOpen ? <ModalShell open title={translate("ui.0775f650fe07")} size="compact" onClose={() => setIsResetOpen(false)}
+        footer={<><button className="secondary-btn" onClick={() => setIsResetOpen(false)} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="primary-btn" onClick={() => { resetImage(); setIsResetOpen(false); }} type="button">{translate("ui.407f871778d3")}</button></>}>
+        <p>{translate("ui.c7718b5af028")}</p>
       </ModalShell> : null}
       {isDescriptionOpen ? (
         <ModalShell
           backdropClassName="modal-backdrop"
           className="image-description-dialog"
-          description="Описание помогает понять содержание изображения, если оно не отображается."
+          description={translate("ui.9bb509b291fc")}
           footer={(
             <div className="new-note-actions">
-              <button className="secondary-btn" onClick={() => setIsDescriptionOpen(false)} type="button">Отмена</button>
-              <button className="primary-btn" form={descriptionFormId} type="submit">Сохранить</button>
+              <button className="secondary-btn" onClick={() => setIsDescriptionOpen(false)} type="button">{translate("ui.8fbe9b75cbdf")}</button>
+              <button className="primary-btn" form={descriptionFormId} type="submit">{translate("ui.b4d30cae5289")}</button>
             </div>
           )}
           initialFocusRef={descriptionInputRef}
           onClose={() => setIsDescriptionOpen(false)}
           open
           size="compact"
-          title="Описание изображения"
+          title={translate("ui.af89df2ede7d")}
           titleId={`${descriptionFormId}-title`}
         >
           <form id={descriptionFormId} onSubmit={(event) => { event.preventDefault(); saveDescription(); }}>
             <label className="field">
-              Описание
-              <input maxLength={240} onChange={(event) => setDescriptionDraft(event.currentTarget.value)} placeholder="Что изображено на картинке" ref={descriptionInputRef} value={descriptionDraft} />
+              {translate("ui.b3680f2cba5f")}<input maxLength={240} onChange={(event) => setDescriptionDraft(event.currentTarget.value)} placeholder={translate("ui.a9bcc6676f84")} ref={descriptionInputRef} value={descriptionDraft} />
             </label>
           </form>
         </ModalShell>

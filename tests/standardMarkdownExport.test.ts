@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { marked } from "marked";
 import { markdownToTiptapDoc, tiptapJsonToMarkdown, tiptapJsonToStandardMarkdown, type EditorNode, type EditorMark, type EditorDocument } from "../src/features/editor/markdownService";
-import { serializeEditorDocumentForStorage } from "../src/features/editor/editorContentSerializer";
+import { buildEditorDocumentFromStoredNoteContent, serializeEditorDocumentForStorage } from "../src/features/editor/editorContentSerializer";
+import { preparePortableDocument } from "../src/features/editor/portableMarkdown";
 
 const text = (value: string, ...marks: EditorMark[]): EditorNode => ({ type: "text", text: value, ...(marks.length ? { marks } : {}) });
 const doc = (...content: EditorNode[]): EditorDocument => ({ type: "doc", content: [{ type: "paragraph", content }] });
@@ -14,7 +15,7 @@ function roundtrip(input: EditorDocument) {
   const before = JSON.stringify(input);
   const storage = serializeEditorDocumentForStorage(input);
   const md = tiptapJsonToStandardMarkdown(input);
-  assert.deepEqual(signature(markdownToTiptapDoc(md)), signature(input), md);
+  assert.deepEqual(signature(markdownToTiptapDoc(md)), signature(preparePortableDocument(input).document), md);
   assert.equal(JSON.stringify(input), before);
   assert.deepEqual(serializeEditorDocumentForStorage(input), storage, "export cannot mutate canonical Markdown/sidecars");
   return md;
@@ -29,16 +30,21 @@ it("exports nested bold/italic and bold/code with standard delimiters", () => {
 });
 it("one unsupported range does not turn unrelated bold, italic or links into HTML", () => {
   const md = roundtrip(doc(text("До "), text("жирный", { type: "bold" }), text(" и "), text(" подчёркнутый ", { type: "underline" }), text(" затем "), text("курсив", { type: "italic" }), text(" "), text("сайт", { type: "link", attrs: { href: "https://example.com" } })));
-  assert.ok(md.includes("**жирный**")); assert.ok(md.includes("*курсив*")); assert.ok(md.includes("[сайт](https://example.com)")); assert.ok(md.includes("<u>"));
+  assert.ok(md.includes("**жирный**")); assert.ok(md.includes("*курсив*")); assert.ok(md.includes("[сайт](https://example.com)")); assert.doesNotMatch(md, /<\/?[a-z]/i);
 });
-it("uses allowlisted HTML for highlight, never invented Markdown markers", () => {
+it("exports highlight as text without HTML or invented Markdown markers", () => {
   const md = roundtrip(doc(text("Цвет", { type: "highlight", attrs: { color: "#ffee00" } })));
-  assert.equal(md, '<mark style="background-color: #ffee00">Цвет</mark>'); assert.ok(!md.includes("=="));
+  assert.equal(md, 'Цвет'); assert.ok(!md.includes("=="));
 });
 it("P0 partial bold + underline retains every character through ten standard file cycles", () => {
   let input = doc(text("Стоимость следующа", { type: "bold" }), text("я", { type: "bold" }, { type: "underline" }), text(" -", { type: "bold" }));
-  const expected = signature(input);
-  assert.equal(tiptapJsonToStandardMarkdown(input), "**Стоимость следующа<u>я</u> -**");
+  const expected = signature(preparePortableDocument(input).document);
+  const canonical = serializeEditorDocumentForStorage(input);
+  const reloaded = buildEditorDocumentFromStoredNoteContent({ contentJson: canonical.editorDocument, contentMarkdown: canonical.contentMarkdown, plainText: canonical.plainText,
+    contentSidecars: canonical.contentSidecars.map(sidecar => ({ ...sidecar, id: "test", noteId: "test", createdAt: "", updatedAt: "" })) });
+  assert.deepEqual(signature(reloaded.editorDocument), signature(input), "Markdown plus sidecar preserves every canonical mark, including underline");
+  assert.ok(preparePortableDocument(input).warnings.length > 0);
+  assert.equal(tiptapJsonToStandardMarkdown(input), "**Стоимость следующая -**");
   for (let index = 0; index < 10; index++) {
     const md = roundtrip(input); assert.ok(!md.includes("****")); assert.ok(!md.includes("следующа****я"));
     input = markdownToTiptapDoc(md); assert.deepEqual(signature(input), expected);

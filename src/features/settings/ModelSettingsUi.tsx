@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import type { ReactNode, Ref } from "react";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
@@ -25,6 +26,7 @@ export function ProviderTypeSelector<T extends string>({
   options,
   value,
 }: ProviderTypeSelectorProps<T>) {
+  useInterfaceLanguage();
   return (
     <div aria-label={ariaLabel} className="provider-type-selector" role="radiogroup">
       {options.map((option, index) => (
@@ -58,6 +60,7 @@ interface ModelStatusBadgeProps {
 }
 
 export function ModelStatusBadge({ busy = false, label, tone = "neutral" }: ModelStatusBadgeProps) {
+  useInterfaceLanguage();
   return (
     <span aria-busy={busy} aria-live="polite" className={`status-pill model-status-badge ${tone}`}>
       {label}
@@ -108,30 +111,31 @@ export function ModelDiscoveryField({
   state,
   statusMessage,
 }: ModelDiscoveryFieldProps) {
+  useInterfaceLanguage();
   const availableOptions = filterModelDiscoveryOptions(options, purpose);
   const selectedValue = availableOptions.some((option) => option.id === manualValue) ? manualValue : "";
   const buttonLabel = state === "loading"
-    ? "Загружаем модели…"
+    ? translate("ui.954eb9132da8")
     : state === "error"
-      ? "Повторить"
+      ? translate("ui.5189135a6110")
       : state === "idle"
-        ? "Получить список моделей"
-        : "Обновить список";
+        ? translate("ui.428153f10334")
+        : translate("ui.163a016f3df7");
 
   return (
     <div className="field full model-discovery-field">
-      <span className="field-label">{label} <InfoHint text={purpose === "chat" ? "Модель для ответов ИИ. Выберите из списка сервера или укажите её точный ID вручную." : "Модель преобразует текст в числовое представление для поиска по смыслу, но не пишет ответы."} /></span>
+      <span className="field-label">{label} <InfoHint text={purpose === "chat" ? translate("ui.086a1cbafc57") : translate("ui.767662dfccde")} /></span>
       {availableOptions.length > 0 ? (
         <label className="model-discovery-select">
-          <span>Доступные модели</span>
+          <span>{translate("ui.6b5b2dcdd546")}</span>
           <select
-            aria-label={`${label}: доступные модели`}
+            aria-label={translate("ui.c9da054418d4", { p0: label })}
             onChange={(event) => {
               if (event.currentTarget.value) onSelect(event.currentTarget.value);
             }}
             value={selectedValue}
           >
-            <option value="">Выберите модель</option>
+            <option value="">{translate("ui.c4dac53b9acf")}</option>
             {availableOptions.map((option) => <option key={option.id} value={option.id}>{option.id}</option>)}
           </select>
         </label>
@@ -147,7 +151,7 @@ export function ModelDiscoveryField({
         {buttonLabel}
       </button>
       <label className="model-discovery-manual">
-        <span>Model ID вручную <InfoHint text="Точное имя модели у провайдера. Используйте ручной ввод, если сервер не предоставляет список моделей." /></span>
+        <span>{translate("ui.a5d37d32229c") + " "}<InfoHint text={translate("ui.6e97d28d68de")} /></span>
         <input
           onChange={(event) => onManualChange(event.currentTarget.value)}
           placeholder={manualPlaceholder}
@@ -193,6 +197,7 @@ export function SettingsModalShell({
   title,
   titleId,
 }: SettingsModalShellProps) {
+  useInterfaceLanguage();
   return (
     <ModalShell
       backdropClassName="modal-backdrop settings-modal-backdrop"
@@ -226,12 +231,13 @@ interface SettingsSectionHeaderProps {
 }
 
 export function SettingsSectionHeader({ action, description, info, title }: SettingsSectionHeaderProps) {
+  useInterfaceLanguage();
   return (
     <div className="model-section-header">
       <div className="model-section-heading">
         <div className="model-section-title-row">
           <h2>{title}</h2>
-          <InfoHint label={`Подробнее: ${title}`} text={info} />
+          <InfoHint label={translate("ui.436a933b857e", { p0: title })} text={info} />
         </div>
         <p>{description}</p>
       </div>

@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useState, type FormEvent } from "react";
 import { Icon } from "../../shared/Icon";
 
@@ -58,6 +59,7 @@ function normalizeColor(value: string) {
 }
 
 export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColor, initialHref = "", initialText = "", mode, onClose, onSubmit }: EditorCommandPopoverProps) {
+  useInterfaceLanguage();
   const [href, setHref] = useState(initialHref);
   const [linkText, setLinkText] = useState(initialText);
   const [imageSrc, setImageSrc] = useState("");
@@ -100,18 +102,18 @@ export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColo
     <form className="editor-command-popover" onSubmit={submitForm}>
       <div className="editor-command-head">
         <b>{getTitle(mode)}</b>
-        <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
+        <button aria-label={translate("ui.a7a4033657e8")} className="editor-popover-close" onClick={onClose} type="button">
           <Icon name="x" />
         </button>
       </div>
 
       {mode === "link" ? (
         <>
-          {onChooseNote ? <button className="secondary-btn" onClick={onChooseNote} type="button"><Icon name="doc" />Ссылка на заметку</button> : null}
-          {onCopyFragment ? <button className="ghost-btn" onClick={onCopyFragment} type="button"><Icon name="copy" />Ссылка на фрагмент</button> : null}
+          {onChooseNote ? <button className="secondary-btn" onClick={onChooseNote} type="button"><Icon name="doc" />{translate("ui.33b49d4149c0")}</button> : null}
+          {onCopyFragment ? <button className="ghost-btn" onClick={onCopyFragment} type="button"><Icon name="copy" />{translate("ui.b2352ddb98f5")}</button> : null}
           <label>
-            <span>Текст</span>
-            <input autoFocus onChange={(event) => setLinkText(event.target.value)} placeholder="Название ссылки" type="text" value={linkText} />
+            <span>{translate("ui.3091aca226ef")}</span>
+            <input autoFocus onChange={(event) => setLinkText(event.target.value)} placeholder={translate("ui.f2ea6e9492de")} type="text" value={linkText} />
           </label>
           <label>
             <span>URL</span>
@@ -123,12 +125,12 @@ export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColo
       {mode === "image" ? (
         <>
           <label>
-            <span>Источник</span>
+            <span>{translate("ui.56e46960c104")}</span>
             <input autoFocus onChange={(event) => setImageSrc(event.target.value)} placeholder="https://example.com/image.png" type="text" value={imageSrc} />
           </label>
           <label>
             <span>Alt</span>
-            <input onChange={(event) => setImageAlt(event.target.value)} placeholder="Описание изображения" type="text" value={imageAlt} />
+            <input onChange={(event) => setImageAlt(event.target.value)} placeholder={translate("ui.af89df2ede7d")} type="text" value={imageAlt} />
           </label>
         </>
       ) : null}
@@ -136,11 +138,11 @@ export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColo
       {mode === "table" ? (
         <div className="editor-table-grid">
           <label>
-            <span>Строки</span>
+            <span>{translate("ui.72d3703590fe")}</span>
             <input autoFocus max={8} min={2} onChange={(event) => setRows(Number(event.target.value))} type="number" value={rows} />
           </label>
           <label>
-            <span>Колонки</span>
+            <span>{translate("ui.b3112872372c")}</span>
             <input max={8} min={2} onChange={(event) => setCols(Number(event.target.value))} type="number" value={cols} />
           </label>
         </div>
@@ -153,7 +155,7 @@ export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColo
             onClick={() => onSubmit({ mode, color: null })}
             type="button"
           >
-            {mode === "color" ? "Автоматический цвет" : "Убрать выделение"}
+            {mode === "color" ? translate("ui.f6956a1ef744") : translate("ui.fa9b00418eb9")}
           </button>
           <div className="editor-color-grid">
             {palette.map((paletteColor) => (
@@ -176,11 +178,9 @@ export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColo
 
       <div className="editor-command-actions">
         <button className="secondary-btn" onClick={onClose} type="button">
-          Отмена
-        </button>
+          {translate("ui.8fbe9b75cbdf")}</button>
         <button className="primary-btn" type="submit">
-          Применить
-        </button>
+          {translate("ui.e15f960d93eb")}</button>
       </div>
     </form>
   );
@@ -188,16 +188,16 @@ export function EditorCommandPopover({ onChooseNote, onCopyFragment, currentColo
 
 function getTitle(mode: EditorCommandPopoverMode) {
   if (mode === "color") {
-    return "Цвет текста";
+    return translate("ui.d76a10ce552f");
   }
   if (mode === "highlight") {
-    return "Подсветка";
+    return translate("ui.985936f581a1");
   }
   if (mode === "image") {
-    return "Изображение";
+    return translate("ui.e5f534734c36");
   }
   if (mode === "table") {
-    return "Таблица";
+    return translate("ui.b7f18dd0a994");
   }
-  return "Гиперссылка";
+  return translate("ui.4c34086988aa");
 }

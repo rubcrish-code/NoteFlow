@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import { Extension } from "@tiptap/core";
 import Link from "@tiptap/extension-link";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
@@ -92,7 +93,7 @@ export const NoteFlowLink = Link.extend({
     // Keep the parent's URI/XSS validation; only annotate safe anchors.
     if (typeof href === "string" && sanitizeMarkdownLinkHref(href) && Array.isArray(result) && typeof result[1] === "object" && result[1] !== null) {
       const internal = parseInternalNoteLink(href);
-      Object.assign(result[1], { "data-tooltip": internal ? internal.fragment ? "Перейти к фрагменту заметки" : "Открыть заметку" : href.startsWith("#") ? "Перейти к заголовку" : href, ...(internal ? { "data-note-link": "true" } : {}) });
+      Object.assign(result[1], { "data-tooltip": internal ? internal.fragment ? translate("ui.17963ca8863f") : translate("ui.9bd917b70fd0") : href.startsWith("#") ? translate("ui.029ee8c9b8be") : href, ...(internal ? { "data-note-link": "true" } : {}) });
     }
     return result;
   },

@@ -105,13 +105,13 @@
 }
 
 :where(.nf-button--secondary, .secondary-btn, .tag-action.secondary, .archive-action.secondary) {
-  background: var(--surface-panel);
+  background: var(--button-bg);
   border-color: var(--border-default);
   color: var(--text-primary);
 }
 
 :where(.nf-button--secondary, .secondary-btn, .tag-action.secondary, .archive-action.secondary):hover:not(:disabled) {
-  background: var(--surface-hover);
+  background: var(--button-bg-hover);
   border-color: var(--border-strong);
 }
 
@@ -122,7 +122,7 @@
 }
 
 :where(.nf-button--ghost, .ghost-btn):hover:not(:disabled) {
-  background: var(--surface-hover);
+  background: var(--button-bg-hover);
   border-color: transparent;
   color: var(--text-primary);
 }
@@ -594,6 +594,9 @@
 :where(.workspace, .page-shell, .rag-page):has(.resize-handle.dragging) {
   transition: none;
 }
+:is(.workspace, .page-shell)[data-panel-resizing="true"],
+:is(.workspace, .page-shell)[data-panel-resizing="true"] .sb { transition: none; }
+:is(.workspace, .page-shell)[data-panel-resizing="true"] { user-select: none; }
 :where(.workspace, .page-shell):has(.resize-handle.dragging) .sb { transition: none; }
 
 .sb {

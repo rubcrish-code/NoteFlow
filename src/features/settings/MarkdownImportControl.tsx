@@ -1,3 +1,5 @@
+import { localizeUiMessage } from "../../shared/uiMessages";
+import { translate, getInterfaceLanguage } from "../../shared/i18n";
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { Icon } from "../../shared/Icon";
 import { ModalShell } from "../../shared/ModalShell";
@@ -38,7 +40,7 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
     } catch (cause) {
       if (requestId !== requestIdRef.current) return;
       setNotes([]);
-      setError(cause instanceof Error ? cause.message : "Не удалось прочитать Markdown-файлы");
+      setError(cause instanceof Error ? cause.message : translate("ui.dbfd05078139"));
       setPhase("error");
     }
   }
@@ -59,7 +61,7 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
       await onImport(notes.map((note) => ({ ...note, title: note.title.trim() })));
       setPhase("closed");
     } catch {
-      setError("Не удалось импортировать Markdown. Проверьте файлы и повторите попытку.");
+      setError(translate("ui.157ddf49890c"));
       setPhase("ready");
     }
   }
@@ -68,7 +70,7 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
 
   return (
     <>
-      {showTrigger ? <button className="export-action secondary" onClick={() => inputRef.current?.click()} type="button"><Icon name="doc" /> Импорт Markdown</button> : null}
+      {showTrigger ? <button className="export-action secondary" onClick={() => inputRef.current?.click()} type="button"><Icon name="doc" /> {" " + translate("ui.2675bd162de5")}</button> : null}
       <input
         accept=".md,text/markdown"
         hidden
@@ -86,15 +88,15 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
           backdropClassName="modal-backdrop"
           className="markdown-import-dialog"
           closeDisabled={phase === "importing"}
-          description={targetNoteTitle === undefined ? "Выбранные файлы станут новыми заметками. Существующие заметки не изменятся." : "Текст будет вставлен в текущую заметку в место курсора. Если документ изменился, текст добавится в конец. Название заметки не изменится."}
+          description={targetNoteTitle === undefined ? translate("ui.1d70a18dd28b") : translate("ui.c94fa99b7479")}
           footer={(
             <div className="new-note-actions">
-              <button className="secondary-btn" disabled={phase === "importing"} onClick={close} type="button">Отмена</button>
-              {phase === "error" ? <button className="secondary-btn" onClick={() => inputRef.current?.click()} type="button">Выбрать снова</button> : null}
+              <button className="secondary-btn" disabled={phase === "importing"} onClick={close} type="button">{translate("ui.8fbe9b75cbdf")}</button>
+              {phase === "error" ? <button className="secondary-btn" onClick={() => inputRef.current?.click()} type="button">{translate("ui.02faf42b36a7")}</button> : null}
               {phase === "ready" || phase === "importing" ? (
                 <button className="primary-btn" disabled={phase !== "ready"} onClick={() => void importNotes()} type="button">
                   {phase === "importing" ? <span aria-hidden="true" className="button-spinner" /> : null}
-                  {phase === "importing" ? "Импортируем…" : "Импортировать"}
+                  {phase === "importing" ? translate("ui.ff9eb633b0c8") : translate("ui.848ed368817d")}
                 </button>
               ) : null}
             </div>
@@ -102,16 +104,15 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
           onClose={close}
           open
           size="compact"
-          title="Импорт Markdown"
+          title={translate("ui.2675bd162de5")}
           titleId="markdown-import-title"
         >
-          {phase === "preparing" ? <p className="markdown-import-status" role="status">Проверяем файлы…</p> : null}
+          {phase === "preparing" ? <p className="markdown-import-status" role="status">{translate("ui.6ee9ffc48a95")}</p> : null}
           {notes.length > 0 ? (
             <div className="markdown-import-preview">
-              <b>{targetNoteTitle !== undefined ? `Вставить в «${targetNoteTitle}»: файлов ${notes.length}` : notes.length === 1 ? "Будет создана 1 заметка" : `Будет создано заметок: ${notes.length}`}</b>
+              <b>{targetNoteTitle !== undefined ? translate("ui.b789913adb5f", { p0: targetNoteTitle, p1: notes.length }) : notes.length === 1 ? translate("ui.5787d1624143") : translate("ui.ccb4cbfa8d58", { p0: notes.length })}</b>
               {targetNoteTitle === undefined ? <div className="new-note-form">{notes.map((note, index) => (
-                <label key={index}>Название заметки
-                  <input aria-invalid={Boolean(validateEntityName(note.title))} disabled={phase === "importing"} onChange={(event) => {
+                <label key={index}>{translate("ui.40023f7ec93f")}<input aria-invalid={Boolean(validateEntityName(note.title))} disabled={phase === "importing"} onChange={(event) => {
                     const title = event.currentTarget.value;
                     setNotes((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title } : item));
                     setError("");
@@ -122,12 +123,11 @@ export const MarkdownImportControl = forwardRef<MarkdownImportControlHandle, Mar
               ))}</div> : null}
               {skippedReferences > 0 ? (
                 <p className="markdown-import-warning" role="status">
-                  Ссылки на файлы и изображения не перенесены ({skippedReferences}). Текст заметок сохранится.
-                </p>
+                  {translate("ui.fc52de14a3ef")}{skippedReferences}{translate("ui.a57b389826e0")}</p>
               ) : null}
             </div>
           ) : null}
-          {error ? <div className="field-error" role="alert">{error}</div> : null}
+          {error ? <div className="field-error" role="alert">{localizeUiMessage(getInterfaceLanguage(), error)}</div> : null}
         </ModalShell>
       ) : null}
     </>

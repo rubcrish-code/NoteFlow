@@ -1,8 +1,10 @@
+import { useInterfaceLanguage } from "./i18n";
+import { localizeUiMessage } from "./uiMessages";
+
 export interface ToastAction {
   label: string;
   onClick: () => void;
 }
-
 interface ToastProps {
   action?: ToastAction | null;
   message: string | null;
@@ -10,7 +12,8 @@ interface ToastProps {
 }
 
 export function Toast({ action, message, tone }: ToastProps) {
-  const resolvedTone = tone ?? (message?.startsWith("Не удалось") ? "error" : "neutral");
+  const language = useInterfaceLanguage();
+  const resolvedTone = tone ?? (message?.startsWith("Не удалось") || message?.startsWith("Could not") ? "error" : "neutral");
 
   return (
     <div
@@ -20,10 +23,10 @@ export function Toast({ action, message, tone }: ToastProps) {
       data-tone={resolvedTone}
       role={resolvedTone === "error" ? "alert" : "status"}
     >
-      <span>{message}</span>
+      <span>{message ? localizeUiMessage(language, message) : null}</span>
       {message && action ? (
         <button onClick={action.onClick} type="button">
-          {action.label}
+          {localizeUiMessage(language, action.label)}
         </button>
       ) : null}
     </div>

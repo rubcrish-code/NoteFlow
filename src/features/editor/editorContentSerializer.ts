@@ -1,6 +1,6 @@
 import type { EditorContentSidecarInput, NoteContentSidecar } from "../../app/types";
 import {
-  markdownToTiptapDoc,
+  legacyMarkdownToTiptapDoc,
   tiptapJsonToHtml,
   tiptapJsonToMarkdown,
   tiptapJsonToPlainText,
@@ -8,9 +8,12 @@ import {
   type EditorDocument,
   type EditorMark,
   type EditorNode,
+  type InlineProjectionCache,
 } from "./markdownService";
+import { MARKDOWN_CODEC, parseCodecMarkdown, isLayoutOnlyParagraph } from "./markdownCodec";
 import { normalizeDocumentAssetUris } from "./assetUri";
 import { projectTable, readTableLayouts, restoreTableLayout, type TableLayout } from "./tableDocumentLayout";
+import { CODE_BLOCK_SOURCE_ATTR, codeBlockSourceBinding, readCodeBlockSource, type CodeBlockSource } from "./codeBlockSource";
 
 export const LEGACY_TIPTAP_SIDECAR_KIND = "legacy_tiptap_json";
 export const EDITOR_NODE_ATTRS_SIDECAR_KIND = "editor_node_attrs_v1";
@@ -65,23 +68,32 @@ interface SidecarTextMarkEntry {
   start: number;
 }
 
+interface EmptyParagraphEntry { path: number[]; content: EditorNode[] }
+interface RichTableCellEntry { table: number; row: number; cell: number; content: EditorNode[] }
+
 interface EditorNodeAttrsSidecarPayload {
+  markdownCodec?: string;
+  structure?: { binding: string; trailingEmptyParagraphs: number; rootEmptyParagraphs?: number[]; emptyParagraphs?: EmptyParagraphEntry[]; trailingBreaks: Array<{ path: number[]; nodes: EditorNode[] }> };
   blocks: SidecarNodeEntry[];
   callouts: SidecarNodeEntry[];
   detailsBlocks: SidecarNodeEntry[];
   fileAttachments: SidecarNodeEntry[];
   images: SidecarNodeEntry[];
+  noteMentions: SidecarNodeEntry[];
   tables: SidecarNodeEntry[];
   tableLayouts: Array<{ index: number; layout: TableLayout }>;
+  richTableCells: RichTableCellEntry[];
   tableCells: SidecarNodeEntry[];
   tableHeaders: SidecarNodeEntry[];
   textMarks: SidecarTextMarkEntry[];
+  codeBlockSources: Array<{ index: number; source: CodeBlockSource }>;
+  codeBlockSourceBinding?: string;
   version: 1;
 }
 
 const emptyDocument: EditorDocument = { type: "doc", content: [{ type: "paragraph" }] };
 const meaningfulAtomTypes = new Set(["callout", "detailsBlock", "fileAttachment", "horizontalRule", "image", "table"]);
-const sidecarTextMarkTypes = new Set(["fontFormat", "subscript", "superscript", "textStyle", "underline"]);
+const sidecarTextMarkTypes = new Set(["fontFormat", "subscript", "superscript", "textStyle", "underline", "highlight"]);
 const blockAttrKeys = new Set(["textAlign", "indent"]);
 const imageAttrKeys = new Set(["alignment", "alt", "attachmentId", "editedAttachmentId", "editMetadata", "height", "originalAttachmentId", "originalSrc", "src", "title", "width"]);
 const fileAttachmentAttrKeys = new Set(["name", "size", "storageId", "type"]);
@@ -90,6 +102,7 @@ const tableCellAttrKeys = new Set(["backgroundColor", "colspan", "colwidth", "ro
 const tableCellAppearanceAttrKeys = new Set(["backgroundColor", "colwidth"]);
 const detailsAttrKeys = new Set(["open"]);
 const calloutAttrKeys = new Set(["variant"]);
+const noteMentionAttrKeys = new Set(["label", "noteId"]);
 
 export function buildEditorDocumentFromStoredNoteContent(input: StoredEditorContent, options: EditorContentLoadOptions = {}): EditorContentLoadResult {
   const warn = options.warn ?? warnEditorContentLoad;
@@ -101,7 +114,8 @@ export function buildEditorDocumentFromStoredNoteContent(input: StoredEditorCont
   }
 
   try {
-    const parser = options.markdownParser ?? markdownToTiptapDoc;
+    const codecSidecar = input.contentSidecars?.find(sidecar => sidecar.kind === EDITOR_NODE_ATTRS_SIDECAR_KIND)?.payloadJson;
+    const parser = options.markdownParser ?? (isRecord(codecSidecar) && codecSidecar.markdownCodec === MARKDOWN_CODEC ? parseCodecMarkdown : legacyMarkdownToTiptapDoc);
     const parsedDocument = normalizeEditorDocument(parser(markdown));
     if (!hasMeaningfulEditorDocument(parsedDocument) && (hasMeaningfulEditorDocument(fallbackDocument) || input.plainText.trim())) {
       warn({ noteId: input.noteId, reason: "empty-parsed-markdown" });
@@ -109,7 +123,7 @@ export function buildEditorDocumentFromStoredNoteContent(input: StoredEditorCont
     }
 
     return {
-      editorDocument: applyEditorContentSidecars(parsedDocument, input.contentSidecars ?? [], warn, input.noteId),
+      editorDocument: applyEditorContentSidecars(parsedDocument, input.contentSidecars ?? [], warn, input.noteId, markdown),
       source: "markdown",
       usedFallback: false,
     };
@@ -122,21 +136,24 @@ export function buildEditorDocumentFromStoredNoteContent(input: StoredEditorCont
 export function serializeEditorDocumentForStorage(editorDocument: EditorDocument, contentHtml?: string): EditorContentSerializeResult {
   const normalizedDocument = normalizeDocumentAssetUris(normalizeEditorDocument(editorDocument));
   const plainText = tiptapJsonToPlainText(normalizedDocument);
+  // Share inline validation only within this immutable save snapshot, never across edits.
+  const inlineCache: InlineProjectionCache = new WeakMap();
+  const contentMarkdown = tiptapJsonToMarkdown(normalizedDocument, false, inlineCache);
   return {
     contentHtml: contentHtml ?? tiptapJsonToHtml(normalizedDocument),
-    contentMarkdown: tiptapJsonToMarkdown(normalizedDocument),
-    contentSidecars: extractEditorContentSidecars(normalizedDocument),
+    contentMarkdown,
+    contentSidecars: extractEditorContentSidecars(normalizedDocument, inlineCache, contentMarkdown),
     editorDocument: normalizedDocument,
     plainText,
     wordCount: countWords(plainText),
   };
 }
 
-export function extractEditorContentSidecars(editorDocument: EditorDocument): EditorContentSidecarInput[] {
+export function extractEditorContentSidecars(editorDocument: EditorDocument, inlineCache?: InlineProjectionCache, contentMarkdown?: string): EditorContentSidecarInput[] {
   return [
     {
       kind: EDITOR_NODE_ATTRS_SIDECAR_KIND,
-      payloadJson: extractEditorNodeAttrsPayload(editorDocument),
+      payloadJson: extractEditorNodeAttrsPayload(editorDocument, inlineCache, contentMarkdown),
       schemaVersion: 1,
     },
   ];
@@ -178,10 +195,11 @@ function applyEditorContentSidecars(
   sidecars: NoteContentSidecar[],
   warn: (warning: EditorContentLoadWarning) => void,
   noteId?: string,
+  markdown?: string,
 ): EditorDocument {
   try {
     let nextDocument = applyLegacyTiptapAttrs(document, sidecars);
-    nextDocument = applyNodeAttrsSidecar(nextDocument, sidecars);
+    nextDocument = applyNodeAttrsSidecar(nextDocument, sidecars, markdown);
     return nextDocument;
   } catch {
     warn({ noteId, reason: "sidecar-apply-failed" });
@@ -189,18 +207,50 @@ function applyEditorContentSidecars(
   }
 }
 
-function applyNodeAttrsSidecar(document: EditorDocument, sidecars: NoteContentSidecar[]): EditorDocument {
+function applyNodeAttrsSidecar(document: EditorDocument, sidecars: NoteContentSidecar[], markdown?: string): EditorDocument {
   const payload = getEditorNodeAttrsPayload(sidecars);
   if (!payload) {
     return document;
   }
 
   let nextDocument = cloneNode(document) as EditorDocument;
+  if (markdown !== undefined && payload.structure?.binding === codeBlockSourceBinding(markdown)) {
+    if (payload.structure.emptyParagraphs) {
+      // Restore unrepresentable whitespace before applying linear mark ranges.
+      const strip = (node: EditorNode) => {
+        if (node.type === "table" || !node.content) return;
+        node.content = node.content?.filter(child => !isLayoutOnlyParagraph(child));
+        node.content?.forEach(strip);
+      };
+      strip(nextDocument);
+      for (const entry of payload.structure.emptyParagraphs) {
+        let parent: EditorNode | undefined = nextDocument;
+        for (const index of entry.path.slice(0, -1)) parent = parent?.content?.[index];
+        if (parent?.content) parent.content.splice(Math.min(entry.path[entry.path.length - 1], parent.content.length), 0, { type: "paragraph", content: entry.content.map(cloneNode) });
+      }
+    } else if (payload.structure.rootEmptyParagraphs) {
+      nextDocument.content = (nextDocument.content ?? []).filter(node => node.type !== "paragraph" || node.content?.length);
+      for (const index of payload.structure.rootEmptyParagraphs) nextDocument.content.splice(Math.min(index, nextDocument.content.length), 0, { type: "paragraph", content: [] });
+    } else nextDocument.content = [...(nextDocument.content ?? []), ...Array.from({ length: payload.structure.trailingEmptyParagraphs }, () => ({ type: "paragraph", content: [] }))];
+    for (const entry of payload.structure.trailingBreaks) {
+      let target: EditorNode | undefined = nextDocument;
+      for (const index of entry.path) target = target?.content?.[index];
+      if (target && ["paragraph", "heading"].includes(target.type)) target.content = [...(target.content ?? []), ...entry.nodes.map(cloneNode)];
+    }
+  }
   const tables = collectNodesByType(nextDocument, "table");
+  const restoredTables = new Set<number>();
   payload.tableLayouts.forEach(({ index, layout }) => {
-    if (tables[index]) restoreTableLayout(tables[index], layout);
+    if (tables[index] && restoreTableLayout(tables[index], layout)) restoredTables.add(index);
   });
+  if (markdown !== undefined && payload.structure?.binding === codeBlockSourceBinding(markdown)) {
+    for (const entry of payload.richTableCells) {
+      const cell = tables[entry.table]?.content?.[entry.row]?.content?.[entry.cell];
+      if (cell && restoredTables.has(entry.table)) cell.content = entry.content.map(cloneNode);
+    }
+  }
   applyEntriesByType(nextDocument, "image", payload.images, imageAttrKeys);
+  applyEntriesByType(nextDocument, "noteMention", payload.noteMentions, noteMentionAttrKeys);
   applyEntriesByType(nextDocument, "fileAttachment", payload.fileAttachments, fileAttachmentAttrKeys);
   applyEntriesByType(nextDocument, "detailsBlock", payload.detailsBlocks, detailsAttrKeys);
   applyEntriesByType(nextDocument, "callout", payload.callouts, calloutAttrKeys);
@@ -210,6 +260,15 @@ function applyNodeAttrsSidecar(document: EditorDocument, sidecars: NoteContentSi
   applyEntriesByType(nextDocument, "tableHeader", payload.tableHeaders, cellAttrKeys);
   applyBlockEntries(nextDocument, payload.blocks);
   nextDocument = applyTextMarkEntries(nextDocument, payload.textMarks);
+  if (markdown !== undefined && payload.codeBlockSourceBinding === codeBlockSourceBinding(markdown)) {
+    const codeBlocks = collectNodesByType(nextDocument, "codeBlock");
+    payload.codeBlockSources.forEach(({ index, source }) => {
+      const node = codeBlocks[index];
+      if (node && getLinearText(node) === source.text) {
+        node.attrs = { ...node.attrs, [CODE_BLOCK_SOURCE_ATTR]: source };
+      }
+    });
+  }
   return nextDocument;
 }
 
@@ -240,18 +299,50 @@ function applyLegacyTiptapAttrs(document: EditorDocument, sidecars: NoteContentS
   return nextDocument;
 }
 
-function extractEditorNodeAttrsPayload(editorDocument: EditorDocument): EditorNodeAttrsSidecarPayload {
+function extractEditorNodeAttrsPayload(editorDocument: EditorDocument, inlineCache?: InlineProjectionCache, contentMarkdown?: string): EditorNodeAttrsSidecarPayload {
+  const codeBlockSources = collectNodesByType(editorDocument, "codeBlock").flatMap((node, index) => {
+    const source = readCodeBlockSource(node.attrs?.[CODE_BLOCK_SOURCE_ATTR]);
+    return source && source.text === getLinearText(node) ? [{ index, source }] : [];
+  });
+  const trailingBreaks: Array<{ path: number[]; nodes: EditorNode[] }> = [];
+  const emptyParagraphs: EmptyParagraphEntry[] = [];
+  function findBreaks(node: EditorNode, path: number[], inTable = false) {
+    if (["paragraph", "heading"].includes(node.type) && node.content) {
+      let end = node.content.length;
+      while (end && node.content[end - 1].type === "hardBreak") end--;
+      if (end < node.content.length) trailingBreaks.push({ path, nodes: node.content.slice(end).map(cloneNode) });
+      if (!inTable && isLayoutOnlyParagraph(node)) emptyParagraphs.push({ path, content: node.content.slice(0, end).map(cloneNode) });
+    }
+    else if (!inTable && isLayoutOnlyParagraph(node)) emptyParagraphs.push({ path, content: [] });
+    node.content?.forEach((child, index) => findBreaks(child, [...path, index], inTable || node.type === "table"));
+  }
+  findBreaks(editorDocument, []);
+  let end = editorDocument.content?.length ?? 0;
+  while (end && editorDocument.content?.[end - 1].type === "paragraph" && !editorDocument.content[end - 1].content?.length) end--;
   return {
+    codeBlockSources,
+    markdownCodec: MARKDOWN_CODEC,
+    structure: { binding: codeBlockSourceBinding(contentMarkdown ?? tiptapJsonToMarkdown(editorDocument)), trailingEmptyParagraphs: (editorDocument.content?.length ?? 0) - end,
+      rootEmptyParagraphs: (editorDocument.content ?? []).flatMap((node, index) => node.type === "paragraph" && (node.content ?? []).every(child => child.type === "hardBreak") ? [index] : []), emptyParagraphs, trailingBreaks },
+    codeBlockSourceBinding: codeBlockSources.length ? codeBlockSourceBinding(contentMarkdown ?? tiptapJsonToMarkdown(editorDocument)) : undefined,
     blocks: extractBlockEntries(editorDocument),
     callouts: extractNodeEntries(editorDocument, "callout", calloutAttrKeys),
     detailsBlocks: extractNodeEntries(editorDocument, "detailsBlock", detailsAttrKeys),
     fileAttachments: extractNodeEntries(editorDocument, "fileAttachment", fileAttachmentAttrKeys, ["storageId", "name"]),
     images: extractNodeEntries(editorDocument, "image", imageAttrKeys, ["src", "alt"]),
+    noteMentions: extractNodeEntries(editorDocument, "noteMention", noteMentionAttrKeys),
     tables: extractNodeEntries(editorDocument, "table", tableAttrKeys),
     tableLayouts: collectNodesByType(editorDocument, "table").map((table, index) => ({ index, layout: projectTable(table).layout })),
+    richTableCells: collectNodesByType(editorDocument, "table").flatMap((table, tableIndex) => (table.content ?? []).flatMap((row, rowIndex) => (row.content ?? []).flatMap((cell, cellIndex) => {
+      const blocks = cell.content ?? [];
+      const inline = blocks[0]?.content ?? [];
+      const text = inline.map(node => node.text ?? "").join("");
+      const nonportable = blocks.length !== 1 || blocks[0].type !== "paragraph" || inline.some(node => node.type !== "text") || text !== text.trim() || text.includes("\n");
+      return nonportable ? [{ table: tableIndex, row: rowIndex, cell: cellIndex, content: blocks.map(cloneNode) }] : [];
+    }))),
     tableCells: extractNodeEntries(editorDocument, "tableCell", tableCellAttrKeys),
     tableHeaders: extractNodeEntries(editorDocument, "tableHeader", tableCellAttrKeys),
-    textMarks: extractTextMarkEntries(editorDocument),
+    textMarks: extractTextMarkEntries(editorDocument, inlineCache),
     version: 1,
   };
 }
@@ -273,11 +364,11 @@ function extractBlockEntries(document: EditorDocument): SidecarNodeEntry[] {
     .filter((entry) => Object.keys(entry.attrs).length > 0);
 }
 
-function extractTextMarkEntries(document: EditorDocument): SidecarTextMarkEntry[] {
+function extractTextMarkEntries(document: EditorDocument, inlineCache?: InlineProjectionCache): SidecarTextMarkEntry[] {
   const entries: SidecarTextMarkEntry[] = [];
   const appearanceOnly = new Set<EditorNode>();
   visitNodes(document, (node) => {
-    if (node.content?.some((child) => child.type === "text") && inlineNeedsFormattingSidecar(node.content)) {
+    if (node.content?.some((child) => child.type === "text") && inlineNeedsFormattingSidecar(node.content, inlineCache)) {
       node.content.forEach((child) => { if (child.type === "text") appearanceOnly.add(child); });
     }
   });
@@ -401,18 +492,59 @@ function getEditorNodeAttrsPayload(sidecars: NoteContentSidecar[]): EditorNodeAt
     return null;
   }
   return {
+    structure: readStructure(payload.structure),
     blocks: readNodeEntries(payload.blocks),
     callouts: readNodeEntries(payload.callouts),
     detailsBlocks: readNodeEntries(payload.detailsBlocks),
     fileAttachments: readNodeEntries(payload.fileAttachments),
     images: readNodeEntries(payload.images),
+    noteMentions: readNodeEntries(payload.noteMentions),
     tables: readNodeEntries(payload.tables),
     tableLayouts: readTableLayouts(payload.tableLayouts),
+    richTableCells: readRichTableCells(payload.richTableCells),
     tableCells: readNodeEntries(payload.tableCells),
     tableHeaders: readNodeEntries(payload.tableHeaders),
     textMarks: readTextMarkEntries(payload.textMarks),
+    codeBlockSources: Array.isArray(payload.codeBlockSources) ? payload.codeBlockSources.flatMap((entry) => {
+      if (!isRecord(entry) || !Number.isSafeInteger(entry.index) || (entry.index as number) < 0) return [];
+      const source = readCodeBlockSource(entry.source);
+      return source ? [{ index: entry.index as number, source }] : [];
+    }) : [],
+    codeBlockSourceBinding: typeof payload.codeBlockSourceBinding === "string" ? payload.codeBlockSourceBinding : undefined,
     version: 1,
   };
+}
+
+function isNodeSnapshot(value: unknown, depth = 0): value is EditorNode {
+  return depth <= 128 && isRecord(value) && typeof value.type === "string"
+    && (value.text === undefined || typeof value.text === "string")
+    && (value.attrs === undefined || isRecord(value.attrs))
+    && (value.marks === undefined || Array.isArray(value.marks) && value.marks.every(isEditorMark))
+    && (value.content === undefined || Array.isArray(value.content) && value.content.every(node => isNodeSnapshot(node, depth + 1)));
+}
+
+function readRichTableCells(value: unknown): RichTableCellEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(entry => {
+    if (!isRecord(entry) || ![entry.table, entry.row, entry.cell].every(index => Number.isSafeInteger(index) && Number(index) >= 0 && Number(index) <= 100_000) || !Array.isArray(entry.content) || !entry.content.every(node => isNodeSnapshot(node))) return [];
+    return [{ table: Number(entry.table), row: Number(entry.row), cell: Number(entry.cell), content: entry.content.map(cloneNode) }];
+  });
+}
+
+function readStructure(value: unknown): EditorNodeAttrsSidecarPayload["structure"] {
+  if (!isRecord(value) || typeof value.binding !== "string" || !Number.isSafeInteger(value.trailingEmptyParagraphs) || !Array.isArray(value.trailingBreaks)) return undefined;
+  const rootEmptyParagraphs = Array.isArray(value.rootEmptyParagraphs) ? [...new Set(value.rootEmptyParagraphs.filter((index): index is number => Number.isSafeInteger(index) && index >= 0 && index <= 100_000))].sort((a, b) => a - b) : undefined;
+  const seen = new Set<string>();
+  const emptyParagraphs: EmptyParagraphEntry[] | undefined = Array.isArray(value.emptyParagraphs) ? value.emptyParagraphs.slice(0, 100_000).flatMap(entry => {
+    if (!isRecord(entry) || !Array.isArray(entry.path) || !entry.path.length || entry.path.length > 128 || !entry.path.every(index => Number.isSafeInteger(index) && index >= 0 && index <= 100_000) || !Array.isArray(entry.content)) return [];
+    if (!entry.content.every(node => isNodeSnapshot(node) && (node.type === "hardBreak" || node.type === "text" && !(node.text ?? "").trim()))) return [];
+    const key = entry.path.join("/"); if (seen.has(key)) return []; seen.add(key);
+    return [{ path: entry.path as number[], content: (entry.content as EditorNode[]).map(cloneNode) }];
+  }).sort((a, b) => { for (let index = 0; index < Math.min(a.path.length, b.path.length); index++) { const difference = a.path[index] - b.path[index]; if (difference) return difference; } return a.path.length - b.path.length; }) : undefined;
+  return { binding: value.binding, rootEmptyParagraphs, emptyParagraphs, trailingEmptyParagraphs: Math.min(100_000, Math.max(0, value.trailingEmptyParagraphs as number)), trailingBreaks: value.trailingBreaks.flatMap(entry => {
+    if (!isRecord(entry) || !Array.isArray(entry.path) || !entry.path.every(index => Number.isSafeInteger(index) && index >= 0) || !Array.isArray(entry.nodes)) return [];
+    return [{ path: entry.path as number[], nodes: entry.nodes.filter((node): node is EditorNode => isRecord(node) && node.type === "hardBreak").map(cloneNode) }];
+  }) };
 }
 
 function getLegacyTiptapDocument(sidecars: NoteContentSidecar[]): EditorDocument | null {
@@ -483,7 +615,7 @@ function visitNodes(node: EditorNode, visitor: (node: EditorNode) => void) {
   (node.content ?? []).forEach((child) => visitNodes(child, visitor));
 }
 
-function getLinearText(document: EditorDocument) {
+function getLinearText(document: EditorNode) {
   let text = "";
   visitNodes(document, (node) => {
     if (node.type === "text") {

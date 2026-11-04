@@ -1,3 +1,5 @@
+import { localizeUiMessage } from "../../shared/uiMessages";
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useRef, useState } from "react";
 import type { Note } from "../../app/types";
 import { Icon } from "../../shared/Icon";
@@ -33,6 +35,7 @@ export function NoteMenuPopover({
   onTogglePin,
   projectOptions,
 }: NoteMenuPopoverProps) {
+  useInterfaceLanguage();
   const [mode, setMode] = useState<NoteMenuMode>("actions");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -65,7 +68,7 @@ export function NoteMenuPopover({
     <div className="note-menu-popover" ref={popoverRef} role="menu">
       {mode === "move" ? (
         <div className="note-menu-projects">
-          <p className="field-help">Заметка может находиться только в одном проекте.{note.projectId ? " Заметка будет перемещена из текущего проекта." : ""}</p>
+          <p className="field-help">{translate("ui.2a308587981e")}{note.projectId ? translate("ui.a10d18af4c48") : ""}</p>
           {projectOptions.map((project) => (
             <button
               className={project === note.project ? "active" : ""}
@@ -74,7 +77,7 @@ export function NoteMenuPopover({
               onClick={() => {
                 setBusy(true);
                 setError("");
-                void onMove(note.id, project).then(onClose).catch(() => setError("Не удалось добавить заметку в проект.")).finally(() => setBusy(false));
+                void onMove(note.id, project).then(onClose).catch(() => setError(translate("ui.834d1f27c6ec"))).finally(() => setBusy(false));
               }}
               type="button"
             >
@@ -82,11 +85,10 @@ export function NoteMenuPopover({
               <span>{project}</span>
             </button>
           ))}
-          <button onClick={() => { onCreateProject(); onClose(); }} type="button"><Icon name="plus" /><span>Создать новый проект</span></button>
-          {error ? <span className="field-error" role="alert">{error}</span> : null}
+          <button onClick={() => { onCreateProject(); onClose(); }} type="button"><Icon name="plus" /><span>{translate("ui.c0f4e8571e85")}</span></button>
+          {error ? <span className="field-error" role="alert">{localizeUiMessage(getInterfaceLanguage(), error)}</span> : null}
           <button className="secondary-btn" onClick={() => setMode("actions")} type="button">
-            Назад
-          </button>
+            {translate("ui.1a9fb1f3cf8e")}</button>
         </div>
       ) : null}
 
@@ -99,7 +101,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            <Icon name="copy" /><span>Дублировать</span>
+            <Icon name="copy" /><span>{translate("ui.00fea8a656bd")}</span>
           </button>
           <button
             onClick={() => {
@@ -108,21 +110,21 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            <Icon name="pin" /><span>{note.pinned ? "Открепить заметку" : "Закрепить заметку"}</span>
+            <Icon name="pin" /><span>{note.pinned ? translate("ui.bc3100baaade") : translate("ui.7d73457be08e")}</span>
           </button>
           <button onClick={() => setMode("move")} type="button">
-            <Icon name="folder" /><span>Добавить в проект</span>
+            <Icon name="folder" /><span>{translate("ui.b50e40a352c2")}</span>
           </button>
           {note.projectId ? <button disabled={busy} onClick={() => {
             setBusy(true);
             setError("");
-            void onRemoveFromProject(note.id).then(onClose).catch(() => setError("Не удалось убрать заметку из проекта.")).finally(() => setBusy(false));
-          }} type="button"><Icon name="folder" /><span>Убрать из проекта</span></button> : null}
+            void onRemoveFromProject(note.id).then(onClose).catch(() => setError(translate("ui.5c39716a546d"))).finally(() => setBusy(false));
+          }} type="button"><Icon name="folder" /><span>{translate("ui.ba5a59519e29")}</span></button> : null}
           <button
             onClick={() => { onImportMarkdown(); onClose(); }}
             type="button"
           >
-            <Icon name="doc" /><span>Импортировать Markdown</span>
+            <Icon name="doc" /><span>{translate("ui.d3ec04fc6b43")}</span>
           </button>
           <button
             onClick={() => {
@@ -131,7 +133,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            <Icon name="archive" /><span>Архивировать</span>
+            <Icon name="archive" /><span>{translate("ui.1137508af8ff")}</span>
           </button>
           <button
             onClick={() => {
@@ -140,7 +142,7 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            <Icon name="doc" /><span>Экспортировать</span>
+            <Icon name="doc" /><span>{translate("ui.78dfcef11633")}</span>
           </button>
           <button
             className="danger"
@@ -150,9 +152,9 @@ export function NoteMenuPopover({
             }}
             type="button"
           >
-            <Icon name="x" /><span>Удалить</span>
+            <Icon name="x" /><span>{translate("ui.be99b1361201")}</span>
           </button>
-          {error ? <span className="field-error" role="alert">{error}</span> : null}
+          {error ? <span className="field-error" role="alert">{localizeUiMessage(getInterfaceLanguage(), error)}</span> : null}
         </div>
       ) : null}
     </div>

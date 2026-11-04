@@ -1,3 +1,5 @@
+import { translate } from "../../shared/i18n";
+import { interfaceCatalogs } from "../../shared/i18n";
 import type { BackupPreview, ImportBackupResult } from "../../services/dataService";
 import { formatDisplayDateTime } from "../../shared/displayDate";
 
@@ -72,31 +74,39 @@ export function reduceBackupImportState(
 }
 
 export function formatBackupDate(value: string) {
-  return formatDisplayDateTime(value) || "Дата создания недоступна";
+  return formatDisplayDateTime(value) || translate("ui.bbaa3a37913d");
 }
 
 export function getLegacyBackupHistoryNotice(preview: BackupPreview) {
   if (!preview.preservesExistingAiHistory) return null;
-  return "Эта резервная копия создана старой версией NoteFlow и не содержит историю ИИ-чатов. Существующие чаты по базе и чаты заметок, которые останутся в профиле, не будут удалены.";
+  return translate("ui.d9b2c0c4b17b");
 }
 
 export function getBackupSummaryRows(contents: BackupPreview["contents"]) {
   return [
-    ["Заметки", contents.notes],
-    ["Проекты", contents.projects],
-    ["Теги", contents.tags],
-    ["Вложения", contents.attachments],
-    ["Чаты ИИ", contents.noteAiChats],
-    ["Чаты по базе", contents.ragChats],
+    [translate("ui.04a18b51cdc2"), contents.notes],
+    [translate("ui.5029f02d0a94"), contents.projects],
+    [translate("ui.a2800083983f"), contents.tags],
+    [translate("ui.6d356a0d7273"), contents.attachments],
+    [translate("ui.0dc82d95028a"), contents.noteAiChats],
+    [translate("ui.3199a83d2f9c"), contents.ragChats],
   ] as const;
 }
 
 export function getBackupPreviewErrorMessage() {
-  return "Не удалось прочитать резервную копию. Убедитесь, что выбран корректный ZIP-файл NoteFlow.";
+  return translate("ui.fd25614d14c6");
 }
 
 export function getBackupRestoreErrorMessage(appliedButNotReloaded: boolean) {
   return appliedButNotReloaded
-    ? "Резервная копия восстановлена, но интерфейс не удалось обновить. Перезапустите NoteFlow."
-    : "Не удалось восстановить резервную копию. Текущие данные не изменены.";
+    ? translate("ui.baadf0fc682d")
+    : translate("ui.8427e3f82b94");
+}
+
+export function wasBackupRestoreApplied(error: unknown): boolean {
+  if (error && typeof error === "object" && "code" in error) return error.code === "RESTORE_APPLIED";
+  const message = error instanceof Error ? error.message : String(error);
+  // Compatibility for old UI-only callers; command results use the stable code.
+  return message.includes("интерфейс не удалось обновить")
+    || message.includes(interfaceCatalogs.en["ui.baadf0fc682d"]);
 }

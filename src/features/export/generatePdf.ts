@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import pdfMake from "pdfmake/build/pdfmake";
 import vfs from "pdfmake/build/vfs_fonts";
 import type { Content, ContentText, TDocumentDefinitions, TableCell } from "pdfmake/interfaces";
@@ -52,11 +53,11 @@ export async function generatePdf(input: ExportDocument): Promise<Uint8Array> {
         const image = input.images.find((item) => item.uri === node.attrs?.src);
         return image ? [{ image: `data:${image.mime};base64,${base64(image.bytes)}`, fit: [Math.min(499, Number(node.attrs?.width) || image.width), 680],
           alignment: node.attrs?.alignment === "right" ? "right" : node.attrs?.alignment === "center" ? "center" : "left", margin: [0, 6, 0, 12] }]
-          : [{ text: `[Изображение: ${node.attrs?.alt ?? ""}]`, margin: [0, 0, 0, 8] }];
+          : [{ text: translate("ui.7c50632bb0d0", { p0: String(node.attrs?.alt ?? "") }), margin: [0, 0, 0, 8] }];
       }
       if (node.type === "horizontalRule") return [{ canvas: [{ type: "line", x1: 0, y1: 0, x2: 499, y2: 0, lineWidth: 0.5, lineColor: "#b8b8b8" }], margin: [0, 8, 0, 12] }];
       if (["blockquote", "callout", "detailsBlock", "detailsContent", "listItem", "taskItem"].includes(node.type)) return [{ stack: blocks(node.content ?? []), margin: [node.type === "blockquote" || node.type === "callout" ? 12 : 0, 0, 0, 8] }];
-      if (node.type === "fileAttachment") return [{ text: `[Файл: ${node.attrs?.name ?? "Вложение"}]` }];
+      if (node.type === "fileAttachment") return [{ text: translate("ui.e2296fbb224e", { p0: String(node.attrs?.name ?? translate("ui.60942a954137")) }) }];
       const level = Number(node.attrs?.level ?? 1);
       return [{ text: runs(node), bold: node.type === "heading" || node.type === "detailsSummary", fontSize: node.type === "heading" ? [20, 16, 13][Math.min(2, Math.max(0, level - 1))] : 11,
         alignment: node.attrs?.textAlign === "justify" ? "justify" : node.attrs?.textAlign === "right" ? "right" : node.attrs?.textAlign === "center" ? "center" : "left",
@@ -70,6 +71,6 @@ export async function generatePdf(input: ExportDocument): Promise<Uint8Array> {
   };
   return new Promise((resolve, reject) => {
     try { pdfMake.createPdf(definition).getBuffer((buffer) => resolve(new Uint8Array(buffer))); }
-    catch { reject(new Error("Не удалось создать PDF.")); }
+    catch { reject(new Error(translate("ui.6b4b792dad3d"))); }
   });
 }

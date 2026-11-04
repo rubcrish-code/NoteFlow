@@ -381,13 +381,14 @@
 }
 
 .tag-editor-palette button {
+  --tag-swatch-color: var(--tag-swatch-light-color);
   align-items: center;
   aspect-ratio: 1;
   background: var(--tag-swatch-color);
   border: 2px solid var(--surface-panel);
   border-radius: var(--radius-control);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--tag-swatch-color) 62%, var(--border-default));
-  color: #fff;
+  color: var(--tag-swatch-text);
   display: inline-flex;
   height: 48px;
   justify-content: center;
@@ -415,6 +416,11 @@
 .tag-editor-palette button:focus-visible {
   box-shadow: var(--focus-ring), 0 0 0 2px var(--surface-panel);
   outline: 0;
+}
+
+[data-theme="dark"] .tag-editor-palette button {
+  --tag-swatch-color: var(--tag-swatch-dark-color);
+  color: var(--tag-swatch-dark-text);
 }
 
 .tag-editor-palette button.selected {
@@ -1017,7 +1023,7 @@ details[open] > .row-menu-trigger {
 .onboarding-step-icon svg { height: 24px; width: 24px; }
 .onboarding-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-2); width: 100%; padding: 0; list-style: none; }
 .onboarding-steps li { min-width: 0; }
-.onboarding-steps button { display: grid; place-items: center; width: 100%; height: 38px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-panel); color: var(--text-secondary); }
+.onboarding-steps button { display: grid; place-items: center; width: 100%; height: 38px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--button-bg); color: var(--text-secondary); }
 .onboarding-steps button svg { width: 18px; height: 18px; }
 .onboarding-steps .completed button { background: var(--asoft); color: var(--accent); }
 .onboarding-steps button[aria-current="step"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -1025,6 +1031,19 @@ details[open] > .row-menu-trigger {
 .onboarding-close { display: none; }
 
 .tag[style*="--tag-color"] {
-  background: color-mix(in srgb, var(--tag-color) 12%, var(--panel));
-  color: color-mix(in srgb, var(--tag-color) 60%, var(--text-primary));
+  background: var(--tag-background);
+  color: var(--tag-foreground);
 }
+.tag-dot[style*="--tag-color"] {
+  background: var(--tag-background);
+}
+[data-theme="dark"] .tag[style*="--tag-color"] {
+  background: var(--tag-dark-background);
+  color: var(--tag-dark-foreground);
+}
+[data-theme="dark"] .tag-dot[style*="--tag-color"] {
+  background: var(--tag-dark-background);
+}
+.virtual-note-list { position: relative; width: 100%; }
+.virtual-note-row { left: 0; padding-bottom: 2px; position: absolute; top: 0; width: 100%; }
+.virtual-note-row .card { margin-bottom: 0; }

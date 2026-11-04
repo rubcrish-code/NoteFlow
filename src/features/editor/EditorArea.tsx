@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
+import { formatRussianCount, WORD_COUNT_FORMS } from "../../shared/russianPlural";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { getHTMLFromFragment } from "@tiptap/core";
 import { Color } from "@tiptap/extension-color";
 import Code from "@tiptap/extension-code";
 import Highlight from "@tiptap/extension-highlight";
@@ -13,7 +16,8 @@ import Underline from "@tiptap/extension-underline";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
-import type { EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, SaveStatus, TagRow } from "../../app/types";
+import type { AppLanguage, EditorContentSidecarInput, EditorDocument, Note, NoteAttachment, SaveStatus, TagRow } from "../../app/types";
+import { localizeUiMessage, uiMessage } from "../../shared/uiMessages";
 import { acceptNoteAiPrivacy, createNoteAiContext, getNoteAiStatus, runNoteAi, type NoteAiActionId, type NoteAiScope, type NoteAiStatus } from "../../services/noteAiService";
 import { Icon } from "../../shared/Icon";
 import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
@@ -31,13 +35,19 @@ import type { TagEditorValue } from "../tags/TagEditorModal";
 import { TableToolsPopover } from "./TableToolsPopover";
 import { Callout, DetailsBlock, DetailsContent, DetailsSummary, FontFormat, InlineDate, NoteMention } from "./customExtensions";
 import { serializeEditorDocumentForStorage } from "./editorContentSerializer";
+import { EditorSavePreparation, scheduleEditorPreparation, type EditorSavePreparationControl } from "./editorSavePreparation";
+import { createEditorSerializationClient } from "./editorSerializationClient";
+import type { EditorSerializationSnapshot } from "./editorSerializationProtocol";
 import { shouldReloadEditorDocument, type EditorDocumentLoadToken } from "./editorDocumentReload";
 import { handleEditorLinkClick } from "./editorLinkClick";
 import { EditorIndent, NoteFlowLink, PassiveEditorTransactions } from "./editorInteractions";
-import { isMarkdownLike, markdownToTiptapDoc } from "./markdownService";
+import { CodeBlockRestoration } from "./codeBlockRestoration";
+import { editorClipboardMarkdown } from "./editorClipboardMarkdown";
+import { markdownToTiptapDoc } from "./markdownService";
+import { withMarkdownCodec } from "./markdownCodec";
 import { isTauri } from "@tauri-apps/api/core";
 import { readEditorClipboard, importClipboardFiles, type EditorClipboardContent } from "../../services/clipboardService";
-import { filterClipboardHtml, pasteClipboardIntoEditor } from "./editorPaste";
+import { filterClipboardHtml, pasteClipboardIntoEditor, handleEditorPasteEvent } from "./editorPaste";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { storeAttachmentFromPath } from "../../services/dataService";
 import { insertNativeDrop, nativeDropPoint } from "./editorNativeDrop";
@@ -71,6 +81,10 @@ import { NoteLinkPicker } from "./NoteLinkPicker";
 import { writeEditorClipboard } from "../../services/clipboardService";
 
 interface EditorAreaProps {
+  language?: AppLanguage;
+  savePreparationRef?: RefObject<EditorSavePreparationControl | null>;
+  onEditorDirty?: (noteId: string) => boolean;
+  onPreparationError?: () => void;
   internalOpenTarget?: InternalNoteLink & { navigationId: number };
   searchQuery?: string;
   documentReloadGeneration: number;
@@ -94,6 +108,7 @@ interface EditorAreaProps {
   onEditorPageLayoutReset: () => void;
   onExitFocus: () => void;
   onExportNote: (noteId: string, format: NoteExportFormat) => Promise<void>;
+  exportFormat?: NoteExportFormat;
   onMoveNote: (noteId: string, project: string) => Promise<void>;
   onCreateProjectForNote: (noteId: string, title: string) => Promise<void>;
   onRemoveNoteFromProject: (noteId: string) => Promise<void>;
@@ -159,15 +174,15 @@ interface AiPendingAction {
 }
 
 const aiActionLabels: Record<NoteAiActionId, string> = {
-  ask: "Спросить по этому тексту",
-  expand: "Расписать подробнее",
-  explain: "Объяснить простыми словами",
-  fix: "Исправить ошибки",
-  improve: "Улучшить текст",
-  shorten: "Сократить",
-  tasks: "Сделать список задач",
-  tone: "Изменить тон",
-  translate: "Перевести",
+  get ask() { return translate("ui.a507630d53f8"); },
+  get expand() { return translate("ui.59f82b81874d"); },
+  get explain() { return translate("ui.c4710bcb6e10"); },
+  get fix() { return translate("ui.5bd8cfde875a"); },
+  get improve() { return translate("ui.89a537789de8"); },
+  get shorten() { return translate("ui.f747d976b67f"); },
+  get tasks() { return translate("ui.20bb5c3b3ae1"); },
+  get tone() { return translate("ui.dc65da6126ed"); },
+  get translate() { return translate("ui.4ac45591613f"); },
 };
 
 export function createEditorExtensions(options: {
@@ -176,13 +191,13 @@ export function createEditorExtensions(options: {
   onRevealAttachment: (attachmentId: string) => Promise<void>;
   onToast: (message: string) => void;
 }) {
-  return [
+  return withMarkdownCodec([
     StarterKit.configure({
       link: false,
       underline: false,
       code: false,
       heading: {
-        levels: [1, 2, 3],
+        levels: [1, 2, 3, 4, 5, 6],
       },
     }),
     Underline,
@@ -191,6 +206,7 @@ export function createEditorExtensions(options: {
     FontFormat,
     EditorIndent,
     PassiveEditorTransactions,
+    CodeBlockRestoration,
     HeadingAnchors,
     NoteSearch,
     FragmentNavigation,
@@ -231,10 +247,11 @@ export function createEditorExtensions(options: {
     }),
     NoteMention,
     InlineDate,
-  ];
+  ]);
 }
 
 export function EditorArea({
+  language = getInterfaceLanguage(),
   searchQuery = "",
   documentReloadGeneration,
   editorContentOffset,
@@ -245,10 +262,14 @@ export function EditorArea({
   onDeleteNote,
   onDuplicateNote,
   onEditorChange,
+  onEditorDirty,
+  onPreparationError,
+  savePreparationRef,
   onEditorPageLayoutChange,
   onEditorPageLayoutReset,
   onExitFocus,
   onExportNote,
+  exportFormat,
   onMoveNote,
   onCreateProjectForNote,
   onRemoveNoteFromProject,
@@ -274,6 +295,7 @@ export function EditorArea({
   internalOpenTarget,
   tagOptions,
 }: EditorAreaProps) {
+  useInterfaceLanguage();
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
   const [isNoteLinkPickerOpen, setIsNoteLinkPickerOpen] = useState(false);
   const noteLinkSelectionRef = useRef<{ noteId: string; from: number; to: number; document: Editor["state"]["doc"] } | null>(null);
@@ -296,6 +318,9 @@ export function EditorArea({
   const [pendingAiActionId, setPendingAiActionId] = useState<NoteAiActionId | undefined>();
   const [isAiPrivacyAccepting, setIsAiPrivacyAccepting] = useState(false);
   const editorRef = useRef<Editor | null>(null);
+  const preparationRef = useRef<EditorSavePreparation<EditorSerializationSnapshot, ReturnType<typeof serializeEditorDocumentForStorage>> | null>(null);
+  const saveCallbacks = useRef({ onEditorChange, onEditorDirty, onPreparationError, onToast });
+  saveCallbacks.current = { onEditorChange, onEditorDirty, onPreparationError, onToast };
   const [exportNoteId, setExportNoteId] = useState<string | null>(null);
   const aiRequestIdRef = useRef(0);
   const clipboardPasteIdRef = useRef(0);
@@ -325,8 +350,10 @@ export function EditorArea({
   });
 
   const editor = useEditor({
+    shouldRerenderOnTransaction: false,
     content: note.editorDocument,
     editorProps: {
+      clipboardTextSerializer: editorClipboardMarkdown,
       transformPastedHTML: filterClipboardHtml,
       handleKeyDown: (_view, event) => {
         if (!isTauri() || event.key.toLowerCase() !== "v" || !(event.ctrlKey || event.metaKey) || event.altKey) return false;
@@ -338,9 +365,9 @@ export function EditorArea({
       },
       handleDOMEvents: {
         click: (view, event) => handleEditorLinkClick(event, (url) => {
-          void openUrl(url).catch(() => onToast("Не удалось открыть ссылку"));
+          void openUrl(url).catch(() => onToast(translate("ui.106eb9493d09")));
         }, (anchor) => {
-          if (!scrollToNoteHeading(view, anchor)) onToast("Заголовок по этой ссылке не найден.");
+          if (!scrollToNoteHeading(view, anchor)) onToast(translate("ui.f88fa3cd2102"));
         }, (link) => onOpenNoteRef.current(link.noteId, link.fragment)),
       },
       handleClickOn: (_view, _pos, node, _nodePos, event, direct) => {
@@ -370,7 +397,6 @@ export function EditorArea({
         return true;
       },
       handlePaste: (_view, event) => {
-        const text = event.clipboardData?.getData("text/plain") ?? "";
         const currentEditor = editorRef.current;
 
         const files = Array.from(event.clipboardData?.files ?? []);
@@ -380,17 +406,20 @@ export function EditorArea({
           return true;
         }
 
-        if (!currentEditor || event.clipboardData?.getData("text/html") || currentEditor.isActive("codeBlock") || !isMarkdownLike(text)) {
-          return false;
-        }
-
-        event.preventDefault();
-        currentEditor.chain().focus().insertContentAt(currentEditor.state.selection, markdownToTiptapDoc(text).content ?? []).run();
-        return true;
+        return currentEditor ? handleEditorPasteEvent(currentEditor, event, () => onToast(translate("ui.caa6213e70bd"))) : false;
       },
     },
     extensions: editorExtensions,
     onUpdate: ({ editor: currentEditor }) => {
+      const preparation = preparationRef.current;
+      if (preparation) {
+        const noteId = noteIdRef.current;
+        if (saveCallbacks.current.onEditorDirty?.(noteId) === false) return;
+        const document = currentEditor.state.doc;
+        preparation.enqueue(() => ({ noteId, document: document.toJSON() as EditorDocument,
+          contentHtml: document === currentEditor.state.doc ? currentEditor.getHTML() : getHTMLFromFragment(document.content, currentEditor.schema) }));
+        return;
+      }
       const editorDocument = currentEditor.getJSON() as EditorDocument;
       const serializedContent = serializeEditorDocumentForStorage(editorDocument, currentEditor.getHTML());
       onEditorChange(
@@ -405,7 +434,24 @@ export function EditorArea({
     },
   });
 
-  async function pasteClipboard(plainTextOnly = false, requireFocus = false, read?: () => Promise<EditorClipboardContent>) {
+  useEffect(() => {
+    if (!editor || !savePreparationRef) return;
+    const client = createEditorSerializationClient();
+    // Main-thread fallback waits for the existing autosave/close flush, not each key.
+    const schedule = (run: () => void) => client.usesMainThreadFallback() ? () => undefined : scheduleEditorPreparation(run);
+    const preparation = new EditorSavePreparation(client.prepare, (content, snapshot) => {
+      saveCallbacks.current.onEditorChange(snapshot.noteId, content.editorDocument, content.contentHtml, content.contentMarkdown, content.plainText, content.wordCount, content.contentSidecars);
+    }, () => { saveCallbacks.current.onPreparationError?.(); saveCallbacks.current.onToast(translate("ui.f8d78486eb77")); }, schedule);
+    preparationRef.current = preparation;
+    savePreparationRef.current = preparation;
+    return () => {
+      preparation.discard(); client.dispose();
+      if (preparationRef.current === preparation) preparationRef.current = null;
+      if (savePreparationRef.current === preparation) savePreparationRef.current = null;
+    };
+  }, [editor, savePreparationRef]);
+
+  async function pasteClipboard(plainTextOnly = false, requireFocus = false, read?: () => Promise<EditorClipboardContent>, asMarkdown = false) {
     const currentEditor = editorRef.current;
     if (!currentEditor || clipboardBusyRef.current || (requireFocus && !currentEditor.view.hasFocus())) return false;
     clipboardBusyRef.current = true;
@@ -413,9 +459,9 @@ export function EditorArea({
     const noteId = noteIdRef.current;
     const generation = loadedDocumentTokenRef.current?.reloadGeneration;
     try {
-      return await pasteClipboardIntoEditor(currentEditor, read ?? (() => readEditorClipboard(noteId, plainTextOnly)),
-        () => isMountedRef.current && requestId === clipboardPasteIdRef.current && noteId === noteIdRef.current && generation === loadedDocumentTokenRef.current?.reloadGeneration && (!requireFocus || currentEditor.view.hasFocus()), onToast, plainTextOnly);
-    } catch { onToast("Не удалось прочитать буфер обмена. Повторите вставку."); return false; }
+      return await pasteClipboardIntoEditor(currentEditor, read ?? (() => readEditorClipboard(noteId, plainTextOnly || asMarkdown)),
+        () => isMountedRef.current && requestId === clipboardPasteIdRef.current && noteId === noteIdRef.current && generation === loadedDocumentTokenRef.current?.reloadGeneration && (!requireFocus || currentEditor.view.hasFocus()), onToast, plainTextOnly, asMarkdown);
+    } catch { onToast(translate("ui.e3061b42f3a7")); return false; }
     finally { clipboardBusyRef.current = false; }
   }
 
@@ -443,11 +489,11 @@ export function EditorArea({
       void insertNativeDrop(editor, event.payload.paths, position,
         (path, kind) => storeAttachmentFromPath(noteId, path, kind),
         () => !disposed && noteId === noteIdRef.current && generation === loadedDocumentTokenRef.current?.reloadGeneration,
-      ).then((inserted) => { if (inserted) onToast("Файлы добавлены в заметку"); })
-        .catch(() => onToast("Не удалось добавить файлы. Проверьте формат, размер и доступность файлов."))
+      ).then((inserted) => { if (inserted) onToast(translate("ui.2033cf0c9cac")); })
+        .catch(() => onToast(translate("ui.7860b76e12f0")))
         .finally(() => { nativeDropBusyRef.current = false; });
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; })
-      .catch(() => { if (!disposed) onToast("Перенос файлов недоступен. Используйте меню вставки."); });
+      .catch(() => { if (!disposed) onToast(translate("ui.ace667ca50b9")); });
     return () => { disposed = true; unlisten?.(); };
   }, [editor, onToast]);
 
@@ -530,6 +576,7 @@ export function EditorArea({
     });
     loadedDocumentTokenRef.current = nextToken;
     if (shouldReload) {
+      preparationRef.current?.discard();
       setImageEditTarget(null);
       setDrawingSelection(null);
       clearImageNodeSelection(editor);
@@ -554,11 +601,11 @@ export function EditorArea({
     const rangePromise = source && !sourceSnapshotIsCurrent(source.updatedAt, note.updatedAt) ? Promise.resolve(null) : resolveDocumentFragment(document, quote, anchor);
     void rangePromise.then((range) => {
       if (cancelled || editor.isDestroyed || !document.eq(editor.state.doc)) return;
-      if (!range) { onToast("Фрагмент изменён или не может быть найден однозначно. Открыта заметка."); return; }
+      if (!range) { onToast(translate("ui.7ff753e07fb3")); return; }
       editor.view.dispatch(editor.state.tr.setMeta(fragmentNavigationKey, range).setMeta("addToHistory", false));
       scrollToSearchMatch(editor.view, range, null);
       timer = window.setTimeout(() => { if (!editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(fragmentNavigationKey, null).setMeta("addToHistory", false)); }, 4000);
-    }).catch(() => { if (!cancelled) onToast("Не удалось найти фрагмент. Открыта заметка."); });
+    }).catch(() => { if (!cancelled) onToast(translate("ui.2398ee55641f")); });
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [editor, note.id, documentReloadGeneration, semanticOpenTarget, internalOpenTarget]);
 
@@ -573,29 +620,29 @@ export function EditorArea({
   function insertNoteLink(noteId: string, title: string) {
     const selected = noteLinkSelectionRef.current;
     setIsNoteLinkPickerOpen(false);
-    if (!editor || !selected || selected.noteId !== note.id || !selected.document.eq(editor.state.doc)) { onToast("Заметка изменилась. Выберите место для ссылки ещё раз."); return; }
+    if (!editor || !selected || selected.noteId !== note.id || !selected.document.eq(editor.state.doc)) { onToast(translate("ui.4e42baaa0e49")); return; }
     const href = internalNoteHref({ noteId });
     if (selected.from !== selected.to) editor.chain().focus().setTextSelection(selected).setLink({ href }).run();
     else editor.chain().focus().insertContentAt(selected.from, { type: "text", text: title, marks: [{ type: "link", attrs: { href } }] }).run();
   }
 
   async function copyFragmentLink() {
-    if (!editor || editor.state.selection.empty) { onToast("Выделите текст фрагмента."); return; }
+    if (!editor || editor.state.selection.empty) { onToast(translate("ui.9efa59841ef2")); return; }
     const { from, to } = editor.state.selection;
     const document = editor.state.doc;
     const noteId = note.id;
     try {
       const fragment = await captureFragmentAnchor(document, from, to);
-      if (!fragment) { onToast("Выделите от 1 до 2000 символов текста."); return; }
+      if (!fragment) { onToast(translate("ui.7a40dd937f19")); return; }
       const label = fragment.quote.replace(/[\\[\]]/g, "\\$&");
       await writeEditorClipboard(`[${label}](${internalNoteHref({ noteId, fragment })})`);
-      onToast("Ссылка скопирована");
-    } catch { onToast("Не удалось скопировать ссылку на фрагмент"); }
+      onToast(translate("ui.bb67fa3d1a70"));
+    } catch { onToast(translate("ui.61eee4e32ab1")); }
   }
 
   async function refreshAiStatus() {
     try {
-      const status = await getNoteAiStatus();
+      const status = await getNoteAiStatus(language);
       if (isMountedRef.current) {
         setAiStatus(status);
       }
@@ -609,7 +656,7 @@ export function EditorArea({
           privacyAccepted: false,
           privacyNotice: "",
           canUse: false,
-          message: String(error),
+          message: localizeUiMessage(language, error instanceof Error ? error.message : uiMessage(language, "providerConnectionsLoadFailed")),
         });
       }
       return null;
@@ -628,7 +675,7 @@ export function EditorArea({
   async function startAiAction(action: AiPendingAction) {
     const status = aiStatus ?? (await refreshAiStatus());
     if (!status?.hasProvider) {
-      onToast("Сначала выберите default LLM provider в настройках моделей");
+      onToast(uiMessage(language, "chooseDefaultProvider"));
       onOpenSettingsModels();
       return;
     }
@@ -637,7 +684,7 @@ export function EditorArea({
       return;
     }
     if (!status.canUse) {
-      onToast(status.message);
+      onToast(localizeUiMessage(language, status.message));
       return;
     }
     await runAiAction(action);
@@ -652,15 +699,15 @@ export function EditorArea({
 
     setIsAiPrivacyAccepting(true);
     try {
-      const acceptedStatus = await acceptNoteAiPrivacy(status.privacyScope);
+      const acceptedStatus = await acceptNoteAiPrivacy(status.privacyScope, language);
       if (!isMountedRef.current) {
         return;
       }
       setAiStatus(acceptedStatus);
       setAiPrivacyAction(null);
       await runAiAction(action);
-    } catch (error) {
-      onToast(`Не удалось сохранить подтверждение AI privacy: ${String(error)}`);
+    } catch {
+      onToast(uiMessage(language, "aiPrivacySaveFailed"));
     } finally {
       if (isMountedRef.current) {
         setIsAiPrivacyAccepting(false);
@@ -698,7 +745,7 @@ export function EditorArea({
       });
     } catch (error) {
       if (isMountedRef.current && requestId === aiRequestIdRef.current) {
-        onToast(`AI-действие не выполнено: ${String(error)}`);
+        onToast(translate("ui.7816ae35d5c9", { p0: String(error) }));
       }
     } finally {
       if (isMountedRef.current && requestId === aiRequestIdRef.current) {
@@ -716,8 +763,8 @@ export function EditorArea({
 
     if (mode === "copy") {
       void navigator.clipboard.writeText(preview.result).then(
-        () => onToast("Ответ AI скопирован"),
-        () => onToast("Не удалось скопировать ответ AI"),
+        () => onToast(translate("ui.e05e6f4fe691")),
+        () => onToast(translate("ui.19578295fd0e")),
       );
       return;
     }
@@ -725,7 +772,7 @@ export function EditorArea({
     const content = markdownToTiptapDoc(preview.result).content ?? [];
     if (mode === "replace-selection") {
       if (preview.scope !== "selection" || preview.isStale) {
-        onToast("Выделение изменилось. Вставьте результат ниже или в позицию курсора.");
+        onToast(translate("ui.efe1fd061566"));
         return;
       }
       currentEditor.chain().focus().insertContentAt({ from: preview.selection.from, to: preview.selection.to }, content).run();
@@ -761,33 +808,33 @@ export function EditorArea({
       mode,
     };
     const originalAttachmentId = target?.attrs.originalAttachmentId ?? target?.attrs.attachmentId ?? undefined;
-    const fileName = createEditedImageFileName(mode, target?.attrs.title ?? target?.attrs.alt ?? "Рисунок");
+    const fileName = createEditedImageFileName(mode, target?.attrs.title ?? target?.attrs.alt ?? translate("ui.6c5aedae811e"));
 
     const noteId = note.id;
     const documentToken = loadedDocumentTokenRef.current;
     try {
-      if (target && !target.isCurrent()) throw new Error("Изображение изменилось");
+      if (target && !target.isCurrent()) throw new Error(translate("ui.b676004097b2"));
       const editedFile = await dataUrlToFile(dataUrl, fileName);
       const stored = await onStoreAttachment(editedFile, "image", {
         editMetadata: metadata,
         originalAttachmentId,
       });
       if (!stored.attachment.assetUri) {
-        throw new Error("Managed asset не создан");
+        throw new Error(translate("ui.af9d2b9487ef"));
       }
       if (noteIdRef.current !== noteId || loadedDocumentTokenRef.current?.reloadGeneration !== documentToken?.reloadGeneration) {
-        throw new Error("Документ изменился во время редактирования");
+        throw new Error(translate("ui.26d458fe00e9"));
       }
-      if (target && !target.isCurrent()) throw new Error("Изображение изменилось");
+      if (target && !target.isCurrent()) throw new Error(translate("ui.b676004097b2"));
       if (!target && drawingSelection) {
         const imageAttrs = {
           attachmentId: stored.attachment.id, originalAttachmentId: stored.attachment.id,
-          originalSrc: stored.attachment.assetUri, src: stored.attachment.assetUri, alt: "Рисунок", title: "Рисунок",
+          originalSrc: stored.attachment.assetUri, src: stored.attachment.assetUri, alt: translate("ui.6c5aedae811e"), title: translate("ui.6c5aedae811e"),
         };
         const inserted = editor.chain().focus().setTextSelection(drawingSelection).setImage(imageAttrs).run();
-        if (!inserted) throw new Error("Не удалось вставить рисунок");
+        if (!inserted) throw new Error(translate("ui.44c24ee8e255"));
         setDrawingSelection(null);
-        onToast("Рисунок добавлен");
+        onToast(translate("ui.0015c78d2ad0"));
         return;
       }
       target?.updateAttributes({
@@ -800,9 +847,9 @@ export function EditorArea({
         height: null,
       });
       setImageEditTarget(null);
-      onToast(mode === "crop" ? "Изображение обрезано" : "Аннотации применены");
+      onToast(mode === "crop" ? translate("ui.c58f9c576764") : translate("ui.b3db4d3e4caf"));
     } catch {
-      throw new Error("Не удалось сохранить изображение");
+      throw new Error(translate("ui.fa52cbcdd62e"));
     }
   }
 
@@ -813,35 +860,35 @@ export function EditorArea({
           <div className="ed-act">
             {saveStatus === "error" ? (
               <button
-                aria-label="Не сохранено. Повторить сохранение"
+                aria-label={translate("ui.c5069affc4ac")}
                 className="saved saved-retry error"
-                data-tooltip="Повторить сохранение"
+                data-tooltip={translate("ui.3c320d7fe3f0")}
                 onClick={onRetrySave}
                 type="button"
               >
                 <Icon name="redo" />
-                <span>Не сохранено · Повторить</span>
+                <span>{translate("ui.f734ccd6774b")}</span>
               </button>
             ) : (
               <div
-                aria-label={saveStatus === "saving" ? "Сохранение" : "Сохранено"}
+                aria-label={saveStatus === "saving" ? translate("ui.a77d5c4eccaa") : translate("ui.2fe8f2fd7243")}
                 className={`saved ${saveStatus === "saving" ? "saving" : ""}`}
-                data-tooltip={saveStatus === "saving" ? "Сохранение…" : "Сохранено"}
+                data-tooltip={saveStatus === "saving" ? translate("ui.bd97450c8556") : translate("ui.2fe8f2fd7243")}
                 role="status"
               >
                 <Icon name="check" />
-                <span>{saveStatus === "saving" ? "Сохранение…" : "Сохранено"}</span>
+                <span>{saveStatus === "saving" ? translate("ui.bd97450c8556") : translate("ui.2fe8f2fd7243")}</span>
               </div>
             )}
-            <button className="ibtn ai" data-tooltip="Чат по заметке" onClick={onOpenChat} type="button">
+            <button data-note-control="chat" className="ibtn ai" data-tooltip={translate("ui.38ac0283cd7c")} onClick={onOpenChat} type="button">
               <Icon name="chat" />
-              <span>Чат по заметке</span>
+              <span>{translate("ui.38ac0283cd7c")}</span>
             </button>
-            <button className="ibtn" data-tooltip="Фокус-режим (Ctrl+\)" onClick={onToggleFocus} type="button">
+            <button className="ibtn" data-tooltip={translate("ui.6935bc91ce5a")} onClick={onToggleFocus} type="button">
               <Icon name="focus" />
             </button>
             <NoteOutline editor={editor} />
-            <button className="ibtn" data-tooltip="Меню заметки" onClick={() => setIsNoteMenuOpen((value) => !value)} type="button">
+            <button className="ibtn" data-tooltip={translate("ui.4df18676e13b")} onClick={() => setIsNoteMenuOpen((value) => !value)} type="button">
               <Icon name="dots" />
             </button>
             {isNoteMenuOpen ? (
@@ -868,15 +915,16 @@ export function EditorArea({
       ) : (
         <div className="focus-strip">
           <NoteOutline editor={editor} />
-          <button className="focus-exit" data-tooltip="Выйти из режима фокуса" onClick={onExitFocus} type="button">
+          <button data-note-control="focus-exit" className="focus-exit" data-tooltip={translate("ui.d9c7e1c93350")} onClick={onExitFocus} type="button">
             <Icon name="focus" />
-            <span>Выйти из режима фокуса</span>
+            <span>{translate("ui.d9c7e1c93350")}</span>
             <kbd>Esc</kbd>
           </button>
         </div>
       )}
 
       <FormattingToolbar
+        language={language}
         onChooseNote={chooseNoteLink}
         onCopyFragment={() => void copyFragmentLink()}
         aiStatus={aiStatus}
@@ -887,7 +935,7 @@ export function EditorArea({
         pendingAiActionId={pendingAiActionId}
       />
       {isNoteLinkPickerOpen ? <NoteLinkPicker onClose={() => setIsNoteLinkPickerOpen(false)} onChoose={insertNoteLink} /> : null}
-      {exportNoteId ? <NoteExportDialog onClose={() => setExportNoteId(null)} onExport={(format) => onExportNote(exportNoteId, format)} /> : null}
+      {exportNoteId ? <NoteExportDialog initialFormat={exportFormat} document={editor?.getJSON() as EditorDocument ?? note.editorDocument} onClose={() => setExportNoteId(null)} onExport={(format) => onExportNote(exportNoteId, format)} /> : null}
 
       <div className="editor-writing-viewport">
       <NoteSearchBar key={note.id} editor={editor} initialQuery={searchQuery} />
@@ -908,7 +956,7 @@ export function EditorArea({
             <div className={`ed-body ${isEmptyNote ? "empty-note" : ""}`}>
               {!isBlockMenuOpen ? <TableToolsPopover editor={editor} onToast={onToast} /> : null}
               <EditorContent editor={editor} />
-              <EditorContextMenu key={`${note.id}:${documentReloadGeneration}`} editor={editor} onToast={onToast} onPaste={() => pasteClipboard()} onChooseNote={chooseNoteLink} onCopyFragment={() => void copyFragmentLink()} />
+              <EditorContextMenu key={`${note.id}:${documentReloadGeneration}`} editor={editor} onToast={onToast} onPaste={(asMarkdown) => pasteClipboard(false, false, undefined, asMarkdown)} onChooseNote={chooseNoteLink} onCopyFragment={() => void copyFragmentLink()} />
               {isEmptyNote ? <NewNoteHelper /> : null}
             </div>
           </div>
@@ -930,6 +978,7 @@ export function EditorArea({
 
       {aiPrivacyAction && aiStatus ? (
         <AiPrivacyPanel
+          language={language}
           isAccepting={isAiPrivacyAccepting}
           isLocal={aiStatus.isLocal}
           notice={aiStatus.privacyNotice}
@@ -967,7 +1016,7 @@ export function EditorArea({
       <div className="ed-bottom">
         <button
           className="ibtn"
-          data-tooltip="Вставить сложный блок"
+          data-tooltip={translate("ui.08bf11b3a0e2")}
           onClick={() => {
             if (isBlockMenuOpen) {
               setIsBlockMenuOpen(false);
@@ -1001,30 +1050,30 @@ export function EditorArea({
             selection={blockInsertSelection}
           />
         ) : null}
-        <span className="words">{note.wordCount} слов</span>
+        <span className="words">{formatRussianCount(note.wordCount, WORD_COUNT_FORMS)}</span>
       </div>
       <MarkdownImportControl key={`${note.id}:${documentReloadGeneration}`} targetNoteTitle={note.title} onImport={async (notes) => {
         if (!editor) throw new Error("Editor unavailable");
         insertImportedMarkdown(editor, notes, importSelectionRef.current);
-        onToast("Markdown вставлен в заметку");
+        onToast(translate("ui.00330f66f66a"));
         return notes.length;
       }} ref={importControlRef} showTrigger={false} />
       {isDeleteConfirmationOpen ? (
         <ModalShell
           className="note-delete-dialog"
-          description="После удаления заметку не получится восстановить."
+          description={translate("ui.2c9af9829beb")}
           dismissOnBackdrop={false}
-          footer={<div className="new-note-actions"><button className="secondary-btn" onClick={() => setIsDeleteConfirmationOpen(false)} type="button">Отмена</button><button className="danger-btn" onClick={() => { setIsDeleteConfirmationOpen(false); onDeleteNote(note.id); }} type="button">Удалить</button></div>}
+          footer={<div className="new-note-actions"><button className="secondary-btn" onClick={() => setIsDeleteConfirmationOpen(false)} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="danger-btn" onClick={() => { setIsDeleteConfirmationOpen(false); onDeleteNote(note.id); }} type="button">{translate("ui.be99b1361201")}</button></div>}
           onClose={() => setIsDeleteConfirmationOpen(false)}
-          open size="compact" title={`Удалить заметку «${note.title}»?`}
-        ><div className="settings-confirm-note">Это действие можно отменить только через резервную копию.</div></ModalShell>
+          open size="compact" title={translate("ui.55390b546ba2", { p0: note.title })}
+        ><div className="settings-confirm-note">{translate("ui.8399775a078a")}</div></ModalShell>
       ) : null}
       {isCreateProjectOpen ? (
         <ModalShell
           closeDisabled={projectCreateBusy}
-          description="Заметка будет добавлена в новый проект."
-          footer={<div className="new-note-actions"><button className="secondary-btn" disabled={projectCreateBusy} onClick={() => setIsCreateProjectOpen(false)} type="button">Отмена</button><button className="primary-btn" disabled={Boolean(validateEntityName(newProjectTitle)) || projectCreateBusy} form="create-note-project-form" type="submit">{projectCreateBusy ? "Создаём…" : "Создать проект"}</button></div>}
-          onClose={() => setIsCreateProjectOpen(false)} open size="compact" title="Новый проект"
+          description={translate("ui.1a3cc488a05c")}
+          footer={<div className="new-note-actions"><button className="secondary-btn" disabled={projectCreateBusy} onClick={() => setIsCreateProjectOpen(false)} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="primary-btn" disabled={Boolean(validateEntityName(newProjectTitle)) || projectCreateBusy} form="create-note-project-form" type="submit">{projectCreateBusy ? translate("ui.c2f23e83210c") : translate("ui.49ed84ac6492")}</button></div>}
+          onClose={() => setIsCreateProjectOpen(false)} open size="compact" title={translate("ui.15d568b010da")}
         >
           <form className="new-note-form" id="create-note-project-form" onSubmit={(event) => {
             event.preventDefault();
@@ -1033,10 +1082,9 @@ export function EditorArea({
             if (validation) { setProjectCreateError(validation); return; }
             setProjectCreateBusy(true);
             setProjectCreateError("");
-            void onCreateProjectForNote(note.id, newProjectTitle.trim()).then(() => setIsCreateProjectOpen(false)).catch((error: unknown) => setProjectCreateError(error instanceof PublicCommandError && error.code === "PROJECT_TITLE_EXISTS" ? error.message : error instanceof Error && error.message.startsWith("Проект создан,") ? error.message : "Не удалось создать проект. Проверьте название и попробуйте ещё раз.")).finally(() => setProjectCreateBusy(false));
+            void onCreateProjectForNote(note.id, newProjectTitle.trim()).then(() => setIsCreateProjectOpen(false)).catch((error: unknown) => setProjectCreateError(error instanceof PublicCommandError && error.code === "PROJECT_TITLE_EXISTS" ? error.message : error instanceof Error && error.message.startsWith("Проект создан,") ? error.message : translate("ui.d906caefb24a"))).finally(() => setProjectCreateBusy(false));
           }}>
-            <label>Название проекта<input autoFocus aria-invalid={Boolean(projectCreateError)} onChange={(event) => { setNewProjectTitle(event.currentTarget.value); setProjectCreateError(""); }} value={newProjectTitle} /><EntityNameCounter value={newProjectTitle} /></label>
-            {projectCreateError ? <span className="field-error" role="alert">{projectCreateError}</span> : null}
+            <label>{translate("ui.720a7014d17b")}<input autoFocus aria-invalid={Boolean(projectCreateError)} onChange={(event) => { setNewProjectTitle(event.currentTarget.value); setProjectCreateError(""); }} value={newProjectTitle} /><EntityNameCounter value={newProjectTitle} error={projectCreateError} /></label>
           </form>
         </ModalShell>
       ) : null}
@@ -1045,6 +1093,7 @@ export function EditorArea({
 }
 
 function ImageEditorLoadState({ kind, onClose }: { kind: "error" | "loading"; onClose: () => void }) {
+  useInterfaceLanguage();
   const [visible, setVisible] = useState(kind === "error");
   useEffect(() => {
     const timer = window.setTimeout(() => setVisible(true), 150);
@@ -1054,8 +1103,8 @@ function ImageEditorLoadState({ kind, onClose }: { kind: "error" | "loading"; on
   if (!visible) return null;
 
   return (
-    <ModalShell open onClose={onClose} title="Редактор изображения">
-      <FeatureLoadState kind={kind} label="редактор изображения" />
+    <ModalShell open onClose={onClose} title={translate("ui.37935b84a3d1")}>
+      <FeatureLoadState kind={kind} label={translate("ui.20a6a85f8124")} />
     </ModalShell>
   );
 }
@@ -1098,57 +1147,57 @@ function AiScopeChoicePanel({
   onApplyToNote: () => void;
   onClose: () => void;
 }) {
+  useInterfaceLanguage();
   return (
     <div className="ai-editor-panel ai-scope-panel">
       <div className="ai-editor-panel-head">
         <b>{actionLabel}</b>
-        <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
+        <button aria-label={translate("ui.a7a4033657e8")} className="editor-popover-close" onClick={onClose} type="button">
           <Icon name="x" />
         </button>
       </div>
-      <p>Фрагмент не выделен. Можно применить действие ко всей заметке или сначала выделить нужный текст.</p>
+      <p>{translate("ui.97d0dd19ff25")}</p>
       <div className="ai-editor-panel-actions">
         <button className="secondary-btn" onClick={onClose} type="button">
-          Сначала выделить
-        </button>
+          {translate("ui.8d73b2083380")}</button>
         <button className="primary-btn" onClick={onApplyToNote} type="button">
-          Ко всей заметке
-        </button>
+          {translate("ui.bf44a9c7802d")}</button>
       </div>
     </div>
   );
 }
 
 function AiPrivacyPanel({
+  language,
   isAccepting,
   isLocal,
   notice,
   onAccept,
   onClose,
 }: {
+  language: AppLanguage;
   isAccepting: boolean;
   isLocal: boolean;
   notice: string;
   onAccept: () => void;
   onClose: () => void;
 }) {
+  useInterfaceLanguage();
   return (
     <div className="ai-editor-panel ai-privacy-panel">
       <div className="ai-editor-panel-head">
-        <b>{isLocal ? "Локальная модель" : "Внешний AI provider"}</b>
-        <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
+        <b>{uiMessage(language, isLocal ? "localAiModel" : "externalAiProvider")}</b>
+        <button aria-label={translate("ui.a7a4033657e8")} className="editor-popover-close" onClick={onClose} type="button">
           <Icon name="x" />
         </button>
       </div>
-      <p>{notice}</p>
+      <p>{localizeUiMessage(language, notice)}</p>
       <div className="ai-editor-panel-actions">
         <button className="secondary-btn" onClick={onClose} type="button">
-          Отмена
-        </button>
+          {translate("ui.8fbe9b75cbdf")}</button>
         <button className="primary-btn" disabled={isAccepting} onClick={onAccept} type="button">
           {isAccepting ? <span className="button-spinner" /> : null}
-          Подтвердить
-        </button>
+          {translate("ui.27bca309f5f8")}</button>
       </div>
     </div>
   );
@@ -1169,45 +1218,41 @@ function AiPreviewPanel({
   onReplaceSelection: () => void;
   preview: AiPreviewState;
 }) {
+  useInterfaceLanguage();
   return (
     <div className="ai-editor-panel ai-preview-panel">
       <div className="ai-editor-panel-head">
         <b>{preview.actionLabel}</b>
-        <button aria-label="Закрыть" className="editor-popover-close" onClick={onCancel} type="button">
+        <button aria-label={translate("ui.a7a4033657e8")} className="editor-popover-close" onClick={onCancel} type="button">
           <Icon name="x" />
         </button>
       </div>
-      {preview.isStale ? <div className="ai-preview-warning">Выделение изменилось. Замена выделения отключена, но результат можно вставить или скопировать.</div> : null}
+      {preview.isStale ? <div className="ai-preview-warning">{translate("ui.0ddd796e5b4f")}</div> : null}
       <div className="ai-preview-result">{preview.result}</div>
       <div className="ai-editor-panel-actions wrap">
         <button className="secondary-btn" disabled={preview.scope !== "selection" || preview.isStale} onClick={onReplaceSelection} type="button">
-          Заменить выделение
-        </button>
+          {translate("ui.11a449a77267")}</button>
         <button className="secondary-btn" onClick={onInsertBelow} type="button">
-          Вставить ниже
-        </button>
+          {translate("ui.921d0d045f63")}</button>
         {preview.scope === "note" ? (
           <button className="danger-btn" onClick={onReplaceNote} type="button">
-            Заменить всю заметку
-          </button>
+            {translate("ui.03b838287c6a")}</button>
         ) : null}
         <button className="secondary-btn" onClick={onCopy} type="button">
-          Скопировать
-        </button>
+          {translate("ui.f02956c16588")}</button>
         <button className="secondary-btn" onClick={onCancel} type="button">
-          Отмена
-        </button>
+          {translate("ui.8fbe9b75cbdf")}</button>
       </div>
     </div>
   );
 }
 
 function NewNoteHelper() {
+  useInterfaceLanguage();
   return (
     <div className="new-note-helper">
-      <b>Новая заметка создана.</b>
+      <b>{translate("ui.1665819d419b")}</b>
       <br />
-      Начните писать здесь или вставьте Markdown. Изменения сохраняются автоматически в локальной базе.
-    </div>
+      {translate("ui.9d40d2ac5344")}</div>
   );
 }

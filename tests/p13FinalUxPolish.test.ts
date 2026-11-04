@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readLocalizedSource as readFileSync } from "./helpers/readLocalizedSource";
 import { describe, it } from "node:test";
 import type { TagRow } from "../src/app/types";
 import { getRagLayoutMode, resolveRagPanelVisibility } from "../src/features/rag/ragResponsiveLayout";
@@ -157,8 +157,8 @@ describe("P1.3 final UX polish", () => {
   it("removes false production affordances", () => {
     assert.doesNotMatch(sidebarSource, /Уильям|noteflow@local|>\s*Выйти\s*</);
     assert.match(sidebarSource, /Локальный профиль/);
-    assert.doesNotMatch(settingsSource, /onLanguageChange|Смена языка пока демонстрационная/);
-    assert.doesNotMatch(settingsSource, /Язык интерфейса|Другие языки интерфейса/);
+    assert.doesNotMatch(settingsSource, /Смена языка пока демонстрационная|Другие языки интерфейса/);
+    assert.match(settingsSource, /<InterfaceLanguageControl language=\{language\} labelledBy="interface-language-label" onChange=\{onLanguageChange\}/);
     assert.doesNotMatch(editorSource, /Добавление тегов появится|data-tooltip="Добавить тег"/);
   });
 

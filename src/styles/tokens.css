@@ -110,9 +110,9 @@
   --button-height-md: 38px;
   --button-padding-x: 12px;
   --button-border: var(--field-border);
-  --button-bg: var(--field-bg);
-  --button-bg-hover: var(--field-bg-hover);
-  --button-secondary-bg: var(--surface-panel);
+  --button-bg: var(--asoft2);
+  --button-bg-hover: color-mix(in srgb, var(--button-bg) 92%, var(--accent));
+  --button-secondary-bg: var(--button-bg);
   --button-primary-bg: var(--accent);
   --button-primary-bg-hover: color-mix(in srgb, var(--accent) 88%, var(--text));
   --button-primary-text: var(--on-accent);

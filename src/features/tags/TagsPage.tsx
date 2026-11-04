@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { AppSection, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
@@ -7,7 +8,7 @@ import { formatRussianCount, NOTE_COUNT_FORMS } from "../../shared/russianPlural
 import { PageShell, type PageShellSidebarProps } from "../navigation/PageShell";
 import { TagEditorModal, type TagEditorValue } from "./TagEditorModal";
 import { validateTagName } from "./tagEditor";
-import { getTagDisplayColor } from "./tagPalette";
+import { tagColorStyle } from "./tagPalette";
 
 interface TagsPageProps {
   tags: TagRow[];
@@ -33,6 +34,7 @@ export function validateTagRename(tags: TagRow[], sourceTagId: string, draft: st
 }
 
 export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNavigate, onNewNote, onOpenTag, onToast, onUpdateTag, sidebar }: TagsPageProps) {
+  useInterfaceLanguage();
   const [query, setQuery] = useState("");
   const [openTagMenuId, setOpenTagMenuId] = useState("");
   const [tagDialog, setTagDialog] = useState<TagDialogState>(null);
@@ -86,7 +88,7 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
       await onMergeTags(tagDialog.tag.id, mergeTargetId);
       closeTagDialog();
     } catch {
-      setDialogError("Не удалось объединить теги. Попробуйте ещё раз.");
+      setDialogError(translate("ui.a1298f237e45"));
     } finally {
       setIsDialogSaving(false);
     }
@@ -97,25 +99,24 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
       <div className="tags-page-content">
         <div className="tags-head">
           <div>
-            <div className="page-title">Теги</div>
-            <div className="page-subtitle">Управляйте тегами и открывайте связанные заметки</div>
+            <div className="page-title">{translate("ui.a2800083983f")}</div>
+            <div className="page-subtitle">{translate("ui.621abaf901ef")}</div>
           </div>
           <button className="primary-btn tags-new" onClick={openCreateDialog} ref={createButtonRef} type="button">
             <Icon name="plus" />
-            Новый тег
-          </button>
+            {translate("ui.764e4b9bd472")}</button>
         </div>
 
         <label className="search tags-search">
           <Icon name="search" />
-          <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск тегов…" type="search" value={query} />
+          <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder={translate("ui.775e76d19865")} type="search" value={query} />
         </label>
 
         <div className="tags-table">
           {filteredTags.map((tag) => (
             <div className="tag-row" key={tag.id}>
               <button className="tag-row-main" onClick={() => onOpenTag(tag.id)} type="button">
-                <span className={`tag-dot ${tag.color}`} style={{ backgroundColor: getTagDisplayColor(tag) }} />
+                <span className={`tag-dot ${tag.color}`} style={tagColorStyle(tag)} />
                 <div>
                   <b>{tag.name}</b>
                   <small>{formatRussianCount(tag.count, NOTE_COUNT_FORMS)}</small>
@@ -125,7 +126,7 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
                 <button
                   aria-expanded={openTagMenuId === tag.id}
                   aria-haspopup="menu"
-                  aria-label={`Действия с тегом «${tag.name}»`}
+                  aria-label={translate("ui.e690ae0fe693", { p0: tag.name })}
                   className="row-menu-trigger"
                   onClick={(event) => {
                     tagMenuAnchorRef.current = event.currentTarget;
@@ -137,16 +138,16 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
                 </button>
                 <MenuPopover
                   anchorRef={tagMenuAnchorRef}
-                  ariaLabel={`Действия с тегом «${tag.name}»`}
+                  ariaLabel={translate("ui.e690ae0fe693", { p0: tag.name })}
                   className="row-actions-menu"
                   isOpen={openTagMenuId === tag.id}
                   onClose={closeTagMenu}
                   preferredWidth={190}
                 >
-                  <button onClick={() => openEditDialog(tag)} role="menuitem" type="button">Редактировать</button>
-                  <button onClick={() => openMergeDialog(tag)} role="menuitem" type="button">Объединить</button>
+                  <button onClick={() => openEditDialog(tag)} role="menuitem" type="button">{translate("ui.59792556fd06")}</button>
+                  <button onClick={() => openMergeDialog(tag)} role="menuitem" type="button">{translate("ui.8f27f05ca87a")}</button>
                   <div className="nf-menu-separator" />
-                  <button className="danger" onClick={() => { setOpenTagMenuId(""); onDeleteTag(tag.id); }} role="menuitem" type="button">Удалить</button>
+                  <button className="danger" onClick={() => { setOpenTagMenuId(""); onDeleteTag(tag.id); }} role="menuitem" type="button">{translate("ui.be99b1361201")}</button>
                 </MenuPopover>
               </div>
             </div>
@@ -154,7 +155,7 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
           {filteredTags.length === 0 ? (
             <div className="page-empty-state panel-empty-state">
               <span className="page-empty-icon"><Icon name="tag" /></span>
-              <div><b>Теги не найдены</b><span>Измените запрос или создайте новый тег.</span></div>
+              <div><b>{translate("ui.27b94d452795")}</b><span>{translate("ui.49a30cf35123")}</span></div>
             </div>
           ) : null}
         </div>
@@ -171,32 +172,31 @@ export function TagsPage({ tags, onCreateTag, onDeleteTag, onMergeTags, onNaviga
           backdropClassName="confirm-backdrop"
           className="tag-dialog"
           closeDisabled={isDialogSaving}
-          description={`Все заметки с тегом «${tagDialog.tag.name}» получат выбранный тег. Исходный тег будет удалён.`}
+          description={translate("ui.70e187e7d757", { p0: tagDialog.tag.name })}
           dismissOnBackdrop={false}
           footer={(
             <div className="new-note-actions">
-              <button className="secondary-btn" disabled={isDialogSaving} onClick={closeTagDialog} type="button">Отмена</button>
-              <button className="danger-btn" disabled={!mergeTargetId || isDialogSaving} form="merge-tag-form" type="submit">{isDialogSaving ? "Объединяем…" : "Объединить"}</button>
+              <button className="secondary-btn" disabled={isDialogSaving} onClick={closeTagDialog} type="button">{translate("ui.8fbe9b75cbdf")}</button>
+              <button className="danger-btn" disabled={!mergeTargetId || isDialogSaving} form="merge-tag-form" type="submit">{isDialogSaving ? translate("ui.35f4de9829fd") : translate("ui.8f27f05ca87a")}</button>
             </div>
           )}
           onClose={closeTagDialog}
           open
           size="compact"
-          title="Объединить теги?"
+          title={translate("ui.d070bf5d3e68")}
           titleId="merge-tag-title"
         >
           <form id="merge-tag-form" onSubmit={(event) => { event.preventDefault(); void submitMerge(); }}>
-            <div aria-label="Направление объединения" className="tag-merge-flow">
-              <span><small>Исходный тег</small><b>{tagDialog.tag.name}</b></span>
+            <div aria-label={translate("ui.3257db6d2237")} className="tag-merge-flow">
+              <span><small>{translate("ui.15525b48b24d")}</small><b>{tagDialog.tag.name}</b></span>
               <Icon name="forward" />
               <label className="field">
-                Целевой тег
-                <select disabled={mergeTargets.length === 0} onChange={(event) => { setMergeTargetId(event.currentTarget.value); setDialogError(""); }} value={mergeTargetId}>
+                {translate("ui.6072adc9b245")}<select disabled={mergeTargets.length === 0} onChange={(event) => { setMergeTargetId(event.currentTarget.value); setDialogError(""); }} value={mergeTargetId}>
                   {mergeTargets.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
                 </select>
               </label>
             </div>
-            {mergeTargets.length === 0 ? <div className="field-error" role="status">Создайте ещё один тег, чтобы выполнить объединение.</div> : null}
+            {mergeTargets.length === 0 ? <div className="field-error" role="status">{translate("ui.845e5743f235")}</div> : null}
             {dialogError ? <div className="field-error" role="alert">{dialogError}</div> : null}
           </form>
         </ModalShell>

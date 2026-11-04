@@ -30,7 +30,11 @@ async function measure(page) {
       mode: document.querySelector(".settings-layout-inner").dataset.layout,
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       labelsVisible: labels.length === 6 && labels.every((label) => getComputedStyle(label).display !== "none" && label.getBoundingClientRect().width > 0),
-      railLabelsHidden: Array.from(document.querySelectorAll(".sb .nav-i span")).every((label) => getComputedStyle(label).display === "none"),
+      // Labels retain their grid slot during the approved 240 ms opacity transition.
+      railLabelsHidden: Array.from(document.querySelectorAll(".sb .nav-i span")).every((label) => {
+        const style = getComputedStyle(label);
+        return style.opacity === "0" && style.pointerEvents === "none";
+      }),
     };
   });
 }

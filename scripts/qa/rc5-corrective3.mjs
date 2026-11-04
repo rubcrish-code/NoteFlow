@@ -45,6 +45,10 @@ try {
         await page.locator("table").scrollIntoViewIfNeeded();
         await page.waitForTimeout(100);
       }
+      // Establish the user's active cell, rather than relying on a parent mount
+      // effect firing before the table toolbar's editor-state subscription.
+      await page.locator("td p").first().click();
+      await page.waitForFunction(() => window.qaEditor.isActive("table"));
       await page.locator(".table-tools-trigger").waitFor();
       const before = await page.evaluate(() => window.qaEditor.getJSON());
       await page.locator(".table-tools-trigger").click();

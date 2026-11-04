@@ -395,7 +395,7 @@
 }
 
 .note-chat-suggestions button {
-  background: transparent;
+  background: var(--button-bg);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   color: var(--text-secondary);
@@ -408,7 +408,7 @@
 
 .note-chat-suggestions button:not(:disabled):hover,
 .note-chat-suggestions button:not(:disabled):focus-visible {
-  background: var(--surface-hover);
+  background: var(--button-bg-hover);
   border-color: var(--border-default);
   color: var(--text-primary);
   outline: 0;

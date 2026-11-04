@@ -1,7 +1,7 @@
+import { translate } from "../../shared/i18n";
 import { parseMarkdownInline, readMarkdownList, convertMarkdownList, readMarkdownTable } from "./markdownInline";
-import { projectTable } from "./tableDocumentLayout";
 import { formatDisplayDate } from "../../shared/displayDate";
-import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
+import { codecInlineNeedsSidecar, parseCodecMarkdown, serializeCodecMarkdown } from "./markdownCodec";
 
 export interface EditorMark {
   attrs?: Record<string, unknown>;
@@ -23,11 +23,11 @@ export type EditorDocument = EditorNode & {
 const MAX_QUOTE_NESTING = 64;
 
 const markdownSignals = [
-  /^#{1,3}\s+\S/m,
+  /^#{1,6}\s+\S/m,
   /^\s{0,3}>\s+\S/m,
   /^\s{0,3}(?:[-*+]\s+|\d+\.\s+)\S/m,
   /^\s{0,3}[-*+]\s+\[[ xX]\]\s+\S/m,
-  /```[\s\S]*?```/,
+  /^\s{0,3}(?:`{3,}|~{3,})/m,
   /\*\*[^*\n]+\*\*/,
   /==[^=\n]+==/,
   /~~[^~\n]+~~/,
@@ -49,12 +49,16 @@ function isBlank(line: string) {
   return line.trim().length === 0;
 }
 
+function getCodeFence(line: string) {
+  return /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+}
+
 function isHorizontalRule(line: string) {
   return /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line);
 }
 
 function getHeading(line: string) {
-  const match = /^(#{1,3})\s+(.+)$/.exec(line);
+  const match = /^ {0,3}(#{1,6})\s+(.+)$/.exec(line);
   if (!match) {
     return null;
   }
@@ -151,7 +155,7 @@ function isSpecialBlockStart(lines: string[], index: number) {
   const line = lines[index];
   return (
     isBlank(line) ||
-    line.startsWith("```") ||
+    getCodeFence(line) !== null ||
     getFileAttachment(line) !== null ||
     getHeading(line) !== null ||
     getHtmlImage(line) !== null ||
@@ -185,10 +189,21 @@ export function isMarkdownLike(text: string) {
     return true;
   }
 
-  return markdownSignals.some((signal) => signal.test(trimmedText));
+  if (markdownSignals.some((signal) => signal.test(trimmedText))) return true;
+  if (/\+\+(?=\S)[^\n]*?\S\+\+|\{\{nf:|^:::nf-block /m.test(trimmedText)) return true;
+  return /[*_]/.test(trimmedText) && parseInlineMarkdown(trimmedText).some((node) =>
+    node.marks?.some((mark) => mark.type === "bold" || mark.type === "italic"));
 }
 
 export function markdownToTiptapDoc(markdown: string): EditorDocument {
+  if (/\+\+(?=\S)[^\n]*?\S\+\+|\{\{nf:|^:::nf-block /m.test(markdown)) return parseCodecMarkdown(markdown, true);
+  // Existing NoteFlow HTML/== exports and pathological historical nesting keep
+  // their bounded compatibility reader. All ordinary Markdown uses the codec.
+  if (/<\/?(?:[a-z][a-z\d]*)(?:\s[^>]*|\s*\/?)>/i.test(markdown) || /==[^=\n]+==/.test(markdown) || /^(?:\s*>\s*){65}/m.test(markdown)) return legacyMarkdownToTiptapDoc(markdown);
+  return parseCodecMarkdown(markdown, true);
+}
+
+export function legacyMarkdownToTiptapDoc(markdown: string): EditorDocument {
   const normalizedMarkdown = markdown.replace(/\r\n/g, "\n");
   const lines = normalizedMarkdown.split("\n");
   const content: EditorNode[] = [];
@@ -232,7 +247,7 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
       content.push({
         type: "callout",
         attrs: { variant: calloutMatch[1].toLowerCase() },
-        content: markdownToTiptapDoc(calloutLines.join("\n")).content,
+        content: legacyMarkdownToTiptapDoc(calloutLines.join("\n")).content,
       });
       continue;
     }
@@ -252,17 +267,17 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
         type: "detailsBlock",
         attrs: { open: true },
         content: [
-          { type: "detailsSummary", content: parseInlineMarkdown(detailsMatch[1]?.trim() || "Заголовок блока") },
-          { type: "detailsContent", content: markdownToTiptapDoc(detailsLines.join("\n")).content },
+          { type: "detailsSummary", content: parseInlineMarkdown(detailsMatch[1]?.trim() || translate("ui.b32883af0bd4")) },
+          { type: "detailsContent", content: legacyMarkdownToTiptapDoc(detailsLines.join("\n")).content },
         ],
       });
       continue;
     }
 
-    const codeFence = /^(`{3,}|~{3,})(.*)$/.exec(line);
+    const codeFence = getCodeFence(line);
     if (codeFence) {
       const language = codeFence[2].trim();
-      const closingFence = new RegExp(`^${codeFence[1][0]}{${codeFence[1].length},}\\s*$`);
+      const closingFence = new RegExp(`^ {0,3}${codeFence[1][0]}{${codeFence[1].length},}\\s*$`);
       const codeLines: string[] = [];
       index += 1;
       while (index < lines.length && !closingFence.test(lines[index])) {
@@ -307,7 +322,7 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
     if (isTaskLine(line) || isBulletLine(line) || isOrderedLine(line)) {
       const list = readMarkdownList(lines.slice(index).join("\n"));
       if (list) {
-        content.push(...convertMarkdownList(list, (source) => markdownToTiptapDoc(source).content ?? []));
+        content.push(...convertMarkdownList(list, (source) => legacyMarkdownToTiptapDoc(source).content ?? []));
         index += list.raw.trimEnd().split("\n").length;
         continue;
       }
@@ -321,7 +336,7 @@ export function markdownToTiptapDoc(markdown: string): EditorDocument {
       }
       const source = quoteLines.join("\n");
       const deeplyNested = new RegExp(`^\\s*(?:>\\s*){${MAX_QUOTE_NESTING}}`, "m").test(source);
-      content.push({ type: "blockquote", content: deeplyNested ? [paragraph(source)] : markdownToTiptapDoc(source).content });
+      content.push({ type: "blockquote", content: deeplyNested ? [paragraph(source)] : legacyMarkdownToTiptapDoc(source).content });
       continue;
     }
 
@@ -341,171 +356,14 @@ export function parseInlineMarkdown(text: string): EditorNode[] {
   return parseMarkdownInline(text);
 }
 
-function inlineToMarkdown(nodes: EditorNode[] | undefined, standard = false) {
-  const projection = projectInlineMarkdown(nodes ?? [], standard);
-  return projection.markdown;
-}
+export type InlineProjectionCache = WeakMap<EditorNode[], { markdown: string; needsSidecar: boolean }>;
 
-// Markdown cannot express every ProseMirror range (for example emphasis on intraword punctuation).
-// Only those ranges use the existing appearance sidecar; their text still comes from Markdown.
-export function inlineNeedsFormattingSidecar(nodes: EditorNode[]) {
-  return projectInlineMarkdown(nodes).needsSidecar;
-}
-
-function projectInlineMarkdown(nodes: EditorNode[], standard = false) {
-  if (standard) nodes = portableEmphasisWhitespace(nodes);
-  const markdown = renderInlineMarkdown(nodes, standard);
-  if (nodes.some((node) => node.type !== "text" && node.type !== "hardBreak")) return { markdown, needsSidecar: false };
-  const canonicalRuns = (content: EditorNode[]) => {
-    const runs: Array<{ text: string; marks: string }> = [];
-    for (const node of content) {
-      const text = node.type === "hardBreak" ? "\n" : node.text ?? "";
-      const marks = (node.marks ?? []).filter((mark) => ["bold", "italic", "strike", "highlight", "code", "link", "underline"].includes(mark.type));
-      const key = marks.map((mark) => mark.type === "link" ? `link:${String(mark.attrs?.href ?? "")}` : mark.type === "highlight" && mark.attrs?.color ? `highlight:${String(mark.attrs.color)}` : mark.type).sort().join("|");
-      const last = runs[runs.length - 1];
-      if (last?.marks === key) last.text += text;
-      else if (text) runs.push({ text, marks: key });
-    }
-    return runs;
-  };
-  const parsed = parseInlineMarkdown(markdown);
-  const original = canonicalRuns(nodes);
-  if (JSON.stringify(original) === JSON.stringify(canonicalRuns(parsed))) return { markdown, needsSidecar: false };
-  if (standard) {
-    // Isolate unrepresentable ranges instead of turning unrelated Markdown into HTML.
-    const groups: EditorNode[][] = [];
-    for (const node of nodes) {
-      const last = groups[groups.length - 1];
-      if (last && Boolean(last[0].marks?.length) === Boolean(node.marks?.length)) last.push(node);
-      else groups.push([node]);
-    }
-    const pieces = groups.map((group, index) => {
-      const before = groups[index - 1]?.map((node) => node.text ?? "").join("").slice(-8) ?? "";
-      const after = groups[index + 1]?.map((node) => node.text ?? "").join("").slice(0, 8) ?? "";
-      const candidate = renderInlineMarkdown(group, true, false);
-      const context = [{ type: "text", text: before }, ...group, { type: "text", text: after }];
-      return JSON.stringify(canonicalRuns(parseInlineMarkdown(escapeInlineText(before) + candidate + escapeInlineText(after)))) === JSON.stringify(canonicalRuns(context))
-        ? candidate : safeInlineHtml(group);
-    });
-    const projected = pieces.join("");
-    if (JSON.stringify(original) === JSON.stringify(canonicalRuns(parseInlineMarkdown(projected)))) return { markdown: projected, needsSidecar: true };
-  }
-  return { markdown: safeInlineHtml(nodes), needsSidecar: true };
-}
-
-// A mouse selection often includes edge spaces. Their emphasis is invisible, but
-// lossless storage compares it exactly; portable files put those spaces outside delimiters.
-function portableEmphasisWhitespace(nodes: EditorNode[]): EditorNode[] {
-  const runs = nodes.flatMap((node) => node.type === "text" && !node.marks?.some((mark) => mark.type === "code")
-    ? (node.text?.match(/\s+|\S+/gu) ?? []).map((text) => ({ ...node, text })) : [node]);
-  return runs.map((node, index) => {
-    if (node.type !== "text" || node.marks?.some((mark) => mark.type === "code") || !/^\s+$/u.test(node.text ?? "")) return node;
-    const marks = node.marks?.filter((mark) => !["bold", "italic", "strike"].includes(mark.type)
-      || (runs[index - 1]?.marks?.some((other) => sameInlineMark(mark, other))
-        && runs[index + 1]?.marks?.some((other) => sameInlineMark(mark, other))));
-    return { ...node, marks };
-  });
-}
-
-// This allowlisted fallback preserves ranges that Markdown delimiters cannot represent.
-// Appearance beyond these marks remains in the existing sidecar, not hidden export metadata.
-function safeInlineHtml(nodes: EditorNode[]) {
-  return nodes.map((node) => {
-    if (node.type === "hardBreak") return "<br>";
-    let text = escapeHtml(node.text ?? "");
-    for (const mark of [...(node.marks ?? [])].sort((first, second) => Number(second.type === "code") - Number(first.type === "code"))) {
-      const tag = ({ bold: "strong", italic: "em", strike: "s", underline: "u", code: "code" } as Record<string, string>)[mark.type];
-      if (tag) text = `<${tag}>${text}</${tag}>`;
-      else if (mark.type === "highlight") {
-        const color = String(mark.attrs?.color ?? "");
-        text = /^#[\da-f]{6}$/i.test(color) ? `<mark style="background-color: ${color}">${text}</mark>` : `<mark>${text}</mark>`;
-      } else if (mark.type === "link") {
-        const href = sanitizeMarkdownLinkHref(String(mark.attrs?.href ?? ""));
-        if (href) text = `<a href="${escapeHtmlAttribute(href)}">${text}</a>`;
-      }
-    }
-    return text;
-  }).join("");
-}
-
-function renderInlineMarkdown(nodes: EditorNode[], standard = false, encodeEdges = true) {
-  const order = ["link", "italic", "bold", "strike", "highlight", "underline", "code"];
-  const runs: Array<{ text: string; marks: EditorMark[]; atom?: EditorNode }> = [];
-  for (const node of nodes ?? []) {
-    if (node.type !== "text") {
-      runs.push({ text: "", marks: [], atom: node });
-      continue;
-    }
-    if (!node.text) continue;
-    const marks = !standard && node.marks?.some((mark) => mark.type === "code") ? [{ type: "code" }]
-      : (node.marks ?? []).filter((mark) => order.includes(mark.type)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
-    const last = runs[runs.length - 1];
-    // Sidecar-only marks must not interrupt a shared Markdown span.
-    if (last && !last.atom && sameInlineMarks(last.marks, marks)) last.text += node.text;
-    else runs.push({ text: node.text, marks });
-  }
-  let active: EditorMark[] = [];
-  let output = "";
-  const delimiter = (mark: EditorMark, opening: boolean) => {
-    if (mark.type === "link") return opening ? "[" : `](${String(mark.attrs?.href ?? "").replace(/[\\()]/g, "\\$&")})`;
-    if (mark.type === "underline") return opening ? "<u>" : "</u>";
-    if (standard && mark.type === "highlight") return opening
-      ? /^#[\da-f]{6}$/i.test(String(mark.attrs?.color ?? "")) ? `<mark style="background-color: ${mark.attrs!.color}">` : "<mark>"
-      : "</mark>";
-    return mark.type === "bold" ? "**" : mark.type === "italic" ? "*" : mark.type === "strike" ? "~~" : "==";
-  };
-  const transition = (marks: EditorMark[]) => {
-    // Retain shared outer marks even when ranges cross in ProseMirror.
-    const next = [...active.filter((mark) => marks.some((item) => sameInlineMark(mark, item))),
-      ...marks.filter((mark) => !active.some((item) => sameInlineMark(mark, item)))];
-    let keep = 0;
-    while (keep < Math.min(active.length, next.length) && sameInlineMark(active[keep], next[keep])) keep++;
-    for (let index = active.length - 1; index >= keep; index--) output += delimiter(active[index], false);
-    for (let index = keep; index < next.length; index++) output += delimiter(next[index], true);
-    active = next;
-  };
-  for (const [runIndex, run] of runs.entries()) {
-    if (run.atom) {
-      transition([]);
-      output += run.atom.type === "hardBreak" ? (run === runs[runs.length - 1] ? "<br>" : "  \n")
-        : tiptapJsonToMarkdown({ type: "doc", content: [run.atom] }).trim();
-    } else if (run.marks.some((mark) => mark.type === "code")) {
-      transition(standard ? run.marks.filter((mark) => mark.type !== "code") : []);
-      const fence = "`".repeat(Math.max(1, ...Array.from(run.text.matchAll(/`+/g), (match) => match[0].length + 1)));
-      const padding = run.text.startsWith("`") || run.text.endsWith("`") || (/^ | $/.test(run.text) && /\S/.test(run.text)) ? " " : "";
-      output += `${fence}${padding}${run.text}${padding}${fence}`;
-    } else {
-      const [, leading, text, trailing] = /^(\s*)([\s\S]*?)(\s*)$/.exec(run.text)!;
-      if (leading) {
-        transition(standard ? active.filter((mark) => run.marks.some((item) => sameInlineMark(mark, item))) : []);
-        output += escapeInlineText(leading);
-      }
-      if (text) { transition(run.marks); output += escapeInlineText(text, !standard || !output.trim()); }
-      if (trailing) {
-        const next = runs[runIndex + 1];
-        transition(standard ? active.filter((mark) => next?.marks.some((item) => sameInlineMark(mark, item))) : []);
-        output += escapeInlineText(trailing);
-      }
-    }
-  }
-  transition([]);
-  // Encode edge whitespace so block parsing cannot treat it as indentation or discard it.
-  return encodeEdges ? output.replace(/^\s+|\s+$/g, (space) => [...space].map((char) => `&#${char.charCodeAt(0)};`).join("")) : output;
-}
-
-function sameInlineMark(a: EditorMark, b: EditorMark) {
-  return a.type === b.type && (a.type !== "link" || a.attrs?.href === b.attrs?.href);
-}
-
-function sameInlineMarks(a: EditorMark[], b: EditorMark[]) {
-  return a.length === b.length && a.every((mark, index) => sameInlineMark(mark, b[index]));
-}
-
-function escapeInlineText(text: string, blockStart = true) {
-  const escaped = text.replace(/[\\`*_{}\[\]<>~=&]/g, "\\$&");
-  return blockStart ? escaped
-    .replace(/^([#+-])(?=\s|$)|^(-)(?=--+$)/, "\\$&")
-    .replace(/^(\d+)([.)])(?=\s)/, "$1\\$2") : escaped;
+export function inlineNeedsFormattingSidecar(nodes: EditorNode[], cache?: InlineProjectionCache) {
+  const known = cache?.get(nodes);
+  if (known) return known.needsSidecar;
+  const needsSidecar = codecInlineNeedsSidecar(nodes);
+  cache?.set(nodes, { markdown: "", needsSidecar });
+  return needsSidecar;
 }
 
 function nodeText(node: EditorNode | undefined): string {
@@ -516,10 +374,10 @@ function nodeText(node: EditorNode | undefined): string {
     return node.text ?? "";
   }
   if (node.type === "fileAttachment") {
-    return String(node.attrs?.name ?? "Файл");
+    return String(node.attrs?.name ?? translate("ui.f242456b2273"));
   }
   if (node.type === "noteMention") {
-    return `@${String(node.attrs?.label ?? "Заметка")}`;
+    return `@${String(node.attrs?.label ?? translate("ui.025e14681a4c"))}`;
   }
   if (node.type === "inlineDate") {
     return formatDate(String(node.attrs?.value ?? ""));
@@ -535,100 +393,15 @@ export function tiptapJsonToPlainText(document: EditorDocument): string {
     .trim();
 }
 
-function listToMarkdown(node: EditorNode, standard = false): string {
-  return (node.content ?? []).map((item, index) => {
-    const prefix = node.type === "orderedList" ? `${Number(node.attrs?.start ?? 1) + index}. `
-      : node.type === "taskList" ? `- [${item.attrs?.checked ? "x" : " "}] ` : "- ";
-    const [first, ...remaining] = item.content ?? [];
-    const firstText = first?.type === "paragraph" ? inlineToMarkdown(first.content, standard) : "";
-    const nested = (first?.type === "paragraph" ? remaining : item.content ?? [])
-      .map((child) => {
-        const separator = ["bulletList", "orderedList", "taskList"].includes(child.type) ? "\n" : "\n\n";
-        const markdown = tiptapJsonToMarkdown({ type: "doc", content: [child] }, standard);
-        return separator + markdown.split("\n").map((line) => " ".repeat(node.type === "taskList" ? 2 : prefix.length) + line).join("\n");
-      });
-    return prefix + firstText + nested.join("");
-  }).join("\n");
-}
-
-function tableToMarkdown(node: EditorNode, standard = false) {
-  const { grid } = projectTable(node);
-  if (!grid.length) return "";
-  const rows = grid.map((row) => row.map((cell) => cell ? inlineToMarkdown(cell.content?.flatMap((block) => block.content ?? []), standard).replace(/  \n/g, "<br>").replace(/\|/g, "\\|") : ""));
-  const alignments = grid[0].map((cell) => {
-    const alignment = cell?.content?.[0]?.attrs?.textAlign ?? cell?.attrs?.align;
-    return alignment === "left" ? ":---" : alignment === "center" ? ":---:" : alignment === "right" ? "---:" : "---";
-  });
-  return [`| ${rows[0].join(" | ")} |`, `| ${alignments.join(" | ")} |`, ...rows.slice(1).map((row) => `| ${row.join(" | ")} |`)].join("\n");
-}
 
 export function tiptapJsonToStandardMarkdown(document: EditorDocument): string {
-  return tiptapJsonToMarkdown(document, true);
+  return serializeCodecMarkdown(document, true);
 }
 
-export function tiptapJsonToMarkdown(document: EditorDocument, standard = false): string {
-  return (document.content ?? [])
-    .map((node, index) => {
-      if (node.type === "paragraph") {
-        return node.content?.length ? inlineToMarkdown(node.content, standard) : standard || index === (document.content?.length ?? 0) - 1 ? "" : "<p></p>";
-      }
-      if (node.type === "heading") {
-        const level = Number(node.attrs?.level ?? 1);
-        return `${"#".repeat(Math.min(3, Math.max(1, level)))} ${inlineToMarkdown(node.content, standard)}`;
-      }
-      if (node.type === "horizontalRule") {
-        return "---";
-      }
-      if (node.type === "blockquote") {
-        if (standard) return tiptapJsonToMarkdown({ type: "doc", content: node.content ?? [] }, true).split("\n").map((line) => `> ${line}`).join("\n");
-        return (node.content ?? []).map((child) => `> ${inlineToMarkdown(child.content, standard)}`).join("\n");
-      }
-      if (node.type === "codeBlock") {
-        const language = String(node.attrs?.language ?? "");
-        const fence = "`".repeat(standard ? Math.max(3, ...Array.from(nodeText(node).matchAll(/`+/g), (match) => match[0].length + 1)) : 3);
-        return `${fence}${language}\n${nodeText(node)}\n${fence}`;
-      }
-      if (node.type === "bulletList") {
-        return listToMarkdown(node, standard);
-      }
-      if (node.type === "orderedList") {
-        return listToMarkdown(node, standard);
-      }
-      if (node.type === "taskList") {
-        return listToMarkdown(node, standard);
-      }
-      if (node.type === "table") {
-        return tableToMarkdown(node, standard);
-      }
-      if (node.type === "image") {
-        const alt = String(node.attrs?.alt ?? "");
-        const src = String(node.attrs?.src ?? "");
-        return `![${alt}](${src})`;
-      }
-      if (node.type === "noteMention") {
-        return `@[[${String(node.attrs?.label ?? "Заметка")}]]`;
-      }
-      if (node.type === "inlineDate") {
-        return `{{date:${String(node.attrs?.value ?? "")}}}`;
-      }
-      if (node.type === "callout") {
-        const variant = String(node.attrs?.variant ?? "info");
-        return `:::${variant}\n${tiptapJsonToMarkdown({ type: "doc", content: node.content ?? [] }, standard)}\n:::`;
-      }
-      if (node.type === "detailsBlock") {
-        const summary = node.content?.find((child) => child.type === "detailsSummary");
-        const detailsContent = node.content?.find((child) => child.type === "detailsContent");
-        return `:::details ${inlineToMarkdown(summary?.content, standard) || "Заголовок блока"}\n${tiptapJsonToMarkdown({ type: "doc", content: detailsContent?.content ?? [] }, standard)}\n:::`;
-      }
-      if (node.type === "fileAttachment") {
-        return `[file:${String(node.attrs?.name ?? "Файл")}](noteflow-file://${String(node.attrs?.storageId ?? "")})`;
-      }
-
-      return index === 0 ? "" : nodeText(node);
-    })
-    .filter((block) => block.length > 0)
-    .join("\n\n");
+export function tiptapJsonToMarkdown(document: EditorDocument, standard = false, _cache?: InlineProjectionCache): string {
+  return serializeCodecMarkdown(document, standard);
 }
+
 
 function escapeHtml(value: string) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -738,7 +511,7 @@ function nodeToHtml(node: EditorNode): string {
     return `<p>${inlineToHtml(node.content)}</p>`;
   }
   if (node.type === "heading") {
-    const level = Math.min(3, Math.max(1, Number(node.attrs?.level ?? 1)));
+    const level = Math.min(6, Math.max(1, Number(node.attrs?.level ?? 1)));
     return `<h${level}>${inlineToHtml(node.content)}</h${level}>`;
   }
   if (node.type === "blockquote") {
@@ -812,10 +585,10 @@ function nodeToHtml(node: EditorNode): string {
     return `<div data-type="details-content">${(node.content ?? []).map(nodeToHtml).join("")}</div>`;
   }
   if (node.type === "fileAttachment") {
-    return `<div data-type="file-attachment" data-storage-id="${escapeHtml(String(node.attrs?.storageId ?? ""))}"><span>${escapeHtml(String(node.attrs?.name ?? "Файл"))}</span><small>${escapeHtml(String(node.attrs?.size ?? ""))}</small></div>`;
+    return `<div data-type="file-attachment" data-storage-id="${escapeHtml(String(node.attrs?.storageId ?? ""))}"><span>${escapeHtml(String(node.attrs?.name ?? translate("ui.f242456b2273")))}</span><small>${escapeHtml(String(node.attrs?.size ?? ""))}</small></div>`;
   }
   if (node.type === "noteMention") {
-    return `<span data-type="note-mention" data-note-id="${escapeHtml(String(node.attrs?.noteId ?? ""))}">@${escapeHtml(String(node.attrs?.label ?? "Заметка"))}</span>`;
+    return `<span data-type="note-mention" data-note-id="${escapeHtml(String(node.attrs?.noteId ?? ""))}">@${escapeHtml(String(node.attrs?.label ?? translate("ui.025e14681a4c")))}</span>`;
   }
   if (node.type === "inlineDate") {
     const value = String(node.attrs?.value ?? "");

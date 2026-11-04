@@ -1,3 +1,5 @@
+import { getInterfaceLanguage, getInterfaceLocale } from "./i18n";
+
 const displayDateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
   month: "2-digit",
@@ -25,13 +27,14 @@ function parseDisplayDate(value: string | Date): Date | null {
 export function formatDisplayDate(value: string | Date): string {
   const date = parseDisplayDate(value);
   if (!date) return "";
+  if (getInterfaceLanguage() === "en") return displayDateFormatter.format(date);
   const parts = Object.fromEntries(displayDateFormatter.formatToParts(date).map(({ type, value: part }) => [type, part]));
   return `${parts.day}.${parts.month}.${parts.year}`;
 }
 
 export function formatDisplayTime(value: string | Date): string {
   const date = parseDisplayDate(value);
-  return date ? displayTimeFormatter.format(date) : "";
+  return date ? (getInterfaceLanguage() === "ru" ? displayTimeFormatter : new Intl.DateTimeFormat(getInterfaceLocale(), { hour: "2-digit", minute: "2-digit", hour12: false })).format(date) : "";
 }
 
 export function formatDisplayDateTime(value: string | Date): string {

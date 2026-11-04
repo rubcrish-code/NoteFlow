@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   EDITOR_CONTENT_MAX_WIDTH,
@@ -174,9 +175,9 @@ export function useEditorPageLayout({ editorContentOffset, editorContentWidth, o
 
   function buildHandleProps(side: ResizeSide) {
     return {
-      "aria-label": side === "left" ? "Изменить левую границу заметки" : "Изменить правую границу заметки",
+      "aria-label": side === "left" ? translate("ui.ed5d704bc4b3") : translate("ui.3ba604cdc584"),
       className: `editor-page-resize editor-page-resize-${side} ${activeSide === side ? "dragging" : ""}`,
-      "data-tooltip": "Потяните, чтобы изменить ширину заметки. Двойной щелчок — сброс",
+      "data-tooltip": translate("ui.24e3be6ba653"),
       onDoubleClick: onReset,
       onPointerCancel: endResize,
       onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => startResize(side, event),

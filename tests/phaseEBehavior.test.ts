@@ -104,8 +104,33 @@ describe("Phase E export workflow", () => {
     const button = await click("Сохраняем…"); assert.equal(button.disabled, true); assert.equal(calls, 1); assert.equal(closed, false);
     await act(async () => resolve()); assert.equal(closed, true);
   });
+  it("offers one Markdown format with a small associated compatibility hint", async () => {
+    await mount(h(NoteExportDialog, { document: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "QA", marks: [{ type: "underline" }] }] }] }, onClose() {}, onExport: async () => {} }));
+    assert.equal(document.querySelector('input[value="md"]:checked') !== null, true);
+    assert.equal(document.querySelectorAll('input[type="radio"]').length, 4);
+    assert.equal(document.querySelector('.export-format-notice, [role="note"]'), null);
+    assert.equal(document.querySelector('input[value="md-noteflow"]'), null);
+    assert.equal(document.querySelector('input[value="md"]')?.getAttribute("aria-describedby"), "markdown-export-hint");
+    assert.equal(document.querySelector('label span')?.childNodes[0].textContent, "Markdown (.md)");
+    assert.equal(document.querySelector('small#markdown-export-hint')?.textContent, "Сохраняет форматирование NoteFlow. Может использовать расширения Markdown, которые поддерживаются не всеми редакторами.");
+    assert.doesNotMatch(document.body.textContent ?? "", /Стандартный Markdown|NoteFlow Markdown|GFM не сохраняет/);
+  });
   it("shows safe errors and leaves the export dialog available for retry", async () => {
     await mount(h(NoteExportDialog, { onClose() { assert.fail("do not close on failure"); }, onExport: async () => { throw new Error("SQL D:/private/api-key"); } }));
     await click("Сохранить"); assert.match(document.querySelector('[role="alert"]')?.textContent ?? "", /Не удалось сохранить MD/); assert.doesNotMatch(document.body.textContent ?? "", /SQL|private|api-key/); assert.equal((document.querySelector("fieldset") as HTMLFieldSetElement).disabled, false);
+  });
+  it("reopens with the saved format and cancelling never exports", async () => {
+    let closed = false;
+    await mount(h(NoteExportDialog, { initialFormat: "md", onClose() { closed = true; }, onExport: async () => { assert.fail("cancel cannot export"); } }));
+    assert.ok(document.querySelector('input[value="md"]:checked'));
+    await click("Отмена"); assert.equal(closed, true);
+  });
+  it("maps the previous extended preference to the single Markdown option", async () => {
+    const { getUiSettings, DEFAULT_UI_SETTINGS } = await import("../src/services/uiSettingsService");
+    mockIPC((command) => { assert.equal(command, "get_ui_settings"); return { ...DEFAULT_UI_SETTINGS, lastNoteExportFormat: "md-noteflow" }; });
+    const settings = await getUiSettings();
+    assert.equal(settings.lastNoteExportFormat, "md");
+    await mount(h(NoteExportDialog, { initialFormat: settings.lastNoteExportFormat, onClose() {}, onExport: async (format) => { assert.equal(format, "md"); } }));
+    await click("Сохранить");
   });
 });

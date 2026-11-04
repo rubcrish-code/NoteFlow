@@ -76,7 +76,7 @@ describe("P1.3 physical zoom and shared composer policy", () => {
     assert.equal(shouldTemporarilyHideNoteList({ ...common, physicalWidth: 1440 }), false);
     assert.equal(shouldTemporarilyHideNoteList({ ...common, physicalWidth: 1100 }), true);
     assert.equal(shouldTemporarilyHideNoteList({ ...common, chatOpen: false, physicalWidth: 900 }), false);
-    assert.match(appShellSource, /usePhysicalViewportWidth\(appZoom\.zoomPercent\)/);
+    assert.match(appShellSource, /usePhysicalViewportWidth\(appZoom\.zoomPercent, appZoom\.useCssZoomFallback\)/);
     assert.doesNotMatch(appShellSource, /app-zoom-(?:elevated|high)/);
   });
 

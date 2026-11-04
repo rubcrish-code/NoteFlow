@@ -23,10 +23,13 @@ async function measureToggle(selector, track, expectMotion = true) {
 }
 try {
   for (const width of [1440, 1100]) for (const zoom of process.env.QA_ZOOM ? [Number(process.env.QA_ZOOM)] : [100, 160]) for (const theme of ["light", "dark"]) {
-    await page.setViewportSize({ width, height: width === 1440 ? 900 : 700 });
+    // This suite measures docked grid transitions, which require room for the
+    // complete ribbon and both sidebars. Compact chat is tested separately.
+    const supportedWidth = Math.max(width, Math.ceil(820 * zoom / 100 + 190 + 260 + 300));
+    await page.setViewportSize({ width: supportedWidth, height: width === 1440 ? 900 : 700 });
     await page.goto(`http://127.0.0.1:1420/scripts/qa/rc5-final-ui.html?reset=1&zoom=${zoom}&theme=${theme}`);
     await page.locator(".tiptap").waitFor(); await page.waitForTimeout(1200);
-    const id = `${width}-${zoom}-${theme}`;
+    const id = `requested-${width}-supported-${supportedWidth}-${zoom}-${theme}`;
     const initialWrites = await page.evaluate(() => window.qaCommands.filter((command) => command === "update_note_content").length);
     await page.evaluate(() => { window.qaOriginalEditor = document.querySelector(".tiptap"); document.querySelector(".ed-scroll").scrollTop = 320; const text = document.querySelector(".tiptap p").firstChild; const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 12); getSelection().removeAllRanges(); getSelection().addRange(range); });
     await page.waitForTimeout(100);

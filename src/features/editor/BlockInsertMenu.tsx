@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { Editor } from "@tiptap/react";
 import type { NoteAttachment } from "../../app/types";
@@ -38,10 +39,10 @@ interface BlockMenuItem {
 }
 
 const blockMenuItems: BlockMenuItem[] = [
-  { command: "table", icon: "table", title: "Таблица", description: "3 строки и 3 колонки" },
-  { command: "callout", icon: "callout", title: "Выноска", description: "Информационный блок" },
-  { command: "details", icon: "toggle", title: "Сворачиваемый блок", description: "Summary/details" },
-  { command: "divider", icon: "divider", title: "Разделитель", description: "Горизонтальная линия" },
+  { command: "table", icon: "table", get title() { return translate("ui.b7f18dd0a994"); }, get description() { return translate("ui.5c04b0fb6fd8"); } },
+  { command: "callout", icon: "callout", get title() { return translate("ui.6c1806f71e88"); }, get description() { return translate("ui.e4d5236c8399"); } },
+  { command: "details", icon: "toggle", get title() { return translate("ui.0145c4fcdb4f"); }, description: "Summary/details" },
+  { command: "divider", icon: "divider", get title() { return translate("ui.0b25285709bc"); }, get description() { return translate("ui.661f5fc2dfb1"); } },
 ];
 
 function getTodayIsoDate() {
@@ -50,15 +51,16 @@ function getTodayIsoDate() {
 
 function formatFileSize(size: number) {
   if (size < 1024) {
-    return `${size} Б`;
+    return translate("ui.9603c035f8bf", { p0: size });
   }
   if (size < 1024 * 1024) {
-    return `${Math.round(size / 1024)} КБ`;
+    return translate("ui.a949d23a8402", { p0: Math.round(size / 1024) });
   }
-  return `${(size / 1024 / 1024).toFixed(1)} МБ`;
+  return translate("ui.fb360df45f73", { p0: (size / 1024 / 1024).toFixed(1) });
 }
 
 export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, onPickAndStoreAttachment, onToast, selection }: BlockInsertMenuProps) {
+  useInterfaceLanguage();
   const [dateDraft, setDateDraft] = useState(editTarget?.kind === "date" ? editTarget.value : getTodayIsoDate());
   const [insertError, setInsertError] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
@@ -164,7 +166,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
       restoreInsertionSelection()
         ?.setImage(imageAttrs)
         .run();
-      onToast("Изображение сохранено во вложениях");
+      onToast(translate("ui.29260c2eb9c4"));
       onClose();
     } catch (error) { setInsertError(attachmentErrorMessage(error, "image", policy)); }
     finally { uploadingRef.current = false; setUploading(false); }
@@ -190,7 +192,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
           type: stored.attachment.mimeType || "file",
         })
         .run();
-      onToast("Файл сохранён во вложениях");
+      onToast(translate("ui.e062d650340e"));
       onClose();
     } catch (error) { setInsertError(attachmentErrorMessage(error, "file", policy)); }
     finally { uploadingRef.current = false; setUploading(false); }
@@ -228,7 +230,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
     if (didRun) {
       onClose();
     } else {
-      setInsertError("Не удалось вставить дату. Поставьте курсор в текст и повторите.");
+      setInsertError(translate("ui.0f6c87b69df3"));
     }
   }
 
@@ -250,10 +252,10 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
     <div className="block-insert-menu" ref={menuRef} role="dialog">
       <div className="block-menu-head">
         <div>
-          <b>Вставить сложный блок</b>
-          <span>Заголовки, списки, цитата и код форматируются верхней панелью.</span>
+          <b>{translate("ui.08bf11b3a0e2")}</b>
+          <span>{translate("ui.2b8c6baaf711")}</span>
         </div>
-        <button aria-label="Закрыть" className="editor-popover-close" onClick={onClose} type="button">
+        <button aria-label={translate("ui.a7a4033657e8")} className="editor-popover-close" onClick={onClose} type="button">
           <Icon name="x" />
         </button>
       </div>
@@ -273,27 +275,27 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
         <button className="block-menu-item" onClick={() => setMediaKind(mediaKind === "image" ? null : "image")} type="button">
           <Icon name="image" />
           <span>
-            <b>Изображение</b>
-            <small>Сохраняется локально во вложениях заметки</small>
+            <b>{translate("ui.e5f534734c36")}</b>
+            <small>{translate("ui.c60aba128bca")}</small>
           </span>
         </button>
         <button className="block-menu-item" onClick={() => setMediaKind(mediaKind === "file" ? null : "file")} type="button">
           <Icon name="attach" />
           <span>
-            <b>Файл</b>
-            <small>Открывается из локального хранилища NoteFlow</small>
+            <b>{translate("ui.f242456b2273")}</b>
+            <small>{translate("ui.f2a11b7d6f97")}</small>
           </span>
         </button>
-        {onCreateDrawing ? <button className="block-menu-item" onClick={onCreateDrawing} type="button"><Icon name="image" /><span><b>Создать рисунок</b><small>Пустой холст</small></span></button> : null}
-        <button className="block-menu-item" aria-expanded={dateOpen} onClick={() => setDateOpen((open) => !open)} type="button"><Icon name="date" /><span><b>Вставить дату</b><small>Выбрать в календаре</small></span></button>
+        {onCreateDrawing ? <button className="block-menu-item" onClick={onCreateDrawing} type="button"><Icon name="image" /><span><b>{translate("ui.7d6d80bc3805")}</b><small>{translate("ui.eff1b9d83152")}</small></span></button> : null}
+        <button className="block-menu-item" aria-expanded={dateOpen} onClick={() => setDateOpen((open) => !open)} type="button"><Icon name="date" /><span><b>{translate("ui.e536b5680a22")}</b><small>{translate("ui.c7cdb352607c")}</small></span></button>
       </div>
 
       {mediaKind ? <div className="block-media-requirements">
         {policy ? <>
-          <p>{mediaKind === "image" ? `Форматы: ${imageFormatsLabel(policy)}` : "Можно добавить файл любого типа."}</p>
-          <p>Максимальный размер: {attachmentLimitLabel(mediaKind === "image" ? policy.maxImageBytes : policy.maxFileBytes)}. Файл не должен быть пустым.</p>
-          <button className="primary-btn" disabled={uploading} onClick={() => void (mediaKind === "image" ? insertImage() : insertFile())} type="button">{uploading ? "Добавляем…" : "Выбрать файл"}</button>
-        </> : policyError ? <><p role="alert">Не удалось загрузить требования к файлу.</p><button className="secondary-btn" onClick={() => { setMediaKind(null); }} type="button">Назад</button></> : <p role="status">Загружаем требования…</p>}
+          <p>{mediaKind === "image" ? translate("ui.b5123f825832", { p0: imageFormatsLabel(policy) }) : translate("ui.2ff0c5e4e07e")}</p>
+          <p>{translate("ui.398adbb0e215") + " "}{attachmentLimitLabel(mediaKind === "image" ? policy.maxImageBytes : policy.maxFileBytes)}{translate("ui.14baebd52bd6")}</p>
+          <button className="primary-btn" disabled={uploading} onClick={() => void (mediaKind === "image" ? insertImage() : insertFile())} type="button">{uploading ? translate("ui.5637cb987056") : translate("ui.e3663341c82c")}</button>
+        </> : policyError ? <><p role="alert">{translate("ui.30ad9892bd62")}</p><button className="secondary-btn" onClick={() => { setMediaKind(null); }} type="button">{translate("ui.1a9fb1f3cf8e")}</button></> : <p role="status">{translate("ui.2bfc39ed73dd")}</p>}
       </div> : null}
 
       <CalloutColorPalette anchorRef={calloutAnchorRef} isOpen={calloutOpen} onClose={() => setCalloutOpen(false)}
@@ -303,7 +305,7 @@ export function BlockInsertMenu({ editTarget, editor, onClose, onCreateDrawing, 
         <div className="block-menu-inline">
           <DatePicker ref={datePickerRef} isOpen={calendarOpen} onOpenChange={setCalendarOpen} onChange={setDateDraft} value={dateDraft} />
           <button className="secondary-btn" disabled={!dateDraft.trim()} onClick={insertDate} onMouseDown={preserveEditorSelection} type="button">
-            {editTarget?.kind === "date" ? "Сохранить дату" : "Вставить"}
+            {editTarget?.kind === "date" ? translate("ui.6ab4eb8bcee7") : translate("ui.ec79f4d0c884")}
           </button>
         </div>
       ) : null}

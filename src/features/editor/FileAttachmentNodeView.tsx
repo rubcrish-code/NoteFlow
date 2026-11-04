@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { useState, type MouseEvent } from "react";
 import { Icon } from "../../shared/Icon";
@@ -20,7 +21,7 @@ type AttachmentAction = "open" | "reveal";
 
 function readAttachmentAttributes(attrs: Record<string, unknown>): FileAttachmentAttributes {
   return {
-    name: typeof attrs.name === "string" && attrs.name.trim() ? attrs.name : "Файл",
+    name: typeof attrs.name === "string" && attrs.name.trim() ? attrs.name : translate("ui.f242456b2273"),
     size: typeof attrs.size === "string" ? attrs.size : "",
     storageId: typeof attrs.storageId === "string" ? attrs.storageId : "",
     type: typeof attrs.type === "string" ? attrs.type : "application/octet-stream",
@@ -33,10 +34,11 @@ export function getAttachmentTypeLabel(mimeType: string, fileName: string) {
     return extension.toUpperCase();
   }
   const subtype = mimeType.split("/")[1]?.split(/[;+]/)[0]?.trim();
-  return subtype && /^[a-z0-9.+-]{1,12}$/i.test(subtype) ? subtype.toUpperCase() : "Файл";
+  return subtype && /^[a-z0-9.+-]{1,12}$/i.test(subtype) ? subtype.toUpperCase() : translate("ui.f242456b2273");
 }
 
 function FileAttachmentNodeView(props: NodeViewProps) {
+  useInterfaceLanguage();
   const attrs = readAttachmentAttributes(props.node.attrs);
   const options = props.extension.options as FileAttachmentOptions;
   const [pendingAction, setPendingAction] = useState<AttachmentAction | null>(null);
@@ -63,7 +65,7 @@ function FileAttachmentNodeView(props: NodeViewProps) {
         await options.onRevealAttachment?.(attrs.storageId);
       }
     } catch {
-      const message = action === "open" ? "Не удалось открыть файл. Проверьте, что вложение доступно." : "Не удалось показать файл в проводнике.";
+      const message = action === "open" ? translate("ui.3b27feaeb45d") : translate("ui.30b7fa486aea");
       setErrorMessage(message);
       options.onToast?.(message);
     } finally {
@@ -74,7 +76,7 @@ function FileAttachmentNodeView(props: NodeViewProps) {
   return (
     <NodeViewWrapper className={`file-attachment-card ${props.selected ? "selected" : ""}`} contentEditable={false} data-drag-handle>
       <button
-        aria-label={`Открыть файл ${attrs.name}`}
+        aria-label={translate("ui.4b9a7b189425", { p0: attrs.name })}
         className="file-attachment-main"
         disabled={!isAvailable || pendingAction !== null}
         onClick={() => void runAttachmentAction("open")}
@@ -86,7 +88,7 @@ function FileAttachmentNodeView(props: NodeViewProps) {
         </span>
         <span className="file-attachment-copy">
           <strong>{attrs.name}</strong>
-          <small>{errorMessage || (isAvailable ? metadata : "Файл недоступен")}</small>
+          <small>{errorMessage || (isAvailable ? metadata : translate("ui.6fa3a2575744"))}</small>
         </span>
       </button>
       <div className="file-attachment-actions" onMouseDown={preserveEditorSelection}>
@@ -97,12 +99,11 @@ function FileAttachmentNodeView(props: NodeViewProps) {
           type="button"
         >
           {pendingAction === "open" ? <span className="button-spinner" /> : null}
-          Открыть
-        </button>
+          {translate("ui.ea1f40824607")}</button>
         <button
-          aria-label="Показать файл в проводнике"
+          aria-label={translate("ui.b95738dd486f")}
           className="file-attachment-action icon-only"
-          data-tooltip="Показать в проводнике"
+          data-tooltip={translate("ui.75c6f3f481c5")}
           disabled={!isAvailable || pendingAction !== null}
           onClick={() => void runAttachmentAction("reveal")}
           type="button"

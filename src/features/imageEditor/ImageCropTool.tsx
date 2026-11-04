@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useRef, type CSSProperties, type PointerEvent } from "react";
 import {
   clampValue,
@@ -27,19 +28,20 @@ const minimumCropSize = { height: 0.04, width: 0.04 };
 
 function getCropHandleLabel(handle: ResizeHandle) {
   const labels: Record<ResizeHandle, string> = {
-    e: "Изменить область обрезки справа",
-    n: "Изменить область обрезки сверху",
-    ne: "Изменить область обрезки из правого верхнего угла",
-    nw: "Изменить область обрезки из левого верхнего угла",
-    s: "Изменить область обрезки снизу",
-    se: "Изменить область обрезки из правого нижнего угла",
-    sw: "Изменить область обрезки из левого нижнего угла",
-    w: "Изменить область обрезки слева",
+    e: translate("ui.be0f0d5881c2"),
+    n: translate("ui.e4184a51da8f"),
+    ne: translate("ui.2d2eac5df957"),
+    nw: translate("ui.f1b4e3fba08d"),
+    s: translate("ui.8f50237edbbf"),
+    se: translate("ui.39a9b909a337"),
+    sw: translate("ui.cbab37b8c792"),
+    w: translate("ui.3502d38a9e3d"),
   };
   return labels[handle];
 }
 
 export function ImageCropTool({ src, aspectRatio, crop, onChange: setCrop }: ImageCropToolProps) {
+  useInterfaceLanguage();
   const imageRef = useRef<HTMLImageElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const interactionRef = useRef<CropInteraction | null>(null);

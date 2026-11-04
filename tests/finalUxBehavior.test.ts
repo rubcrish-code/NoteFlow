@@ -153,17 +153,16 @@ it("toolbar dispatches shared note/fragment actions with unchanged ProseMirror s
   editor.commands.setTextSelection({ from: 1, to: 11 }); const before = JSON.stringify(editor.getJSON());
   const calls: string[] = [];
   await mount(h(FormattingToolbar, { editor, aiStatus: null, onAiAction() {}, onOpenAiSettings() {}, onToast() {}, onChooseNote() { calls.push("note"); }, onCopyFragment() { assert.equal(editor.state.selection.from, 1); assert.equal(editor.state.selection.to, 11); calls.push("fragment"); } }));
-  const more = document.querySelector<HTMLButtonElement>('[aria-label="Дополнительные инструменты форматирования"]')!;
-  await act(async () => more.click());
-  const fragment = document.querySelector<HTMLButtonElement>('[data-toolbar-overflow-action="fragment-link"]')!;
-  assert.equal(fragment.disabled, false); assert.equal(fragment.textContent, "Ссылка на фрагмент"); await act(async () => fragment.click());
-  await act(async () => more.click()); await act(async () => document.querySelector<HTMLButtonElement>('[data-toolbar-overflow-action="note-link"]')!.click());
+  assert.equal(document.querySelector('[aria-label="Дополнительные инструменты форматирования"]'), null);
+  const fragment = document.querySelector<HTMLButtonElement>('[data-toolbar-action="fragment-link"]')!;
+  assert.equal(fragment.disabled, false); assert.equal(fragment.getAttribute("aria-label"), "Ссылка на фрагмент"); await act(async () => fragment.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-toolbar-action="note-link"]')!.click());
   assert.deepEqual(calls, ["fragment", "note"]); assert.equal(JSON.stringify(editor.getJSON()), before); assert.equal(updates, 0);
-  await act(async () => editor.commands.setTextSelection(1)); await act(async () => more.click());
-  const disabled = document.querySelector<HTMLButtonElement>('[data-toolbar-overflow-action="fragment-link"]')!;
+  await act(async () => editor.commands.setTextSelection(1));
+  const disabled = document.querySelector<HTMLButtonElement>('[data-toolbar-action="fragment-link"]')!;
   assert.equal(disabled.disabled, true); assert.match(disabled.getAttribute("aria-description")!, /выделите/);
   await act(async () => editor.commands.setTextSelection({ from: 1, to: 11 }));
-  assert.equal(document.querySelector<HTMLButtonElement>('[data-toolbar-overflow-action="fragment-link"]')!.disabled, false, "selection-only changes update enabled state even with identical marks");
+  assert.equal(document.querySelector<HTMLButtonElement>('[data-toolbar-action="fragment-link"]')!.disabled, false, "selection-only changes update enabled state even with identical marks");
   assert.equal(updates, 0);
 });
 for (const width of [240, 360, 560, 800, 980, 1_400]) {

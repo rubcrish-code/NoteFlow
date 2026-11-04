@@ -21,13 +21,13 @@ async function settle(page) {
 }
 async function open(page, panel) {
   const selector = panel === "history" ? ".rag-conversations" : ".rag-sources-panel";
-  if (await page.locator(selector).count()) return;
+  if (await page.locator(selector).isVisible()) return;
   await page.getByRole("button", { name: panel === "history" ? "Показать историю чатов" : "Источники ответа", exact: true }).click();
   await settle(page);
 }
 async function close(page, panel) {
   const selector = panel === "history" ? ".rag-conversations" : ".rag-sources-panel";
-  if (!await page.locator(selector).count()) return;
+  if (!await page.locator(selector).isVisible()) return;
   await page.getByRole("button", { name: panel === "history" ? "Скрыть историю чатов" : "Скрыть источники", exact: true }).click();
   await settle(page);
 }
@@ -35,7 +35,7 @@ async function geometry(page, label) {
   const result = await page.evaluate(() => {
     const rect = (selector) => {
       const element = document.querySelector(selector);
-      if (!element) return null;
+      if (!element?.checkVisibility()) return null;
       const r = element.getBoundingClientRect();
       return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
     };
@@ -43,22 +43,24 @@ async function geometry(page, label) {
     return {
       viewport: { width: innerWidth, height: innerHeight },
       pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      overflow: selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)).map((element) => ({ selector, extra: element.scrollWidth - element.clientWidth }))),
+      overflow: selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)).filter(element => element.checkVisibility()).map((element) => ({ selector, extra: element.scrollWidth - element.clientWidth }))),
       chat: rect(".rag-main-chat"), title: rect(".rag-chat-title b"), input: rect(".chat-composer textarea"),
       header: rect(".rag-chat-top"), composer: rect(".rag-input-wrap"),
-      historyList: rect(".rag-panel-overlay .rag-history"), historyItem: rect(".rag-panel-overlay .rag-history-item"),
-      drawers: Array.from(document.querySelectorAll(".rag-panel-overlay")).map((element) => {
+      historyList: rect('.sidebar-panel.rag-panel-overlay[data-panel-open="true"] .rag-history'), historyItem: rect('.sidebar-panel.rag-panel-overlay[data-panel-open="true"] .rag-history-item'),
+      drawers: Array.from(document.querySelectorAll('.rag-page > .sidebar-panel.rag-panel-overlay[data-panel-open="true"]')).map((element) => {
         const r = element.getBoundingClientRect(); return { y: r.y, bottom: r.bottom };
       }),
       send: rect(".chat-composer-send"), actions: Array.from(document.querySelectorAll(".rag-top-actions button")).map((button) => {
         const r = button.getBoundingClientRect(); return { x: r.x, right: r.right, width: r.width };
       }),
-      overlays: document.querySelectorAll(".rag-panel-overlay").length,
+      overlays: document.querySelectorAll('.rag-page > .sidebar-panel.rag-panel-overlay[data-panel-open="true"]').length,
       mode: document.querySelector(".rag-page-shell").dataset.layout,
       scrollTop: document.querySelector(".rag-chat-scroll").scrollTop,
+      scrollAnchoring: getComputedStyle(document.querySelector(".rag-chat-scroll")).overflowAnchor,
     };
   });
   assert.ok(result.pageOverflow <= 1, `${label}: document overflow ${JSON.stringify(result)}`);
+  assert.equal(result.scrollAnchoring, "none", `${label}: browser anchoring must not move the reading position during reflow`);
   for (const entry of result.overflow) assert.ok(entry.extra <= 1, `${label}: ${JSON.stringify(entry)}`);
   assert.ok(result.chat.width >= 440, `${label}: conversation width ${result.chat.width}`);
   assert.ok(result.title.width >= 180, `${label}: title width ${result.title.width}`);

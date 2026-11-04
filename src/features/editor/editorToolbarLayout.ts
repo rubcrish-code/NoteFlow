@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import type { IconName } from "../../shared/Icon";
 
 export type EditorToolbarLayoutMode = "compact" | "narrow" | "wide";
@@ -31,6 +32,7 @@ export type EditorToolbarActionId =
   | "sub"
   | "sup"
   | "task"
+  | "table"
   | "ul"
   | "underline"
   | "undo";
@@ -52,94 +54,52 @@ export interface EditorToolbarActionLayout {
 }
 
 export const EDITOR_TOOLBAR_ACTIONS: readonly EditorToolbarAction[] = [
-  { group: "history", id: "undo", tip: "Отменить (Ctrl+Z)", icon: "undo", priority: 100 },
-  { group: "history", id: "redo", tip: "Повторить (Ctrl+Y)", icon: "redo", priority: 76 },
-  { group: "block", id: "h1", tip: "Заголовок 1", label: "H1", priority: 92 },
-  { group: "block", id: "h2", tip: "Заголовок 2", label: "H2", priority: 75 },
-  { group: "block", id: "h3", tip: "Заголовок 3", label: "H3", priority: 74 },
-  { group: "block", id: "p", tip: "Обычный текст", label: "¶", priority: 98 },
-  { group: "style", id: "font", tip: "Шрифт и размер", label: "Aa", priority: 97 },
-  { group: "mark", id: "bold", tip: "Жирный (Ctrl+B)", icon: "bold", priority: 96 },
-  { group: "mark", id: "italic", tip: "Курсив (Ctrl+I)", icon: "italic", priority: 90 },
-  { group: "mark", id: "underline", tip: "Подчёркнутый (Ctrl+U)", icon: "underline", priority: 88 },
-  { group: "mark", id: "strike", tip: "Зачёркнутый", icon: "strike", priority: 64 },
-  { group: "mark", id: "inline-code", tip: "Моноширинный код", icon: "code", priority: 63 },
-  { group: "mark", id: "highlight", tip: "Выделение", icon: "highlight", priority: 62 },
-  { group: "mark", id: "color", tip: "Цвет текста", icon: "color", priority: 61 },
-  { group: "mark", id: "sup", tip: "Надстрочный", icon: "sup", priority: 54 },
-  { group: "mark", id: "sub", tip: "Подстрочный", icon: "sub", priority: 53 },
-  { group: "list", id: "ul", tip: "Маркированный список", icon: "ul", priority: 95 },
-  { group: "list", id: "ol", tip: "Нумерованный список", icon: "ol", priority: 86 },
-  { group: "list", id: "task", tip: "Чек-лист", icon: "task", priority: 84 },
-  { group: "block", id: "quote", tip: "Цитата", icon: "quote", priority: 60 },
-  { group: "block", id: "code-block", tip: "Блок кода", icon: "codeBlock", priority: 58 },
-  { group: "alignment", id: "align-left", tip: "По левому краю", icon: "alignLeft", priority: 57 },
-  { group: "alignment", id: "align-center", tip: "По центру", icon: "alignCenter", priority: 56 },
-  { group: "alignment", id: "align-right", tip: "По правому краю", icon: "alignRight", priority: 55 },
-  { group: "alignment", id: "align-justify", tip: "По ширине", icon: "alignJustify", priority: 55 },
-  { group: "insert", id: "link", tip: "Гиперссылка", icon: "link", priority: 59 },
-  { group: "insert", id: "note-link", tip: "Ссылка на заметку", icon: "noteLink", priority: 94 },
-  { group: "insert", id: "fragment-link", tip: "Ссылка на фрагмент", icon: "copy", priority: 91 },
-  { group: "style", id: "clear", tip: "Очистить форматирование", icon: "clear", priority: 52 },
-  { group: "ai", id: "ai", tip: "ИИ-помощник", label: "AI", priority: 99 },
+  { group: "history", id: "undo", get tip() { return translate("ui.0273b95e0ee7"); }, icon: "undo", priority: 100 },
+  { group: "history", id: "redo", get tip() { return translate("ui.3a8599bd655f"); }, icon: "redo", priority: 76 },
+  { group: "block", id: "h1", get tip() { return translate("ui.9b648fc3d4c9"); }, label: "H1", priority: 92 },
+  { group: "block", id: "h2", get tip() { return translate("ui.92f86031cfe2"); }, label: "H2", priority: 75 },
+  { group: "block", id: "h3", get tip() { return translate("ui.7d74ef06aff8"); }, label: "H3", priority: 74 },
+  { group: "block", id: "p", get tip() { return translate("ui.7e3d6dafc9da"); }, label: "¶", priority: 98 },
+  { group: "style", id: "font", get tip() { return translate("ui.9161c26f391b"); }, label: "Aa", priority: 97 },
+  { group: "mark", id: "bold", get tip() { return translate("ui.409cfd9b8da2"); }, icon: "bold", priority: 96 },
+  { group: "mark", id: "italic", get tip() { return translate("ui.4e6a593700e5"); }, icon: "italic", priority: 90 },
+  { group: "mark", id: "underline", get tip() { return translate("ui.fe3296308f64"); }, icon: "underline", priority: 88 },
+  { group: "mark", id: "strike", get tip() { return translate("ui.1502f9139139"); }, icon: "strike", priority: 64 },
+  { group: "mark", id: "inline-code", get tip() { return translate("ui.2b9c82b346cb"); }, icon: "code", priority: 63 },
+  { group: "mark", id: "highlight", get tip() { return translate("ui.0e6188e48389"); }, icon: "highlight", priority: 62 },
+  { group: "mark", id: "color", get tip() { return translate("ui.d76a10ce552f"); }, icon: "color", priority: 61 },
+  { group: "mark", id: "sup", get tip() { return translate("ui.f411eda8ee68"); }, icon: "sup", priority: 54 },
+  { group: "mark", id: "sub", get tip() { return translate("ui.2ff9d2682f92"); }, icon: "sub", priority: 53 },
+  { group: "list", id: "ul", get tip() { return translate("ui.0f692541444d"); }, icon: "ul", priority: 95 },
+  { group: "list", id: "ol", get tip() { return translate("ui.0c9aa6652865"); }, icon: "ol", priority: 86 },
+  { group: "list", id: "task", get tip() { return translate("ui.bf791e3daf9a"); }, icon: "task", priority: 84 },
+  { group: "block", id: "quote", get tip() { return translate("ui.4880d7ed2105"); }, icon: "quote", priority: 60 },
+  { group: "block", id: "code-block", get tip() { return translate("ui.d4fe8c09649e"); }, icon: "codeBlock", priority: 58 },
+  { group: "alignment", id: "align-left", get tip() { return translate("ui.d4e4ed0ba1f8"); }, icon: "alignLeft", priority: 57 },
+  { group: "alignment", id: "align-center", get tip() { return translate("ui.93f3d6b8dc12"); }, icon: "alignCenter", priority: 56 },
+  { group: "alignment", id: "align-right", get tip() { return translate("ui.73173c8ac456"); }, icon: "alignRight", priority: 55 },
+  { group: "alignment", id: "align-justify", get tip() { return translate("ui.286067e3109c"); }, icon: "alignJustify", priority: 55 },
+  { group: "insert", id: "link", get tip() { return translate("ui.4c34086988aa"); }, icon: "link", priority: 59 },
+  { group: "insert", id: "table", get tip() { return translate("ui.b7f18dd0a994"); }, icon: "table", priority: 59 },
+  { group: "insert", id: "note-link", get tip() { return translate("ui.33b49d4149c0"); }, icon: "noteLink", priority: 94 },
+  { group: "insert", id: "fragment-link", get tip() { return translate("ui.b2352ddb98f5"); }, icon: "copy", priority: 91 },
+  { group: "style", id: "clear", get tip() { return translate("ui.f0a342064853"); }, icon: "clear", priority: 52 },
+  { group: "ai", id: "ai", get tip() { return translate("ui.66a1be70103c"); }, label: "AI", priority: 99 },
 ];
 
-export const EDITOR_TOOLBAR_COMPACT_BREAKPOINT = 980;
-export const EDITOR_TOOLBAR_NARROW_BREAKPOINT = 560;
+export const EDITOR_TOOLBAR_COMPACT_BREAKPOINT = 1130;
+export const EDITOR_TOOLBAR_NARROW_BREAKPOINT = 1000;
+// 31 targets at 24px, 14 group dividers at 3px, and 16px outer padding.
+// Kept slightly above the measured minimum to leave focus outlines unobstructed.
+export const EDITOR_TOOLBAR_MIN_WIDTH = 820;
 export const EDITOR_SURFACE_COMPACT_BREAKPOINT = 560;
 
-const TOOLBAR_GAP = 1;
-const TOOLBAR_LAYOUT_SAFETY_WIDTH = 8;
-
-function orderedActions(actions: readonly EditorToolbarAction[], selectedIds: ReadonlySet<EditorToolbarActionId>) {
-  return actions.filter((action) => selectedIds.has(action.id));
-}
-
-function estimateToolbarWidth(actions: readonly EditorToolbarAction[], includesOverflow: boolean, mode: EditorToolbarLayoutMode) {
-  const groupSeparators = actions.reduce((count, action, index) => {
-    const nextAction = actions[index + 1];
-    return count + (nextAction && nextAction.group !== action.group ? 1 : 0);
-  }, 0);
-  const itemCount = actions.length + (includesOverflow ? 1 : 0);
-  const gaps = Math.max(0, itemCount - 1);
-
-  const narrow = mode === "narrow";
-  return (narrow ? 16 : 24)
-    + actions.length * (narrow ? 29 : 30)
-    + gaps * TOOLBAR_GAP
-    + groupSeparators * (narrow ? 5 : 7)
-    + (includesOverflow ? 30 : 0)
-    + TOOLBAR_LAYOUT_SAFETY_WIDTH;
-}
-
 export function resolveEditorToolbarActions(
-  availableWidth: number,
+  _availableWidth: number,
   actions: readonly EditorToolbarAction[] = EDITOR_TOOLBAR_ACTIONS,
-  mode: EditorToolbarLayoutMode = getEditorToolbarLayoutMode(availableWidth),
+  _mode?: EditorToolbarLayoutMode,
 ): EditorToolbarActionLayout {
-  const safeWidth = Number.isFinite(availableWidth) ? Math.max(0, availableWidth) : EDITOR_TOOLBAR_NARROW_BREAKPOINT;
-  const allActions = [...actions];
-  if (estimateToolbarWidth(allActions, false, mode) <= safeWidth) {
-    return { overflowActions: [], visibleActions: allActions };
-  }
-
-  const selectedIds = new Set<EditorToolbarActionId>();
-  const candidates = allActions
-    .map((action, sourceIndex) => ({ action, sourceIndex }))
-    .sort((left, right) => right.action.priority - left.action.priority || left.sourceIndex - right.sourceIndex);
-
-  for (const { action } of candidates) {
-    const candidateIds = new Set(selectedIds);
-    candidateIds.add(action.id);
-    if (estimateToolbarWidth(orderedActions(allActions, candidateIds), true, mode) <= safeWidth) {
-      selectedIds.add(action.id);
-    }
-  }
-
-  return {
-    overflowActions: allActions.filter((action) => !selectedIds.has(action.id)),
-    visibleActions: orderedActions(allActions, selectedIds),
-  };
+  return { overflowActions: [], visibleActions: [...actions] };
 }
 
 export function getEditorToolbarLayoutMode(physicalWidth: number): EditorToolbarLayoutMode {

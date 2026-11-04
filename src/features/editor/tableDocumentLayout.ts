@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import { Schema } from "@tiptap/pm/model";
 import { TableMap, tableNodes } from "@tiptap/pm/tables";
 import type { EditorNode } from "./markdownService";
@@ -32,7 +33,7 @@ export function projectTable(table: EditorNode) {
     )),
   )));
   const map = TableMap.get(geometry);
-  if (map.problems?.length) throw new Error("Некорректная структура таблицы");
+  if (map.problems?.length) throw new Error(translate("ui.94da021df9e8"));
   const cells = new Map<number, EditorNode>();
   const layout: TableLayout = { width: map.width, rows: [] };
   geometry.forEach((row, rowOffset, rowIndex) => {

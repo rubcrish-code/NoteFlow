@@ -3,8 +3,10 @@ import type { AppLanguage, AppSection, ThemeMode } from "../app/types";
 import { normalizeAppZoom } from "../shared/appZoom";
 import { EDITOR_CONTENT_DEFAULT_OFFSET, EDITOR_CONTENT_DEFAULT_WIDTH, clampEditorContentOffset, clampEditorContentWidth } from "../shared/editorPageLayout";
 import { DEFAULT_LOCAL_PROFILE_NAME, normalizeLocalProfileName } from "../shared/localProfile";
+import type { NoteExportFormat } from "../features/export/exportDocument";
 
 export interface UiSettings {
+  lastNoteExportFormat?: NoteExportFormat;
   appZoomPercent: number;
   chatWidth: number;
   editorContentOffset: number;
@@ -28,6 +30,7 @@ const appSections: readonly AppSection[] = ["notes", "projects", "rag", "tags", 
 const appLanguages: readonly AppLanguage[] = ["ru", "en"];
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
+  lastNoteExportFormat: "md",
   appZoomPercent: 100,
   chatWidth: 380,
   editorContentOffset: EDITOR_CONTENT_DEFAULT_OFFSET,
@@ -62,6 +65,7 @@ function normalizeChoice<T extends string>(value: string, allowedValues: readonl
 
 export function normalizeUiSettings(settings: UiSettings): UiSettings {
   return {
+    lastNoteExportFormat: normalizeChoice(settings.lastNoteExportFormat ?? "md", ["md", "txt", "docx", "pdf"] as const, "md"),
     appZoomPercent: normalizeAppZoom(settings.appZoomPercent),
     chatWidth: clampInteger(settings.chatWidth, 300, 620, DEFAULT_UI_SETTINGS.chatWidth),
     editorContentOffset: clampEditorContentOffset(settings.editorContentOffset),

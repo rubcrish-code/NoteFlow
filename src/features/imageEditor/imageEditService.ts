@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 export type ImageEditMode = "crop" | "draw";
 
 export interface ImageEditMetadata extends Record<string, unknown> {
@@ -12,7 +13,7 @@ export function clampImageWidth(width: number, minWidth: number, maxWidth: numbe
 export function getCanvasContext(canvas: HTMLCanvasElement) {
   const context = canvas.getContext("2d");
   if (!context) {
-    throw new Error("Canvas недоступен для редактирования изображения");
+    throw new Error(translate("ui.cab6f9a83322"));
   }
   return context;
 }
@@ -22,14 +23,14 @@ export function loadImage(src: string) {
     const image = new Image();
     image.crossOrigin = "anonymous";
     image.addEventListener("load", () => resolve(image), { once: true });
-    image.addEventListener("error", () => reject(new Error("Изображение не удалось загрузить")), { once: true });
+    image.addEventListener("error", () => reject(new Error(translate("ui.35d5c667c91b"))), { once: true });
     image.src = src;
   });
 }
 
 export async function dataUrlToFile(dataUrl: string, fileName: string, fallbackMimeType = "image/png") {
   const match = /^data:(image\/png);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
-  if (!match) throw new Error("Не удалось подготовить изображение");
+  if (!match) throw new Error(translate("ui.d66176cfd54b"));
   const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
   return new File([bytes], fileName, { type: match[1] || fallbackMimeType });
 }

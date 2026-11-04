@@ -1,4 +1,6 @@
+import { getInterfaceLanguage } from "../shared/i18n";
 import { invoke } from "./safeInvoke";
+import { localizeUiMessage } from "../shared/uiMessages";
 
 export type EmbeddingProviderType = "ollama" | "openai" | "custom";
 export type EmbeddingLocality = "local" | "cloud";
@@ -166,14 +168,16 @@ export function acceptEmbeddingCloudConsent(profileId: string) {
   return invoke<EmbeddingProfile>("accept_embedding_cloud_consent", { profileId });
 }
 
-export function testEmbeddingProvider(profileId: string) {
-  return invoke<EmbeddingProviderTestResult>("test_embedding_provider", { profileId });
+export async function testEmbeddingProvider(profileId: string) {
+  const result = await invoke<EmbeddingProviderTestResult>("test_embedding_provider", { profileId });
+  return { ...result, message: localizeUiMessage(getInterfaceLanguage(), result.message) };
 }
 
 export async function listEmbeddingModels(input: EmbeddingModelListInput): Promise<EmbeddingModelListResult> {
   const result = await invoke<EmbeddingModelListResultDto>("list_embedding_models", { request: input });
   return {
     ...result,
+    message: localizeUiMessage(getInterfaceLanguage(), result.message),
     options: result.options ?? result.models.map((id) => ({ id, supportsChat: null, supportsEmbeddings: null })),
   };
 }

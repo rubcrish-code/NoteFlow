@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import type { EditorDocument, EditorNode } from "../editor/markdownService";
 import { formatDisplayDate } from "../../shared/displayDate";
 
@@ -14,7 +15,7 @@ export function exportFilename(title: string, extension: string): string {
     stem += safe;
   }
   stem = stem.trim().replace(/^\.+|[. ]+$/g, "");
-  if (!stem) stem = "Заметка";
+  if (!stem) stem = translate("ui.025e14681a4c");
   if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(stem)) stem = `_${stem}`;
   return `${stem}.${extension}`;
 }
@@ -39,8 +40,8 @@ export function plainBlocks(nodes: EditorNode[], depth = 0): string {
       }).join("\n");
     }
     if (node.type === "table") return (node.content ?? []).map((row) => (row.content ?? []).map((cell) => inlineText(cell, true)).join(" | ")).join("\n");
-    if (node.type === "image") return `[Изображение${node.attrs?.alt ? `: ${node.attrs.alt}` : ""}]`;
-    if (node.type === "fileAttachment") return `[Файл: ${node.attrs?.fileName ?? node.attrs?.name ?? "Вложение"}]`;
+    if (node.type === "image") return translate("ui.62de1e1541ff", { p0: node.attrs?.alt ? `: ${node.attrs.alt}` : "" });
+    if (node.type === "fileAttachment") return translate("ui.e2296fbb224e", { p0: String(node.attrs?.fileName ?? node.attrs?.name ?? "Вложение") });
     if (node.type === "horizontalRule") return "────────────────";
     if (["blockquote", "callout", "detailsBlock", "detailsContent", "listItem", "taskItem"].includes(node.type)) return plainBlocks(node.content ?? [], depth);
     return inlineText(node, true);

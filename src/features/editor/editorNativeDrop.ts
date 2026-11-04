@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import type { Editor } from "@tiptap/react";
 import type { EditorNode } from "./markdownService";
 import type { AttachmentStoreResult } from "../../services/dataService";
@@ -18,7 +19,7 @@ export function droppedFileKind(path: string): "file" | "image" {
 export function attachmentInsertNode(result: AttachmentStoreResult): EditorNode {
   const attachment = result.attachment;
   if (attachment.kind === "image") {
-    if (!attachment.assetUri) throw new Error("Не удалось подготовить изображение");
+    if (!attachment.assetUri) throw new Error(translate("ui.d66176cfd54b"));
     return { type: "image", attrs: { src: attachment.assetUri, originalSrc: attachment.assetUri,
       attachmentId: attachment.id, originalAttachmentId: attachment.id,
       alt: attachment.originalName, title: attachment.originalName } };
@@ -31,7 +32,7 @@ export async function insertNativeDrop(editor: Editor, paths: string[], position
   store: (path: string, kind: "file" | "image") => Promise<AttachmentStoreResult>, isCurrent: () => boolean) {
   const uniquePaths = [...new Set(paths)];
   if (!uniquePaths.length) return false;
-  if (uniquePaths.length > MAX_DROP_FILES) throw new Error("Переносите не больше 32 файлов за один раз");
+  if (uniquePaths.length > MAX_DROP_FILES) throw new Error(translate("ui.d1a57dc70ed6"));
   const originalDocument = editor.state.doc;
   const nodes: EditorNode[] = [];
   for (const path of uniquePaths) {

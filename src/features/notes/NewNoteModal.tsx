@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ModalShell } from "../../shared/ModalShell";
 import { normalizeEntityName, validateEntityName } from "../../shared/entityName";
@@ -11,6 +12,7 @@ interface NewNoteModalProps {
 }
 
 export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
+  useInterfaceLanguage();
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
   const [noteDate, setNoteDate] = useState(todayIsoDate);
@@ -48,15 +50,13 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
     <ModalShell
       backdropClassName="modal-backdrop"
       className="new-note-dialog"
-      description="Укажите название и дату заметки. После создания откроется пустой редактор с поддержкой Markdown."
+      description={translate("ui.b4a4c706aa8d")}
       footer={(
         <div className="new-note-actions">
           <button className="cancel secondary-btn" onClick={onClose} type="button">
-            Отмена
-          </button>
+            {translate("ui.8fbe9b75cbdf")}</button>
           <button className="create primary-btn" disabled={Boolean(validateEntityName(title))} form="new-note-form" type="submit">
-            Создать заметку
-          </button>
+            {translate("ui.6c929f117cf6")}</button>
         </div>
       )}
       initialFocusRef={titleInputRef}
@@ -64,19 +64,16 @@ export function NewNoteModal({ isOpen, onClose, onCreate }: NewNoteModalProps) {
       onEscapeKeyDown={handleEscapeKeyDown}
       open={isOpen}
       size="compact"
-      title="Создать заметку"
+      title={translate("ui.6c929f117cf6")}
       titleId="new-note-title"
     >
       <form className="new-note-form" id="new-note-form" onSubmit={handleSubmit}>
         <label>
-          Название заметки
-          <input aria-invalid={Boolean(error)} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder="Например, Итоги встречи" ref={titleInputRef} type="text" value={title} />
-          <EntityNameCounter value={title} />
-          {error ? <span className="field-error" role="alert">{error}</span> : null}
+          {translate("ui.40023f7ec93f")}<input aria-invalid={Boolean(error)} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder={translate("ui.557734bee6d0")} ref={titleInputRef} type="text" value={title} />
+          <EntityNameCounter value={title} error={error} />
         </label>
         <label>
-          Дата заметки
-          <NoteDatePicker ref={datePickerRef} isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} triggerRef={dateTriggerRef} value={noteDate} />
+          {translate("ui.c018a1976177")}<NoteDatePicker ref={datePickerRef} isOpen={isDatePickerOpen} onChange={setNoteDate} onOpenChange={setIsDatePickerOpen} triggerRef={dateTriggerRef} value={noteDate} />
         </label>
       </form>
     </ModalShell>

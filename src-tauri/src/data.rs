@@ -289,6 +289,7 @@ pub struct AttachmentStoreResultDto {
 pub struct EditorClipboardResult {
     pub text: String,
     pub html: String,
+    pub markdown: String,
     pub attachments: Vec<AttachmentStoreResultDto>,
     pub failed_files: usize,
 }
@@ -408,6 +409,7 @@ pub struct ImportBackupResultDto {
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
 pub struct UiSettingsDto {
+    pub last_note_export_format: String,
     #[serde(default = "default_ui_theme")]
     pub theme: String,
     #[serde(default = "default_ui_app_zoom_percent")]
@@ -441,6 +443,7 @@ pub struct UiSettingsDto {
 impl Default for UiSettingsDto {
     fn default() -> Self {
         Self {
+            last_note_export_format: "md".to_string(),
             theme: "light".to_string(),
             app_zoom_percent: 100,
             sidebar_width: 250,
@@ -462,6 +465,14 @@ impl Default for UiSettingsDto {
 impl UiSettingsDto {
     fn normalized(self) -> Self {
         Self {
+            last_note_export_format: if matches!(
+                self.last_note_export_format.as_str(),
+                "md" | "txt" | "docx" | "pdf"
+            ) {
+                self.last_note_export_format
+            } else {
+                "md".to_string()
+            },
             theme: normalize_ui_theme(&self.theme),
             app_zoom_percent: normalize_app_zoom(self.app_zoom_percent),
             sidebar_width: clamp_i64(self.sidebar_width, 190, 360),
@@ -2957,7 +2968,11 @@ impl DataStore {
 
     fn create_tag(&mut self, request: CreateTagRequest) -> DataResult<TagRowDto> {
         let name = normalize_tag_name(&request.name)?;
-        if tag_name_exists(&self.conn, &name, None)? {
+        // Lock writers before checking: another connection must not insert between check and write.
+        let transaction = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if tag_name_exists(&transaction, &name, None)? {
             return Err(DataError::InvalidInput(
                 "Тег с таким названием уже существует".to_string(),
             ));
@@ -2965,7 +2980,7 @@ impl DataStore {
         let tag_id = Uuid::new_v4().to_string();
         let now = now_iso();
         let icon_key = infer_tag_icon_key(&name);
-        self.conn.execute(
+        transaction.execute(
             "INSERT INTO tags (id, name, color, custom_color, icon_key, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
             params![
@@ -2977,6 +2992,7 @@ impl DataStore {
                 now
             ],
         )?;
+        transaction.commit()?;
         self.list_tags(None)?
             .into_iter()
             .find(|tag| tag.id == tag_id)
@@ -2984,7 +3000,10 @@ impl DataStore {
     }
 
     fn update_tag(&mut self, request: UpdateTagRequest) -> DataResult<Vec<TagRowDto>> {
-        let previous: String = self.conn.query_row(
+        let transaction = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let previous: String = transaction.query_row(
             "SELECT name FROM tags WHERE id = ?1",
             params![request.tag_id],
             |row| row.get(0),
@@ -2994,12 +3013,12 @@ impl DataStore {
         } else {
             normalize_tag_name(&request.name)?
         };
-        if tag_name_exists(&self.conn, &name, Some(&request.tag_id))? {
+        if tag_name_exists(&transaction, &name, Some(&request.tag_id))? {
             return Err(DataError::InvalidInput(
                 "Тег с таким названием уже существует".to_string(),
             ));
         }
-        let changed = self.conn.execute(
+        let changed = transaction.execute(
             "UPDATE tags
              SET name = ?1, color = ?2, custom_color = ?3, updated_at = ?4
              WHERE id = ?5",
@@ -3014,20 +3033,28 @@ impl DataStore {
         if changed == 0 {
             return Err(DataError::NotFound("Тег не найден".to_string()));
         }
+        transaction.commit()?;
         self.list_tags(None)
     }
 
     fn rename_tag(&mut self, request: RenameTagRequest) -> DataResult<Vec<TagRowDto>> {
         let name = normalize_tag_name(&request.name)?;
-        if tag_name_exists(&self.conn, &name, Some(&request.tag_id))? {
+        let transaction = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if tag_name_exists(&transaction, &name, Some(&request.tag_id))? {
             return Err(DataError::InvalidInput(
                 "Тег с таким названием уже существует".into(),
             ));
         }
-        self.conn.execute(
+        let changed = transaction.execute(
             "UPDATE tags SET name = ?1, updated_at = ?2 WHERE id = ?3",
             params![name, now_iso(), request.tag_id],
         )?;
+        if changed == 0 {
+            return Err(DataError::NotFound("Тег не найден".to_string()));
+        }
+        transaction.commit()?;
         self.list_tags(None)
     }
 
@@ -3257,12 +3284,21 @@ impl DataStore {
             text: if has_assets {
                 String::new()
             } else {
-                payload.text
+                if payload.text.is_empty() {
+                    payload.markdown.clone()
+                } else {
+                    payload.text
+                }
             },
             html: if has_assets || plain_text_only {
                 String::new()
             } else {
                 payload.html
+            },
+            markdown: if has_assets || plain_text_only {
+                String::new()
+            } else {
+                payload.markdown
             },
             attachments: vec![],
             failed_files: 0,
@@ -6322,7 +6358,21 @@ fn normalize_required_text(value: &str, field_name: &str) -> DataResult<String> 
 }
 
 fn normalize_tag_name(value: &str) -> DataResult<String> {
-    normalize_entity_title(value, "Название тега")
+    let normalizer = icu_normalizer::ComposingNormalizer::new_nfc();
+    let normalized = normalizer.normalize(value);
+    normalize_entity_title(&normalized, "Название тега")
+}
+
+fn tag_name_key(value: &str) -> String {
+    let normalized = value
+        .trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}')
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let normalizer = icu_normalizer::ComposingNormalizer::new_nfc();
+    normalizer
+        .normalize(&normalizer.normalize(&normalized).to_lowercase())
+        .into_owned()
 }
 
 fn tag_name_exists(
@@ -6330,7 +6380,7 @@ fn tag_name_exists(
     name: &str,
     excluded_tag_id: Option<&str>,
 ) -> DataResult<bool> {
-    let normalized_name = name.to_lowercase();
+    let normalized_name = tag_name_key(name);
     let mut statement = connection.prepare("SELECT id, name FROM tags")?;
     let rows = statement.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -6340,7 +6390,7 @@ fn tag_name_exists(
         if excluded_tag_id == Some(tag_id.as_str()) {
             continue;
         }
-        if existing_name.to_lowercase() == normalized_name {
+        if tag_name_key(&existing_name) == normalized_name {
             return Ok(true);
         }
     }
@@ -8282,7 +8332,7 @@ pub async fn export_note_markdown_at_path(
         Ok(export_result(
             destination,
             String::new(),
-            "Заметка сохранена.",
+            "Заметка сохранена",
         ))
     })
     .await
@@ -8414,7 +8464,7 @@ pub async fn write_note_export_file(
         Ok(export_result(
             destination,
             String::new(),
-            "Заметка сохранена.",
+            "Заметка сохранена",
         ))
     })
     .await
@@ -8493,6 +8543,110 @@ mod tests {
     use super::*;
     use crate::llm::SecretStorage;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    #[ignore = "isolated loading benchmark; run without concurrent heavy workloads"]
+    fn profiles_isolated_workspace_loading() {
+        let source = PathBuf::from(
+            std::env::var_os("NOTEFLOW_QA_LOAD_DB").expect("explicit synthetic fixture"),
+        );
+        let directory = temp_store_dir();
+        fs::create_dir_all(&directory).expect("isolated benchmark directory");
+        fs::copy(source, directory.join(DATABASE_FILE)).expect("copy synthetic database");
+        let mut samples = Vec::new();
+        let mut opens = Vec::new();
+        for series in 0..3 {
+            let started = std::time::Instant::now();
+            let mut store = DataStore::open(directory.clone()).expect("fixture migrations/startup");
+            opens.push(started.elapsed().as_secs_f64() * 1000.0);
+            let title: String = store
+                .conn
+                .query_row(
+                    "SELECT title FROM notes WHERE id='postrc6-perf-0'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("synthetic marker");
+            assert_eq!(title, "PERF LONG 1000");
+            let version: i64 = store
+                .conn
+                .query_row("SELECT SUM(content_version) FROM notes", [], |row| {
+                    row.get(0)
+                })
+                .expect("version baseline");
+            for _ in 0..10 {
+                let start = std::time::Instant::now();
+                // Same row query as list_notes(None, false); enrichment is timed separately.
+                let rows = store.query_note_rows(
+                    "SELECT n.id, n.title, n.note_date, n.content_json, n.content_markdown, n.content_html,
+                            n.plain_text, n.project_id, COALESCE(p.title, 'Входящие'),
+                            n.is_favorite, n.is_pinned, n.pinned_at, n.icon_key, n.created_at, n.updated_at, n.archived_at, n.deleted_at, n.content_version
+                     FROM notes n LEFT JOIN projects p ON p.id = n.project_id
+                     WHERE n.deleted_at IS NULL AND (?1 OR n.archived_at IS NULL)
+                     ORDER BY n.is_pinned DESC, n.pinned_at DESC, n.updated_at DESC", params![false],
+                ).expect("actual SQLite row collection");
+                let query_ms = start.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(rows.len(), 10003);
+                let start = std::time::Instant::now();
+                let notes = rows
+                    .into_iter()
+                    .map(|row| store.note_dto_from_row(row))
+                    .collect::<DataResult<Vec<_>>>()
+                    .expect("production DTO enrichment");
+                let dto_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let start = std::time::Instant::now();
+                let snapshot = store.load_workspace().expect("real workspace flow");
+                let workspace_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let start = std::time::Instant::now();
+                let bytes = serde_json::to_vec(&snapshot)
+                    .expect("actual DTO serialization")
+                    .len();
+                let serialize_ms = start.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(snapshot.notes.len(), notes.len());
+                samples.push(serde_json::json!({ "series": series, "rows": notes.len(), "queryMs": query_ms, "dtoMs": dto_ms, "workspaceMs": workspace_ms, "serializeMs": serialize_ms, "bytes": bytes }));
+            }
+            assert_eq!(
+                version,
+                store
+                    .conn
+                    .query_row("SELECT SUM(content_version) FROM notes", [], |row| row
+                        .get::<_, i64>(0))
+                    .expect("version after reads")
+            );
+            assert_eq!(
+                store
+                    .conn
+                    .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                    .expect("integrity"),
+                "ok"
+            );
+        }
+        println!(
+            "LOADING_VALIDATION {}",
+            serde_json::json!({ "connectionOpenMs": opens, "samples": samples })
+        );
+    }
+
+    #[test]
+    fn markdown_only_clipboard_has_plain_fallback_and_plain_paste_drops_format_hint() {
+        let mut store = temp_store();
+        let make = || crate::clipboard::ClipboardPayload {
+            markdown: "# Русский 😀".into(),
+            ..Default::default()
+        };
+        let rich = store
+            .import_clipboard_payload(None, false, make())
+            .expect("markdown only");
+        assert_eq!(rich.text, "# Русский 😀");
+        assert_eq!(rich.markdown, rich.text);
+        assert!(rich.html.is_empty());
+        assert!(rich.attachments.is_empty());
+        let plain = store
+            .import_clipboard_payload(None, true, make())
+            .expect("plain paste");
+        assert_eq!(plain.text, rich.text);
+        assert!(plain.markdown.is_empty());
+    }
 
     #[test]
     fn stable_entity_limits_count_graphemes_for_notes_projects_and_tags() {
@@ -8586,6 +8740,200 @@ mod tests {
             .expect("tag");
         assert_eq!(saved.name, legacy);
         assert_eq!(saved.custom_color.as_deref(), Some("#65A30D"));
+    }
+
+    #[test]
+    fn tag_uniqueness_normalizes_existing_unicode_names_without_rewriting_them() {
+        let mut store = DataStore::open(temp_store_dir()).expect("isolated tag fixture");
+        let tag = store
+            .create_tag(CreateTagRequest {
+                name: "  Е\u{308}лка   идеи  ".into(),
+                color: "green".into(),
+                custom_color: Some("#009688".into()),
+            })
+            .expect("normalized tag");
+        assert_eq!(tag.name, "Ёлка идеи");
+        let legacy = "  Е\u{308}лка   идеи  ";
+        store
+            .conn
+            .execute(
+                "UPDATE tags SET name = ?1 WHERE id = ?2",
+                params![legacy, tag.id],
+            )
+            .expect("legacy spelling");
+        for name in ["ЁЛКА ИДЕИ", " е\u{308}лка идеи ", "Е\u{308}лка\tидеи"]
+        {
+            let result = store.create_tag(CreateTagRequest {
+                name: name.into(),
+                color: "blue".into(),
+                custom_color: None,
+            });
+            assert!(
+                matches!(result, Err(DataError::InvalidInput(message)) if message == "Тег с таким названием уже существует")
+            );
+        }
+        store
+            .update_tag(UpdateTagRequest {
+                tag_id: tag.id.clone(),
+                name: legacy.into(),
+                color: "pink".into(),
+                custom_color: Some("#E53935".into()),
+            })
+            .expect("unchanged legacy edit");
+        assert_eq!(store.list_tags(None).expect("tags")[0].name, legacy);
+        store
+            .rename_tag(RenameTagRequest {
+                tag_id: tag.id.clone(),
+                name: "ЁЛКА идеи".into(),
+            })
+            .expect("same ID may change case");
+        assert_eq!(store.list_tags(None).expect("tags")[0].name, "ЁЛКА идеи");
+        for (left, right) in [
+            ("Café", " CAFE\u{301} "),
+            ("Йод", "И\u{306}ОД"),
+            ("Работа", " работа "),
+            ("a\u{301}\u{323}", "A\u{323}\u{301}"),
+        ] {
+            assert_eq!(tag_name_key(left), tag_name_key(right));
+        }
+    }
+
+    #[test]
+    fn tag_uniqueness_rejects_rename_and_atomic_update_without_mutating_data() {
+        let mut store = DataStore::open(temp_store_dir()).expect("isolated fixture");
+        let mut create = |name: &str| {
+            store
+                .create_tag(CreateTagRequest {
+                    name: name.into(),
+                    color: "green".into(),
+                    custom_color: Some("#009688".into()),
+                })
+                .expect("tag")
+        };
+        let first = create("Ёлка");
+        let second = create("Другое");
+        let before =
+            serde_json::to_value(store.list_tags(None).expect("before")).expect("snapshot");
+        let rename = store.rename_tag(RenameTagRequest {
+            tag_id: second.id.clone(),
+            name: " е\u{308}ЛКА ".into(),
+        });
+        assert!(
+            matches!(rename, Err(DataError::InvalidInput(message)) if message == "Тег с таким названием уже существует")
+        );
+        let update = store.update_tag(UpdateTagRequest {
+            tag_id: second.id,
+            name: " ёЛКА ".into(),
+            color: "pink".into(),
+            custom_color: Some("#E53935".into()),
+        });
+        assert!(
+            matches!(update, Err(DataError::InvalidInput(message)) if message == "Тег с таким названием уже существует")
+        );
+        assert_eq!(
+            serde_json::to_value(store.list_tags(None).expect("after")).expect("snapshot"),
+            before
+        );
+        assert_eq!(store.list_tags(None).expect("two existing tags").len(), 2);
+        assert!(store
+            .rename_tag(RenameTagRequest {
+                tag_id: "missing".into(),
+                name: "Missing".into()
+            })
+            .is_err());
+        assert!(store
+            .update_tag(UpdateTagRequest {
+                tag_id: first.id,
+                name: "New name".into(),
+                color: "blue".into(),
+                custom_color: Some("invalid".into())
+            })
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(store.list_tags(None).expect("after failure")).expect("snapshot"),
+            before
+        );
+    }
+
+    #[test]
+    fn tag_uniqueness_serializes_concurrent_create_rename_and_update_connections() {
+        for operations in [[0, 0], [0, 1], [0, 2], [1, 1], [1, 2], [2, 2]] {
+            let directory = temp_store_dir();
+            let mut first = DataStore::open(directory.clone()).expect("first connection");
+            let source_a = first
+                .create_tag(CreateTagRequest {
+                    name: "Source A".into(),
+                    color: "blue".into(),
+                    custom_color: None,
+                })
+                .expect("source A");
+            let source_b = first
+                .create_tag(CreateTagRequest {
+                    name: "Source B".into(),
+                    color: "green".into(),
+                    custom_color: None,
+                })
+                .expect("source B");
+            let second = DataStore::open(directory.clone()).expect("independent connection");
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let workers = [first, second]
+                .into_iter()
+                .zip([source_a.id, source_b.id])
+                .enumerate()
+                .map(|(index, (mut store, tag_id))| {
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        let name = if index == 0 {
+                            "Ёлка Café"
+                        } else {
+                            " е\u{308}ЛКА CAFE\u{301} "
+                        }
+                        .to_string();
+                        barrier.wait();
+                        match operations[index] {
+                            0 => store
+                                .create_tag(CreateTagRequest {
+                                    name,
+                                    color: "blue".into(),
+                                    custom_color: None,
+                                })
+                                .map(|_| ()),
+                            1 => store
+                                .rename_tag(RenameTagRequest { tag_id, name })
+                                .map(|_| ()),
+                            _ => store
+                                .update_tag(UpdateTagRequest {
+                                    tag_id,
+                                    name,
+                                    color: "pink".into(),
+                                    custom_color: Some("#E53935".into()),
+                                })
+                                .map(|_| ()),
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            let outcomes = workers
+                .into_iter()
+                .map(|worker| worker.join().expect("worker completes"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                outcomes.iter().filter(|outcome| outcome.is_ok()).count(),
+                1,
+                "{operations:?}: {outcomes:?}"
+            );
+            assert!(outcomes.iter().any(|outcome| matches!(outcome, Err(DataError::InvalidInput(message)) if message == "Тег с таким названием уже существует")), "{outcomes:?}");
+            let store = DataStore::open(directory).expect("reopen committed database");
+            assert_eq!(
+                store
+                    .list_tags(None)
+                    .expect("stored tags")
+                    .iter()
+                    .filter(|tag| tag_name_key(&tag.name) == tag_name_key("Ёлка Café"))
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]
@@ -9042,6 +9390,7 @@ mod tests {
                     files: paths.clone(),
                     text: "file:///private/path".into(),
                     html: "<img src='https://example.test/private'>".into(),
+                    markdown: String::new(),
                     image: Some(test_png_bytes(1)),
                 },
             )
@@ -11469,6 +11818,7 @@ mod tests {
             let mut store = DataStore::open(dir.clone()).expect("store opens");
             let saved = store
                 .update_ui_settings(UiSettingsDto {
+                    last_note_export_format: "md-noteflow".to_string(),
                     theme: "dark".to_string(),
                     app_zoom_percent: 127,
                     sidebar_width: 999,
@@ -11517,6 +11867,25 @@ mod tests {
         assert_eq!(settings.language, "en");
         assert_eq!(settings.editor_content_width, 1440);
         assert_eq!(settings.editor_content_offset, -720);
+        assert_eq!(settings.last_note_export_format, "md");
+    }
+
+    #[test]
+    fn note_export_preference_defaults_for_legacy_settings_and_rejects_unknown_formats() {
+        let legacy: UiSettingsDto = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(legacy.last_note_export_format, "md");
+        let invalid = UiSettingsDto {
+            last_note_export_format: "private-format".to_string(),
+            ..UiSettingsDto::default()
+        }
+        .normalized();
+        assert_eq!(invalid.last_note_export_format, "md");
+        let previous_extended = UiSettingsDto {
+            last_note_export_format: "md-noteflow".to_string(),
+            ..UiSettingsDto::default()
+        }
+        .normalized();
+        assert_eq!(previous_extended.last_note_export_format, "md");
     }
 
     #[test]

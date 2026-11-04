@@ -1,25 +1,24 @@
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { useEditorState, type Editor } from "@tiptap/react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { NoteAiActionId, NoteAiStatus } from "../../services/noteAiService";
-import { useAppZoomPercent } from "../../shared/AppZoomContext";
+import type { AppLanguage } from "../../app/types";
+import { localizeUiMessage, uiMessage } from "../../shared/uiMessages";
 import { Icon } from "../../shared/Icon";
-import { MenuPopover } from "../../shared/MenuPopover";
-import { toPhysicalLayoutPixels } from "../../shared/physicalLayout";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
-import { useObservedElementWidth } from "../../shared/useObservedElementWidth";
 import { EDITOR_AI_ACTION_GROUPS } from "./editorAiActions";
 import { applyEditorFormattingValue, runEditorFormattingCommand } from "./editorFormattingCommands";
 import { EditorCommandPopover, type EditorCommandPopoverMode, type EditorCommandSubmit } from "./EditorCommandPopover";
 import {
-  getEditorToolbarLayoutMode,
-  resolveEditorToolbarActions,
+  EDITOR_TOOLBAR_ACTIONS,
   type EditorToolbarActionId,
 } from "./editorToolbarLayout";
 import { FontFormatPopover, type FontFormatDraft } from "./FontFormatPopover";
 import { findFontFamilyValue, formatFontSize, normalizeFontSizeValue } from "./fontFormatOptions";
 
 interface FormattingToolbarProps {
+  language?: AppLanguage;
   onChooseNote?: () => void;
   onCopyFragment?: () => void;
   aiStatus: NoteAiStatus | null;
@@ -49,10 +48,10 @@ const emptyToolbarState: ToolbarRuntimeState = {
   fontSize: "",
 };
 
-export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, editor, onAiAction, onOpenAiSettings, pendingAiActionId }: FormattingToolbarProps) {
+export function FormattingToolbar({ language = getInterfaceLanguage(), onChooseNote, onCopyFragment, aiStatus, editor, onAiAction, onOpenAiSettings, pendingAiActionId }: FormattingToolbarProps) {
+  useInterfaceLanguage();
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
-  const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [fontDraft, setFontDraft] = useState<FontFormatDraft>({ fontFamily: "", fontSize: "" });
   const [popoverMode, setPopoverMode] = useState<EditorCommandPopoverMode | null>(null);
   const aiButtonRef = useRef<HTMLButtonElement>(null);
@@ -60,14 +59,8 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
   const aiActionWasPendingRef = useRef(false);
   const fontAnchorRef = useRef<HTMLButtonElement>(null);
   const fontMenuRef = useRef<HTMLDivElement>(null);
-  const overflowButtonRef = useRef<HTMLButtonElement>(null);
-  const toolbarWrapRef = useRef<HTMLDivElement>(null);
   const mouseCommandRef = useRef(false);
-  const appZoomPercent = useAppZoomPercent();
-  const toolbarCssWidth = useObservedElementWidth(toolbarWrapRef);
-  const toolbarPhysicalWidth = toPhysicalLayoutPixels(toolbarCssWidth, appZoomPercent);
-  const toolbarLayoutMode = getEditorToolbarLayoutMode(toolbarPhysicalWidth);
-  const { overflowActions, visibleActions } = resolveEditorToolbarActions(toolbarCssWidth, undefined, toolbarLayoutMode);
+  const visibleActions = EDITOR_TOOLBAR_ACTIONS;
   const aiMenuStyle = useFloatingPopoverPosition({
     anchorRef: aiButtonRef,
     isOpen: isAiMenuOpen,
@@ -143,23 +136,15 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
     }
   }, [pendingAiActionId]);
 
-  useEffect(() => {
-    if (overflowActions.length === 0) {
-      setIsOverflowMenuOpen(false);
-    }
-  }, [overflowActions.length]);
-
   function runCommand(toolId: EditorToolbarActionId) {
     if (toolId === "ai") {
       setIsFontMenuOpen(false);
-      setIsOverflowMenuOpen(false);
       setPopoverMode(null);
       setIsAiMenuOpen((value) => !value);
       return;
     }
 
     if (toolId === "font") {
-      setIsOverflowMenuOpen(false);
       toggleFontMenu();
       return;
     }
@@ -170,7 +155,6 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
 
     if (toolId === "note-link" || toolId === "fragment-link") {
       setIsFontMenuOpen(false);
-      setIsOverflowMenuOpen(false);
       setPopoverMode(null);
       if (toolId === "note-link") onChooseNote?.();
       else onCopyFragment?.();
@@ -179,13 +163,11 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
 
     if (toolId === "link" || toolId === "color" || toolId === "highlight") {
       setIsFontMenuOpen(false);
-      setIsOverflowMenuOpen(false);
       setPopoverMode(toPopoverMode(toolId));
       return;
     }
 
     setIsFontMenuOpen(false);
-    setIsOverflowMenuOpen(false);
     setPopoverMode(null);
 
     runEditorFormattingCommand(editor, toolId);
@@ -238,13 +220,11 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
 
   return (
     <div
-      className={`toolbar-wrap toolbar-layout-${toolbarLayoutMode}`}
-      data-layout={toolbarLayoutMode}
-      data-overflow-action-count={overflowActions.length}
+      className="toolbar-wrap toolbar-single-row"
+      data-overflow-action-count={0}
       data-visible-action-count={visibleActions.length}
-      ref={toolbarWrapRef}
     >
-      <div aria-label="Лента форматирования" className="toolbar" role="toolbar">
+      <div aria-label={translate("ui.09716d38ecad")} className="toolbar" role="toolbar">
         {visibleActions.map((tool, index) => {
           const disabled = isToolDisabled(tool.id, editor, toolbarState)
             || (tool.id === "note-link" && !onChooseNote) || (tool.id === "fragment-link" && !onCopyFragment);
@@ -253,7 +233,7 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
 
           if (tool.id === "font") {
             return (
-              <span className="toolbar-slot" key={tool.id}>
+              <span className="toolbar-slot toolbar-slot-font" key={tool.id}>
                 <span className="font-menu-anchor" data-toolbar-font-controls>
                   <button
                     aria-expanded={isFontMenuOpen}
@@ -280,11 +260,11 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
             <span className="toolbar-slot" key={tool.id}>
               <button
                 aria-label={tool.tip}
-                aria-description={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Сначала выделите фрагмент текста" : undefined}
+                aria-description={tool.id === "fragment-link" && toolbarState.selectionEmpty ? translate("ui.f2c614fd0b6a") : undefined}
                 aria-pressed={toolbarState.active[tool.id] === undefined ? undefined : toolbarState.active[tool.id]}
                 className={`tb ${toolbarState.active[tool.id] ? "active" : ""} ${tool.id === "ai" ? "ai" : ""}`}
                 data-toolbar-action={tool.id}
-                data-tooltip={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Ссылка на фрагмент: выделите текст" : tool.tip}
+                data-tooltip={tool.id === "fragment-link" && toolbarState.selectionEmpty ? translate("ui.4210e9741da6") : tool.tip}
                 disabled={disabled}
                 ref={tool.id === "ai" ? aiButtonRef : undefined}
                 onClick={() => {
@@ -314,67 +294,6 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
             </span>
           );
         })}
-        {overflowActions.length > 0 ? (
-          <span className="toolbar-overflow-slot">
-            <button
-              aria-expanded={isOverflowMenuOpen}
-              aria-haspopup="menu"
-              aria-label="Дополнительные инструменты форматирования"
-              className={`tb ${isOverflowMenuOpen ? "active" : ""}`}
-              data-tooltip="Дополнительные инструменты"
-              onClick={() => {
-                setIsAiMenuOpen(false);
-                setIsFontMenuOpen(false);
-                setIsOverflowMenuOpen((current) => !current);
-              }}
-              onMouseDown={(event) => event.preventDefault()}
-              ref={(node) => {
-                overflowButtonRef.current = node;
-                if (overflowActions.some((action) => action.id === "font")) {
-                  fontAnchorRef.current = node;
-                }
-              }}
-              type="button"
-            >
-              <Icon name="dots" />
-            </button>
-            <MenuPopover
-              anchorRef={overflowButtonRef}
-              ariaLabel="Дополнительные инструменты форматирования"
-              className="toolbar-overflow-menu"
-              isOpen={isOverflowMenuOpen}
-              onClose={() => setIsOverflowMenuOpen(false)}
-              preferredWidth={220}
-            >
-              {overflowActions.map((tool, index) => {
-                const isToggle = toolbarState.active[tool.id] !== undefined;
-                const previousTool = overflowActions[index - 1];
-                return (
-                  <Fragment key={tool.id}>
-                    {previousTool && previousTool.group !== tool.group ? (
-                      <span aria-hidden="true" className="toolbar-overflow-separator" role="separator" />
-                    ) : null}
-                    <button
-                      aria-checked={isToggle ? toolbarState.active[tool.id] : undefined}
-                      aria-description={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Сначала выделите фрагмент текста" : undefined}
-                      data-tooltip={tool.id === "fragment-link" && toolbarState.selectionEmpty ? "Ссылка на фрагмент: выделите текст" : undefined}
-                      data-toolbar-overflow-action={tool.id}
-                      disabled={isToolDisabled(tool.id, editor, toolbarState) || (tool.id === "note-link" && !onChooseNote) || (tool.id === "fragment-link" && !onCopyFragment)}
-                      onClick={() => runCommand(tool.id)}
-                      onMouseDown={(event) => event.preventDefault()}
-                      role={isToggle ? "menuitemcheckbox" : "menuitem"}
-                      type="button"
-                    >
-                      {tool.icon ? <Icon name={tool.icon} /> : <span className="toolbar-menu-action-label">{tool.label}</span>}
-                      <span>{toolbarMenuLabel(tool.tip)}</span>
-                      {toolbarState.active[tool.id] ? <Icon className="toolbar-menu-check" name="check" /> : null}
-                    </button>
-                  </Fragment>
-                );
-              })}
-            </MenuPopover>
-          </span>
-        ) : null}
       </div>
 
       {isFontMenuOpen ? createPortal(
@@ -390,22 +309,22 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
         document.body,
       ) : null}
 
-      {isAiMenuOpen ? (
+      {isAiMenuOpen ? createPortal(
         <div className="editor-ai-menu" ref={aiMenuRef} role="menu" style={aiMenuStyle ?? { visibility: "hidden" }}>
           <div className="editor-command-head">
-            <b>ИИ-помощник</b>
-            <button aria-label="Закрыть" className="editor-popover-close" onClick={() => setIsAiMenuOpen(false)} type="button">
+            <b>{translate("ui.66a1be70103c")}</b>
+            <button aria-label={translate("ui.a7a4033657e8")} className="editor-popover-close" onClick={() => setIsAiMenuOpen(false)} type="button">
               <Icon name="x" />
             </button>
           </div>
           <div className={`ai-disconnected-state ${aiStatus?.canUse ? "connected" : ""}`}>
-            <b>{aiStatus?.canUse ? `${aiStatus.providerName ?? "LLM"} · ${aiStatus.model ?? "model"}` : "ИИ-модель не подключена"}</b>
+            <b>{aiStatus?.canUse ? `${aiStatus.providerName ?? uiMessage(language, "aiModelLabel")} · ${aiStatus.model ?? uiMessage(language, "aiModelLabel")}` : uiMessage(language, "aiModelNotConnected")}</b>
             <span>
               {aiStatus?.canUse
                 ? selectedText
-                  ? "Действие будет применено к выделенному фрагменту."
-                  : "Выделите фрагмент или примените действие ко всей заметке после подтверждения."
-                : aiStatus?.message ?? "Подключите локальную или OpenAI-совместимую модель, чтобы использовать действия для выделения и текущей заметки."}
+                  ? translate("ui.7e5dabf9bbe0")
+                  : translate("ui.edeac079dda1")
+                : aiStatus ? localizeUiMessage(language, aiStatus.message) : translate("ui.02d9ac0f1215")}
             </span>
           </div>
           <div className="ai-menu-groups">
@@ -440,7 +359,7 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
           {pendingAiActionId !== undefined ? (
             <div aria-live="polite" className="ai-menu-progress" role="status">
               <span className="button-spinner" />
-              <span>ИИ обрабатывает запрос...</span>
+              <span>{translate("ui.534b2ed7db7b")}</span>
             </div>
           ) : null}
           {aiStatus ? (
@@ -452,10 +371,11 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
               }}
               type="button"
             >
-              {aiStatus.hasProvider ? "Настройки моделей" : "Подключить модель"}
+              {aiStatus.hasProvider ? translate("ui.f492ebb8eb33") : translate("ui.0258588f30ad")}
             </button>
           ) : null}
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
       {popoverMode ? (
@@ -472,10 +392,6 @@ export function FormattingToolbar({ onChooseNote, onCopyFragment, aiStatus, edit
       ) : null}
     </div>
   );
-}
-
-function toolbarMenuLabel(tip: string) {
-  return tip.replace(/\s*\([^)]*\)$/, "");
 }
 
 function toPopoverMode(toolId: EditorToolbarActionId): EditorCommandPopoverMode {

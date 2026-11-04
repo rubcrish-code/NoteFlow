@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readLocalizedSource as readFileSync } from "./helpers/readLocalizedSource";
 import { describe, it } from "node:test";
 
 function getThemeColor(css: string, theme: "dark" | "light", variableName: string) {
@@ -187,7 +187,7 @@ describe("editor UI polish contract", () => {
     const dataService = readFileSync("src/services/dataService.ts", "utf8");
     const toast = readFileSync("src/shared/Toast.tsx", "utf8");
 
-    assert.match(appShell, /Заметка сохранена\./);
+    assert.match(appShell, /"Заметка сохранена"/);
     assert.match(appShell, /Показать в проводнике/);
     assert.match(appShell, /revealExportedItem\(result\.path\)/);
     assert.match(dataService, /revealItemInDir/);

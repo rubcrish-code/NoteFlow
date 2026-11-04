@@ -10,7 +10,7 @@ import { classifyEditorLink } from "../src/features/editor/editorLinkClick";
 import { sanitizeMarkdownLinkHref, safeExternalLinkHref } from "../src/shared/safeLinkHref";
 import { captureFragmentAnchor, documentTextMap, resolveDocumentFragment, sourceSnapshotIsCurrent } from "../src/features/editor/fragmentNavigation";
 import { markdownToTiptapDoc, tiptapJsonToMarkdown, type EditorDocument, type EditorNode } from "../src/features/editor/markdownService";
-import { serializeEditorDocumentForStorage } from "../src/features/editor/editorContentSerializer";
+import { buildEditorDocumentFromStoredNoteContent, serializeEditorDocumentForStorage } from "../src/features/editor/editorContentSerializer";
 import { prepareMarkdownText } from "../src/features/settings/markdownImport";
 
 for (const symbol of ["я", "a", "😀", "👩🏽‍💻", "🇷🇺", "e\u0301", "👨‍👩‍👧‍👦"]) {
@@ -37,8 +37,8 @@ for (const color of TAG_COLOR_PALETTE) {
     assert.equal(tagColorStyle(stored)["--tag-color" as keyof ReturnType<typeof tagColorStyle>], color.hex);
   });
 }
-it("legacy green keeps green rather than the first teal family entry", () => assert.equal(getTagDisplayColor({ color: "green" }), "#1EA463"));
-it("editing a legacy custom tag never silently replaces its color", () => assert.equal(findTagPaletteItem({ color: "green", customColor: "#65A30D" }).hex, "#65A30D"));
+it("legacy green keeps green rather than the first teal family entry", () => assert.equal(getTagDisplayColor({ color: "green" }), "#86EFAC"));
+it("editing an unrelated custom tag never silently replaces its color", () => assert.equal(findTagPaletteItem({ color: "green", customColor: "#315F97" }).hex, "#315F97"));
 it("an unchanged historical long tag can change appearance but cannot be renamed over the limit", () => {
   const tag = { id: "legacy", color: "blue" as const, name: "я".repeat(40), count: 1 };
   assert.equal(validateTagName([tag], "legacy", tag.name), "");
@@ -50,17 +50,19 @@ function styleSignature(doc: EditorNode): unknown[] {
   return (doc.content ?? []).flatMap(styleSignature);
 }
 function roundtrip(doc: EditorDocument) {
-  const markdown = serializeEditorDocumentForStorage(doc).contentMarkdown;
-  const imported = prepareMarkdownText("Roundtrip.md", markdown).contentJson;
+  const saved = serializeEditorDocumentForStorage(doc);
+  const markdown = saved.contentMarkdown;
+  const imported = buildEditorDocumentFromStoredNoteContent({ contentJson: saved.editorDocument, contentMarkdown: markdown, plainText: saved.plainText,
+    contentSidecars: saved.contentSidecars.map(sidecar => ({ ...sidecar, createdAt: "", updatedAt: "" })) }).editorDocument;
   assert.deepEqual(styleSignature(imported), styleSignature(doc), markdown);
   return markdown;
 }
 for (const type of ["bold", "italic", "strike", "code", "underline", "highlight"]) {
-  it(`Markdown file export/import preserves partial ${type}`, () => {
+  it(`Markdown-first save/reopen preserves partial ${type}, including sidecar-only appearance`, () => {
     const doc: EditorDocument = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Это обычный текст, а это " }, { type: "text", text: "жирный фрагмент", marks: [{ type }] }, { type: "text", text: ", затем снова обычный текст" }] }] };
     const markdown = roundtrip(doc);
     if (type === "bold") assert.ok(markdown.includes("**жирный фрагмент**"));
-    if (type === "underline") assert.ok(markdown.includes("<u>"));
+    if (type === "underline") assert.ok(!markdown.includes("<u>"), "underline belongs to the sidecar, not invented Markdown");
   });
 }
 it("reproduces and fixes loss of every mark when a marked selection includes edge spaces", () => {
@@ -82,10 +84,15 @@ it("keeps empty paragraphs, lists, tables, callouts, images and code blocks", ()
   assert.deepEqual(styleSignature(output), styleSignature(doc));
   assert.deepEqual(output.content?.map((node) => node.type), doc.content?.map((node) => node.type));
 });
-it("bold plus partial underline P0 survives ten Markdown-only cycles without delimiter corruption", () => {
+it("bold plus partial underline P0 survives ten Markdown-plus-sidecar cycles without delimiter corruption", () => {
   let doc: EditorDocument = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Стоимость следующа", marks: [{ type: "bold" }] }, { type: "text", text: "я", marks: [{ type: "bold" }, { type: "underline" }] }, { type: "text", text: " -", marks: [{ type: "bold" }] }] }] };
   const expected = styleSignature(doc);
-  for (let i = 0; i < 10; i++) { const md = tiptapJsonToMarkdown(doc); assert.ok(!md.includes("****")); doc = markdownToTiptapDoc(md); assert.deepEqual(styleSignature(doc), expected); }
+  for (let i = 0; i < 10; i++) {
+    const saved = serializeEditorDocumentForStorage(doc); assert.ok(!saved.contentMarkdown.includes("****"));
+    doc = buildEditorDocumentFromStoredNoteContent({ contentJson: saved.editorDocument, contentMarkdown: saved.contentMarkdown, plainText: saved.plainText,
+      contentSidecars: saved.contentSidecars.map(sidecar => ({ ...sidecar, createdAt: "", updatedAt: "" })) }).editorDocument;
+    assert.deepEqual(styleSignature(doc), expected);
+  }
 });
 it("HTML extensions are inert data, never scripts, events or arbitrary styles", () => {
   const doc = markdownToTiptapDoc('<u onclick="alert(1)">Текст</u> <script>alert(1)</script> [x](javascript:alert%281%29)');

@@ -18,7 +18,7 @@ describe("LLM settings network operation lifecycle", () => {
     );
     assert.deepEqual(
       modelDiscoveryFeedbackFromConnectionTest({ status: "success", message: "Готово", models: [] }),
-      { state: "empty", message: "Endpoint доступен, но список моделей пуст" },
+      { state: "empty", message: "Сервер доступен, но список моделей пуст" },
     );
   });
 

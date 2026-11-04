@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readLocalizedSource as readFileSync } from "./helpers/readLocalizedSource";
 import { describe, it } from "node:test";
 import { EDITOR_AI_ACTION_GROUPS } from "../src/features/editor/editorAiActions";
 
@@ -107,7 +107,7 @@ describe("current note AI contract", () => {
   it("renders assistant Markdown safely and shows the current note title as source", () => {
     assert.match(noteChatSource, /<ChatMarkdown content=\{message\.text\} \/>/);
     assert.match(noteChatSource, /getNoteChatSourceTitle\(note\.title\)/);
-    assert.match(noteChatSource, /источник: «\{sourceTitle\}»/);
+    assert.match(noteChatSource, /источник: «\$\{sourceTitle\}»/);
     assert.doesNotMatch(noteChatSource, /источник: эта заметка/);
 
     assert.match(noteChatMarkdownSource, /markdownToTiptapDoc/);

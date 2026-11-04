@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import {
   useEffect,
   useRef,
@@ -69,7 +70,7 @@ export function calculateTableToolsPosition(tableRect: TableRect, viewportWidth:
   };
 }
 
-const unavailableTableActionMessage = "Действие недоступно для текущего выделения таблицы";
+const unavailableTableActionMessage = () => translate("ui.d5d7b9b89537");
 
 const cellPalette: Array<{ color: string; key: string }> = [
   { color: "#f8fafc", key: "slate" },
@@ -83,23 +84,24 @@ const cellPalette: Array<{ color: string; key: string }> = [
 ];
 
 const rowColumnCommands: Array<{ command: TableCommand; label: string }> = [
-  { command: "addRowBefore", label: "Строка выше" },
-  { command: "addRowAfter", label: "Строка ниже" },
-  { command: "addColumnBefore", label: "Колонка слева" },
-  { command: "addColumnAfter", label: "Колонка справа" },
+  { command: "addRowBefore", get label() { return translate("ui.39ebeecb0e49"); } },
+  { command: "addRowAfter", get label() { return translate("ui.2719e217f51d"); } },
+  { command: "addColumnBefore", get label() { return translate("ui.68e6b57cd287"); } },
+  { command: "addColumnAfter", get label() { return translate("ui.46e34abdde4d"); } },
 ];
 
 const structureCommands: Array<{ command: TableCommand; label: string }> = [
-  { command: "deleteRow", label: "Удалить строку" },
-  { command: "deleteColumn", label: "Удалить колонку" },
-  { command: "mergeCells", label: "Объединить" },
-  { command: "splitCell", label: "Разделить" },
-  { command: "toggleHeaderRow", label: "Шапка-строка" },
-  { command: "toggleHeaderColumn", label: "Шапка-колонка" },
-  { command: "toggleHeaderCell", label: "Шапка-ячейка" },
+  { command: "deleteRow", get label() { return translate("ui.21e358333395"); } },
+  { command: "deleteColumn", get label() { return translate("ui.b10dca9c1529"); } },
+  { command: "mergeCells", get label() { return translate("ui.8f27f05ca87a"); } },
+  { command: "splitCell", get label() { return translate("ui.b2c5d2870723"); } },
+  { command: "toggleHeaderRow", get label() { return translate("ui.d68f35fe3424"); } },
+  { command: "toggleHeaderColumn", get label() { return translate("ui.9e271f5d13fc"); } },
+  { command: "toggleHeaderCell", get label() { return translate("ui.8078faf31e6c"); } },
 ];
 
 export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
+  useInterfaceLanguage();
   const [anchorElement, setAnchorElement] = useState<HTMLElement | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [popoverPosition, setPopoverPosition] = useState<TableToolsPosition | null>(null);
@@ -241,7 +243,7 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
       captureTableSelection();
       return;
     }
-    onToast(unavailableTableActionMessage);
+    onToast(unavailableTableActionMessage());
   }
 
   function runCommand(command: TableCommand) {
@@ -276,7 +278,7 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
                             : toggleSelectedTableHeader("row", editor.state, (tr) => editor.view.dispatch(tr));
 
     if (!didRun) {
-      onToast(unavailableTableActionMessage);
+      onToast(unavailableTableActionMessage());
       return;
     }
     captureTableSelection();
@@ -289,7 +291,7 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
     restoreTableSelection();
     const didRun = setActiveTableEmphasizedBorders(editor, !getActiveTableEmphasizedBorders(editor.state));
     if (!didRun) {
-      onToast(unavailableTableActionMessage);
+      onToast(unavailableTableActionMessage());
       return;
     }
     captureTableSelection();
@@ -309,22 +311,20 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
       onPointerDown={stopInternalTableToolPointer}
       style={popoverStyle}
     >
-      <div className="table-tools-mini" role="toolbar" aria-label="Быстрые инструменты таблицы">
+      <div className="table-tools-mini" role="toolbar" aria-label={translate("ui.738a980ee878")}>
         <button ref={triggerRef} className="table-tools-trigger" aria-expanded={isMenuOpen} onClick={() => setIsMenuOpen((currentValue) => !currentValue)} type="button">
           <Icon name="table" />
-          <span>Таблица</span>
+          <span>{translate("ui.b7f18dd0a994")}</span>
           <Icon name="caret" />
         </button>
         <button className="table-tools-quick" onClick={() => runCommand("addRowAfter")} type="button">
-          + строка
-        </button>
+          {translate("ui.e44558338102")}</button>
         <button className="table-tools-quick" onClick={() => runCommand("addColumnAfter")} type="button">
-          + колонка
-        </button>
+          {translate("ui.4aeb4d064ba3")}</button>
       </div>
 
       {isMenuOpen ? (
-        <MenuPopover anchorRef={triggerRef} ariaLabel="Расширенные инструменты таблицы" className="table-tools-menu" isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} preferredWidth={380} maxHeight={520} role="dialog" initialFocusSelector="button:not([disabled])">
+        <MenuPopover anchorRef={triggerRef} ariaLabel={translate("ui.17e6bc3430e7")} className="table-tools-menu" isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} preferredWidth={380} maxHeight={520} role="dialog" initialFocusSelector="button:not([disabled])">
         <div className="table-tools-content" onMouseDown={preserveTableToolSelection} onPointerDown={stopInternalTableToolPointer}>
           <div className="table-tools-section">
             <button
@@ -333,18 +333,18 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
               onClick={toggleEmphasizedBorders}
               type="button"
             >
-              <span>Толстые границы</span>
+              <span>{translate("ui.04f3942380ae")}</span>
               <span aria-hidden="true" className="table-border-toggle-track">
                 <span />
               </span>
             </button>
           </div>
           <div className="table-tools-section">
-            <span className="table-tools-label">Цвет ячейки</span>
+            <span className="table-tools-label">{translate("ui.9820e0f28414")}</span>
             <div className="table-cell-colors">
               {cellPalette.map((item) => (
                 <button
-                  aria-label={`Цвет ячейки ${item.color}`}
+                  aria-label={translate("ui.8031102b5f2c", { p0: item.color })}
                   className={`table-color-swatch swatch-${item.key} ${tableState.cellBackground.toLowerCase() === item.color.toLowerCase() ? "active" : ""}`}
                   key={item.key}
                   onClick={() => applyCellBackground(item.color)}
@@ -352,12 +352,11 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
                 />
               ))}
               <button className="table-color-clear" onClick={() => applyCellBackground(null)} type="button">
-                Сброс
-              </button>
+                {translate("ui.14b4afa6ab38")}</button>
             </div>
           </div>
           <div className="table-tools-section">
-            <span className="table-tools-label">Строки и колонки</span>
+            <span className="table-tools-label">{translate("ui.9db12f4215e1")}</span>
             <div className="table-tools-grid">
               {rowColumnCommands.map((item) => (
                 <button key={item.command} onClick={() => runCommand(item.command)} type="button">
@@ -367,7 +366,7 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
             </div>
           </div>
           <div className="table-tools-section">
-            <span className="table-tools-label">Структура</span>
+            <span className="table-tools-label">{translate("ui.816655bd716f")}</span>
             <div className="table-tools-grid compact">
               {structureCommands.map((item) => (
                 <button key={item.command} onClick={() => runCommand(item.command)} type="button">
@@ -377,8 +376,7 @@ export function TableToolsPopover({ editor, onToast }: TableToolsPopoverProps) {
             </div>
           </div>
           <button className="table-delete-button" onClick={() => runCommand("deleteTable")} type="button">
-            Удалить таблицу
-          </button>
+            {translate("ui.877c9e9c0cba")}</button>
         </div>
         </MenuPopover>
       ) : null}

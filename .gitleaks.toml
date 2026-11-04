@@ -1,0 +1,12 @@
+title = "NoteFlow secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Hashed localization message IDs are not credentials; secret values in catalogs remain scanned"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)src/shared/i18n/(ru|en)\.json$''']
+regexTarget = "secret"
+regexes = ['''^ui\.[a-f0-9]{12}$''']

@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import { AlignmentType, BorderStyle, Document, ExternalHyperlink, HeadingLevel, ImageRun, LevelFormat, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType, type INumberingOptions, type ParagraphChild } from "docx";
 import type { EditorNode } from "../editor/markdownService";
 import { color, inlineText, type ExportDocument } from "./exportDocument";
@@ -56,14 +57,14 @@ export async function generateDocx(input: ExportDocument): Promise<Uint8Array> {
       })) })) })];
       if (node.type === "image") {
         const image = input.images.find((item) => item.uri === node.attrs?.src);
-        if (!image) return [new Paragraph(`[Изображение: ${node.attrs?.alt ?? ""}]`)];
+        if (!image) return [new Paragraph(translate("ui.7c50632bb0d0", { p0: String(node.attrs?.alt ?? "") }))];
         const width = Math.min(600, Number(node.attrs?.width) || image.width);
         return [new Paragraph({ alignment: node.attrs?.alignment === "center" ? AlignmentType.CENTER : node.attrs?.alignment === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT,
-          children: [new ImageRun({ type: image.mime === "image/jpeg" ? "jpg" : "png", data: image.bytes, transformation: { width, height: width * image.height / image.width }, altText: { title: String(node.attrs?.alt ?? "Изображение"), description: "", name: "Изображение" } })] })];
+          children: [new ImageRun({ type: image.mime === "image/jpeg" ? "jpg" : "png", data: image.bytes, transformation: { width, height: width * image.height / image.width }, altText: { title: String(node.attrs?.alt ?? translate("ui.e5f534734c36")), description: "", name: translate("ui.e5f534734c36") } })] })];
       }
       if (node.type === "horizontalRule") return [new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: "B0B0B0" } } })];
       if (["blockquote", "callout", "detailsBlock", "detailsContent", "listItem", "taskItem"].includes(node.type)) return blocks(node.content ?? [], depth);
-      if (node.type === "fileAttachment") return [new Paragraph(`[Файл: ${node.attrs?.fileName ?? node.attrs?.name ?? "Вложение"}]`)];
+      if (node.type === "fileAttachment") return [new Paragraph(translate("ui.e2296fbb224e", { p0: String(node.attrs?.fileName ?? node.attrs?.name ?? "Вложение") }))];
       return [paragraph(node)];
     });
   }

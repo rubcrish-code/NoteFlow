@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useCallback, useRef, useState } from "react";
 import type { AppSection } from "../../app/types";
 import { Icon, type IconName } from "../../shared/Icon";
@@ -11,15 +12,15 @@ interface NavItem {
 }
 
 const primaryNavItems: NavItem[] = [
-  { section: "notes", label: "Все заметки", icon: "doc" },
-  { section: "projects", label: "Проекты", icon: "folder" },
-  { section: "rag", label: "ИИ-чат по базе", icon: "chat" },
+  { section: "notes", get label() { return translate("ui.4bcfa3fb168f"); }, icon: "doc" },
+  { section: "projects", get label() { return translate("ui.5029f02d0a94"); }, icon: "folder" },
+  { section: "rag", get label() { return translate("ui.ea00b57395d6"); }, icon: "chat" },
 ];
 
 const libraryNavItems: NavItem[] = [
-  { section: "tags", label: "Теги", icon: "tag" },
-  { section: "archive", label: "Архив", icon: "archive" },
-  { section: "settings", label: "Настройки", icon: "gear" },
+  { section: "tags", get label() { return translate("ui.a2800083983f"); }, icon: "tag" },
+  { section: "archive", get label() { return translate("ui.3c54b5e783ef"); }, icon: "archive" },
+  { section: "settings", get label() { return translate("ui.985b5e0f2ccf"); }, icon: "gear" },
 ];
 
 interface MainSidebarProps {
@@ -34,6 +35,7 @@ interface MainSidebarProps {
 }
 
 export function MainSidebar({ activeSection, collapsed = false, localProfileName, onEditLocalProfile, onNavigate, onNewNote, onToggleCollapse }: MainSidebarProps) {
+  useInterfaceLanguage();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const profileAnchorRef = useRef<HTMLButtonElement>(null);
   const closeProfileMenu = useCallback(() => setIsProfileOpen(false), []);
@@ -67,29 +69,29 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
         </div>
         {onToggleCollapse ? (
           <button
-            aria-label={collapsed ? "Развернуть боковую панель" : "Свернуть боковую панель"}
+            aria-label={collapsed ? translate("ui.376e3c87e982") : translate("ui.4149b3a67e50")}
             aria-expanded={!collapsed}
             className="col"
-            data-tooltip={collapsed ? "Развернуть боковую панель" : "Свернуть боковую панель"}
+            data-tooltip={collapsed ? translate("ui.376e3c87e982") : translate("ui.4149b3a67e50")}
             onClick={onToggleCollapse}
-            title={collapsed ? "Развернуть боковую панель" : "Свернуть боковую панель"}
+            title={collapsed ? translate("ui.376e3c87e982") : translate("ui.4149b3a67e50")}
             type="button"
           >
             <Icon name={collapsed ? "forward" : "back"} />
           </button>
         ) : (
-          <button aria-label="К заметкам" className="col" data-tooltip="К заметкам" onClick={() => onNavigate("notes")} type="button">
+          <button aria-label={translate("ui.2ecb88f70e4d")} className="col" data-tooltip={translate("ui.2ecb88f70e4d")} onClick={() => onNavigate("notes")} type="button">
             <Icon name="back" />
           </button>
         )}
       </div>
 
-      <button aria-label="Новая заметка" className="new-btn sidebar-action" data-tooltip="Новая заметка" onClick={onNewNote} type="button">
+      <button aria-label={translate("ui.f653f99e1096")} className="new-btn sidebar-action" data-tooltip={translate("ui.f653f99e1096")} onClick={onNewNote} type="button">
         <Icon name="plus" />
-        <span className="sidebar-action-label">Новая заметка</span>
+        <span className="sidebar-action-label">{translate("ui.f653f99e1096")}</span>
       </button>
 
-      <nav aria-label="Основная навигация">
+      <nav aria-label={translate("ui.8fff0bba4454")}>
         {primaryNavItems.map(renderNavItem)}
         {libraryNavItems.map(renderNavItem)}
       </nav>
@@ -98,7 +100,7 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
 
       <div className="profile-wrap">
         <button
-          aria-label={`${localProfileName}, локальный профиль`}
+          aria-label={translate("ui.2a043acd1ff0", { p0: localProfileName })}
           aria-expanded={isProfileOpen}
           aria-haspopup="menu"
           className="sb-user sidebar-profile"
@@ -110,12 +112,12 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
           <div className="av">{getLocalProfileInitial(localProfileName)}</div>
           <div className="info">
             <div className="nm">{localProfileName}</div>
-            <div className="em">Локальный профиль</div>
+            <div className="em">{translate("ui.91616dd5b60d")}</div>
           </div>
         </button>
         <MenuPopover
           anchorRef={profileAnchorRef}
-          ariaLabel="Меню профиля"
+          ariaLabel={translate("ui.41660eb54f99")}
           className="profile-pop show profile-pop-portal"
           isOpen={isProfileOpen}
           maxHeight={240}
@@ -130,8 +132,7 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
             role="menuitem"
             type="button"
           >
-            Изменить имя
-          </button>
+            {translate("ui.02e4f11754bc")}</button>
           <button
             onClick={() => {
               onNavigate("settings");
@@ -140,9 +141,8 @@ export function MainSidebar({ activeSection, collapsed = false, localProfileName
             role="menuitem"
             type="button"
           >
-            Открыть настройки
-          </button>
-          <div className="profile-local-note">NoteFlow не использует онлайн-аккаунт. Данные остаются на этом устройстве.</div>
+            {translate("ui.7c8ef82d31bc")}</button>
+          <div className="profile-local-note">{translate("ui.0b80394a206c")}</div>
         </MenuPopover>
       </div>
     </aside>

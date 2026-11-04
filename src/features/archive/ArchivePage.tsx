@@ -1,3 +1,5 @@
+import { localizeUiMessage } from "../../shared/uiMessages";
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AppSection, ArchiveItem } from "../../app/types";
 import type { Note } from "../../app/types";
@@ -24,6 +26,7 @@ interface ArchivePageProps {
 }
 
 export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote, onRestoreItem, onToast, sidebar }: ArchivePageProps) {
+  useInterfaceLanguage();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "projects" | "notes">("all");
   const [openProject, setOpenProject] = useState<ArchiveItem | null>(null);
@@ -43,8 +46,8 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
     return archiveItems.filter((item) => (filter === "all" || (filter === "projects" ? item.kind === "Проект" : item.kind === "Заметка"))
       && (!normalizedQuery || [item.title, item.kind, item.archivedAt].join(" ").toLowerCase().includes(normalizedQuery)));
   }, [archiveItems, filter, query]);
-  const emptyTitle = query ? "Ничего не найдено" : filter === "projects" ? "Архивных проектов нет" : filter === "notes" ? "Архивных заметок нет" : "Архив пуст";
-  const emptyDescription = query ? "Попробуйте изменить запрос." : filter === "projects" ? "Архивированные проекты появятся здесь." : filter === "notes" ? "Архивированные заметки появятся здесь." : "Здесь появятся архивированные заметки и проекты.";
+  const emptyTitle = query ? translate("ui.480fae1c4bc9") : filter === "projects" ? translate("ui.d04a67f86bad") : filter === "notes" ? translate("ui.2d1bdb49eb93") : translate("ui.4129619c52e8");
+  const emptyDescription = query ? translate("ui.02caa7ff5aa7") : filter === "projects" ? translate("ui.04cdffd5d24a") : filter === "notes" ? translate("ui.dd70255ddf8f") : translate("ui.1d37b11e582b");
 
   async function showProject(item: ArchiveItem) {
     const requestId = ++viewRequestRef.current;
@@ -56,7 +59,7 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
       const loaded = await listArchivedProjectNotes(item.id);
       if (requestId === viewRequestRef.current) setProjectNotes(loaded);
     } catch {
-      if (requestId === viewRequestRef.current) setActionError("Не удалось открыть архивный проект.");
+      if (requestId === viewRequestRef.current) setActionError(translate("ui.b34b531bc3f3"));
     } finally {
       if (requestId === viewRequestRef.current) setLoadingProject(false);
     }
@@ -69,7 +72,7 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
       const loaded = await getNote(noteId);
       if (requestId === viewRequestRef.current) setPreviewNote(loaded);
     } catch {
-      if (requestId === viewRequestRef.current) setActionError("Не удалось открыть заметку.");
+      if (requestId === viewRequestRef.current) setActionError(translate("ui.67782d762a73"));
     }
   }
 
@@ -80,7 +83,7 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
       await onRestoreItem(item);
       if (openProject?.id === item.id) { setOpenProject(null); setPreviewNote(null); }
     } catch {
-      setActionError("Не удалось восстановить элемент архива.");
+      setActionError(translate("ui.5d60aa5095e7"));
     } finally {
       setActionBusy(false);
     }
@@ -97,7 +100,7 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
       if (openProject?.id === pendingDelete.id) { setOpenProject(null); setPreviewNote(null); }
       setPendingDelete(null);
     } catch {
-      setActionError("Не удалось удалить элемент архива.");
+      setActionError(translate("ui.7264e525df9f"));
     } finally {
       setActionBusy(false);
     }
@@ -105,35 +108,35 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
 
   const deleteDescription = pendingDelete?.kind === "Проект"
     ? (pendingDelete.noteCount ?? 0) > 0
-      ? `Вместе с проектом будут удалены все заметки внутри него: ${formatRussianCount(pendingDelete.noteCount ?? 0, NOTE_COUNT_FORMS)}. Это действие нельзя отменить.`
-      : "Проект не содержит заметок. Это действие нельзя отменить."
-    : "После удаления заметку не получится восстановить.";
+      ? translate("ui.278c9110fb7d", { p0: formatRussianCount(pendingDelete.noteCount ?? 0, NOTE_COUNT_FORMS) })
+      : translate("ui.fd96b5c1050d")
+    : translate("ui.2c9af9829beb");
 
   return (
     <PageShell activeSection="archive" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
       <div className="archive-page-content">
-        <div className="page-title">Архив</div>
-        <div className="page-subtitle">Архивные заметки можно восстановить в любой момент</div>
+        <div className="page-title">{translate("ui.3c54b5e783ef")}</div>
+        <div className="page-subtitle">{translate("ui.f7543843b53e")}</div>
         <label className="search archive-search">
           <Icon name="search" />
-          <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Поиск в архиве…" type="search" value={query} />
+          <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder={translate("ui.5a1f39aa4d55")} type="search" value={query} />
         </label>
-        <div aria-label="Фильтр архива" className="archive-filters" role="group">
-          {([ ["all", "Все"], ["projects", "Проекты"], ["notes", "Заметки"] ] as const).map(([value, label]) => (
+        <div aria-label={translate("ui.d2424853632d")} className="archive-filters" role="group">
+          {([ ["all", translate("ui.215816bf4210")], ["projects", translate("ui.5029f02d0a94")], ["notes", translate("ui.04a18b51cdc2")] ] as const).map(([value, label]) => (
             <button aria-pressed={filter === value} className={filter === value ? "active" : ""} key={value} onClick={() => { viewRequestRef.current += 1; setFilter(value); setOpenProject(null); setPreviewNote(null); }} type="button">{label}</button>
           ))}
         </div>
-        {actionError && !pendingDelete ? <div className="field-error" role="alert">{actionError}</div> : null}
+        {actionError && !pendingDelete ? <div className="field-error" role="alert">{localizeUiMessage(getInterfaceLanguage(), actionError)}</div> : null}
         {openProject || previewNote ? (
           <div className="archive-project-view">
-            <button className="secondary-btn compact" onClick={() => { viewRequestRef.current += 1; if (previewNote) setPreviewNote(null); else setOpenProject(null); }} type="button"><Icon name="back" /> Назад</button>
-            <div className="archive-project-heading"><b>{previewNote?.title ?? openProject?.title}</b><span>Архив · только просмотр</span></div>
+            <button className="secondary-btn compact" onClick={() => { viewRequestRef.current += 1; if (previewNote) setPreviewNote(null); else setOpenProject(null); }} type="button"><Icon name="back" /> {" " + translate("ui.1a9fb1f3cf8e")}</button>
+            <div className="archive-project-heading"><b>{previewNote?.title ?? openProject?.title}</b><span>{translate("ui.eb18a38275f3")}</span></div>
             {previewNote ? <div className="archive-note-preview"><ChatMarkdown content={previewNote.contentMarkdown || previewNote.plainText} /></div> : (
               <div className="archive-project-notes">
-                {loadingProject ? <span role="status">Загружаем заметки…</span> : projectNotes.map((note) => (
+                {loadingProject ? <span role="status">{translate("ui.220afb988b40")}</span> : projectNotes.map((note) => (
                   <button key={note.id} onClick={() => void showNote(note.id)} style={archiveAccent(note.tagColor, note.tagCustomColor)} type="button"><Icon name="doc" /><span>{note.title}</span><Icon name="forward" /></button>
                 ))}
-                {!loadingProject && projectNotes.length === 0 ? <span>В проекте нет заметок.</span> : null}
+                {!loadingProject && projectNotes.length === 0 ? <span>{translate("ui.cd08b118b6be")}</span> : null}
               </div>
             )}
           </div>
@@ -145,14 +148,14 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
               <span className="archive-row-icon"><Icon name={item.kind === "Проект" ? "folder" : "doc"} /></span>
               <div>
                 <b>{item.title}</b>
-                <div className="archive-date">{item.kind} · Архивировано {formatDisplayDate(item.archivedAt)}{item.kind === "Проект" ? ` · ${formatRussianCount(item.noteCount ?? 0, NOTE_COUNT_FORMS)}` : ""}</div>
+                <div className="archive-date">{item.kind === "Проект" ? translate("ui.f45edf006851") : translate("ui.025e14681a4c")} {" " + translate("ui.4681c061351d") + " "}{formatDisplayDate(item.archivedAt)}{item.kind === "Проект" ? ` · ${formatRussianCount(item.noteCount ?? 0, NOTE_COUNT_FORMS)}` : ""}</div>
               </div>
             </button>
             <div className="archive-row-actions">
               <button
                 aria-expanded={openItemMenuId === item.id}
                 aria-haspopup="menu"
-                aria-label={`Действия с «${item.title}»`}
+                aria-label={translate("ui.58d81050aa29", { p0: item.title })}
                 className="row-menu-trigger"
                 onClick={(event) => {
                   itemMenuAnchorRef.current = event.currentTarget;
@@ -164,14 +167,14 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
               </button>
               <MenuPopover
                 anchorRef={itemMenuAnchorRef}
-                ariaLabel={`Действия с «${item.title}»`}
+                ariaLabel={translate("ui.58d81050aa29", { p0: item.title })}
                 className="row-actions-menu"
                 isOpen={openItemMenuId === item.id}
                 onClose={closeItemMenu}
                 preferredWidth={210}
               >
-                <button disabled={actionBusy} onClick={() => { closeItemMenu(); void restoreItem(item); }} role="menuitem" type="button">Восстановить</button>
-                <button className="danger" onClick={() => { setOpenItemMenuId(""); setPendingDelete(item); }} role="menuitem" type="button">Удалить</button>
+                <button disabled={actionBusy} onClick={() => { closeItemMenu(); void restoreItem(item); }} role="menuitem" type="button">{translate("ui.76f55a988f8a")}</button>
+                <button className="danger" onClick={() => { setOpenItemMenuId(""); setPendingDelete(item); }} role="menuitem" type="button">{translate("ui.be99b1361201")}</button>
               </MenuPopover>
             </div>
           </div>
@@ -196,20 +199,18 @@ export function ArchivePage({ archiveItems, onDeleteItem, onNavigate, onNewNote,
           footer={(
             <div className="new-note-actions">
               <button className="secondary-btn" disabled={actionBusy} onClick={() => setPendingDelete(null)} type="button">
-                Отмена
-              </button>
+                {translate("ui.8fbe9b75cbdf")}</button>
               <button className="danger-btn" disabled={actionBusy} onClick={() => void deletePermanently()} type="button">
-                Удалить
-              </button>
+                {translate("ui.be99b1361201")}</button>
             </div>
           )}
           onClose={() => { setPendingDelete(null); setActionError(""); }}
           open
           size="compact"
-          title={`Удалить заметку «${pendingDelete.title}»?`}
+          title={translate("ui.55390b546ba2", { p0: pendingDelete.title })}
           titleId="delete-archive-title"
         >
-          {actionError ? <div className="field-error" role="alert">{actionError}</div> : null}
+          {actionError ? <div className="field-error" role="alert">{localizeUiMessage(getInterfaceLanguage(), actionError)}</div> : null}
         </ModalShell>
       ) : null}
     </PageShell>

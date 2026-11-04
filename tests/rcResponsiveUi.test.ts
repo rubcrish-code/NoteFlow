@@ -50,11 +50,11 @@ describe("RC responsive UI contracts", () => {
         new Set(EDITOR_TOOLBAR_ACTIONS.map((action) => action.id)),
       );
     }
-    assert.match(editorCss, /\.toolbar\s*\{[^}]*overflow:\s*hidden/);
+    assert.match(editorCss, /\.toolbar\s*\{[^}]*overflow:\s*visible/);
     assert.match(toolbarSource, /isFontMenuOpen \? createPortal\(/);
     assert.match(appCss, /\.font-format-popover\s*\{[^}]*position:\s*fixed/);
     assert.match(toolbarSource, /onClick=\{toggleFontMenu\}/);
-    assert.match(toolbarSource, /onClick=\{\(\) => runCommand\(tool\.id\)\}/);
+    assert.match(toolbarSource, /runCommand\(tool\.id\)/);
     assert.match(toolbarSource, /if \(toolId === "font"\)/);
   });
 });
@@ -147,13 +147,11 @@ describe("Aa toolbar behavior", () => {
     assert.equal(document.querySelector(".font-format-popover"), null);
   });
 
-  it("opens the same font controls from overflow at narrow widths", async () => {
-    toolbarWidth = 60;
+  it("keeps font controls direct in the supported ultra-compact ribbon", async () => {
+    toolbarWidth = 820;
     await renderToolbar();
-    const overflow = container.querySelector<HTMLButtonElement>('[aria-label="Дополнительные инструменты форматирования"]');
-    assert.ok(overflow);
-    await act(async () => overflow.click());
-    const fontAction = document.querySelector<HTMLButtonElement>('[data-toolbar-overflow-action="font"]');
+    assert.equal(container.querySelector('[aria-label="Дополнительные инструменты форматирования"]'), null);
+    const fontAction = document.querySelector<HTMLButtonElement>('[data-toolbar-action="font"]');
     assert.ok(fontAction);
     await act(async () => fontAction.click());
     assert.ok(document.querySelector('.font-format-popover[role="dialog"]'));

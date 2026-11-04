@@ -1,3 +1,4 @@
+import { translate } from "../shared/i18n";
 export interface PendingSaveVersion {
   expectedContentVersion: number;
   noteId: string;
@@ -62,7 +63,7 @@ export class PendingNoteSaves<T extends PendingSaveVersion> {
   }
 
   async deleteAfterInFlight<TResult>(remove: () => Promise<TResult>, noteIds?: readonly string[]): Promise<TResult> {
-    if (this.suspended) throw new Error("Операция с заметками уже выполняется");
+    if (this.suspended) throw new Error(translate("ui.e416c3b972b0"));
     this.suspended = true;
     try {
       // Do not flush unsent drafts. Settle only the write already dispatched.

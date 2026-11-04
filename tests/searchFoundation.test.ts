@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readLocalizedSource as readFileSync } from "./helpers/readLocalizedSource";
 import { describe, it } from "node:test";
 import { getNextSearchResultIndex, getSearchTerms, splitSearchText } from "../src/features/notes/searchText.ts";
 
