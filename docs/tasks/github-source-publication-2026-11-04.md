@@ -39,7 +39,7 @@ were exact hashed localization IDs, not credentials. The committed scanner
 configuration permits only those ID-shaped matches in the two catalogs, not
 their message values. A synthetic credential negative control in a catalog was
 detected as expected. Final curated-source and exact staged-tree scans both
-passed with zero findings. The staged source inventory contains 526 files.
+passed with zero findings. The current curated source inventory contains 527 files.
 
 No real profile, API key, personal note or local user database is used by this
 validation. Screenshots and Markdown fixtures contain synthetic/example content.
@@ -89,11 +89,11 @@ element's own scroll width. No existing geometry limit was relaxed.
 | Check | Result |
 | --- | --- |
 | TypeScript typecheck | PASS |
-| Frontend | 1007 passed, 76 suites, 0 failed/skipped |
+| Frontend | 1009 passed, 76 suites, 0 failed/skipped |
 | Production frontend build | PASS; existing large-chunk warnings remain |
 | Rust formatting/check/Clippy (`-D warnings`) | PASS |
 | Rust tests | 292 passed, 11 ignored, 0 failed |
-| FTS benchmark, 10,000 notes | PASS; query 0.6637 ms; indexing 12.47 s |
+| FTS benchmark, 10,000 notes | PASS; query 0.6605 ms; indexing 12.24 s |
 | Metadata benchmark, 10,000 notes | PASS; latest 3 ms, count 1 ms |
 | Full npm audit / production npm audit | 0 vulnerabilities / 0 vulnerabilities |
 | Windows Tauri MSI/NSIS build | PASS; local artifacts only, not published |
@@ -155,9 +155,12 @@ Node.js 24 and the validated Rust 1.96.0 toolchain are used for reproducibility.
 It runs on pull requests and on the target release branch. No force push,
 protection bypass, tag rewrite or GitHub Release operation is permitted.
 
-All local gates have passed. The staged diff contains 297 changed paths: 118
+All local gates have passed. The initial source commit contains 297 changed paths: 118
 added source/documentation/test/resource files, 161 modified files and the 18
 legacy installer index removals. Every local legacy installer hash is unchanged.
+The CI isolation follow-up adds a Vite configuration change and one test file;
+the complete PR therefore contains 299 changed paths (119 added, 162 modified,
+18 legacy installer index removals).
 Staging also detected one extra EOF blank line in a previously untracked
 Markdown source file; only that blank line was removed, without logic changes.
 
@@ -175,6 +178,21 @@ No merge was performed. The coordinator now records unexpected server exits,
 fails immediately if an owned server dies and prints the server logs. CI retains
 only bounded diagnostic logs and result ledgers for seven days, not browser
 profiles, binaries or caches. A fresh passing hosted run is still mandatory.
+
+The diagnostic run (`41916983041`) identified the exact exception: the Vite
+watcher hit `EBUSY` on a locked Chromium `Cookies` file inside the generated QA
+TEMP directory. This was a synthetic browser profile, not the user's profile.
+The default cold dependency discovery also crawled saved QA trees and generated
+Rust HTML assets, reproducing a cold-start timeout locally on the runner's exact
+Node 24.22.2 runtime.
+
+`vite.config.ts` now discovers only `index.html` and source QA HTML files, and
+does not watch `releases/**` or `src-tauri/**`. It does not suppress watcher
+errors or disable source HMR. Two tests validate these structured config
+boundaries. Cold startup with the same Node, project TEMP and forced optimizer
+now passes in under six seconds. The emitted production JS asset names/content
+hashes remained unchanged (16 chunks). All local frontend/Rust/security/packaging
+gates were rerun successfully; hosted confirmation on this fix is required.
 
 ## Remaining QA Limitations
 

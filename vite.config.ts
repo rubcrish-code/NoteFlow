@@ -8,7 +8,10 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
   worker: { format: "es" },
-  optimizeDeps: { include: ["docx", "pdfmake/build/pdfmake", "pdfmake/build/vfs_fonts"] },
+  optimizeDeps: {
+    entries: ["index.html", "scripts/qa/*.html"],
+    include: ["docx", "pdfmake/build/pdfmake", "pdfmake/build/vfs_fonts"],
+  },
 
   build: {
     rollupOptions: {
@@ -45,7 +48,7 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/releases/**"],
     },
   },
 }));
