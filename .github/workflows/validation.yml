@@ -70,6 +70,18 @@ jobs:
         run: npx playwright install msedge
       - name: Full browser regression
         run: npm run test:browser
+      - name: Preserve failed browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-diagnostics-${{ github.run_id }}
+          path: |
+            releases/qa/regression-*/*.log
+            releases/qa/regression-*/results.json
+            releases/qa/regression-*/manifest.json
+            releases/qa/regression-*/out/**/results.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Tauri application build (no release publication)
         run: npm run tauri -- build --no-bundle
       - name: Diff check

@@ -31,7 +31,9 @@ async function command(name,executable,args,options={}) {
 async function serve(name,args,url) {
   const log=await open(`${output}/${name}.log`,'w');
   const child=spawn(process.execPath,[vite,...args],{cwd:root,env,stdio:['ignore',log.fd,log.fd]});
-  servers.push({child,log});
+  const server={name,child,log,stopping:false};servers.push(server);
+  child.once('error',error=>console.error(`${name} server error: ${error.message}`));
+  child.once('exit',(code,signal)=>{if(!server.stopping)console.error(`${name} server exited unexpectedly: code=${code}, signal=${signal}`);});
   for(let attempt=0;attempt<120;attempt++) {
     if(child.exitCode!==null) throw new Error(`${name} exited before readiness`);
     try {if((await fetch(url)).ok)return;} catch { /* The owned server is still starting. */ }
@@ -138,9 +140,13 @@ try {
     const summary={name,pass:!failure,cases,seconds:(Date.now()-started)/1000,...(failure?{failure}:{})};
     counts.push(summary); await writeFile(`${output}/results.json`,JSON.stringify({counts},null,2)); console.log(JSON.stringify(summary));
     if(failure) console.error((await readFile(`${output}/${name}.log`,'utf8')).split('\n').slice(-60).join('\n'));
+    assert.ok(servers.every(({child})=>child.exitCode===null && child.signalCode===null),'An owned QA server exited; see its diagnostic log');
   }
   assert.ok(counts.every(result=>result.pass),`Browser failures; see ${output}/results.json`);
   console.log(`Browser regression PASS: ${counts.length} suites; results: ${output}`);
+} catch(error) {
+  for(const {name} of servers)console.error(`--- ${name} server log ---\n${(await readFile(`${output}/${name}.log`,'utf8')).split('\n').slice(-120).join('\n')}`);
+  throw error;
 } finally {
-  for(const {child,log} of servers.reverse()) {if(child.exitCode===null)child.kill();await log.close();}
+  for(const server of servers.reverse()) {server.stopping=true;if(server.child.exitCode===null)server.child.kill();await server.log.close();}
 }

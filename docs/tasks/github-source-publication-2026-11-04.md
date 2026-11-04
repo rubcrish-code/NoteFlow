@@ -165,6 +165,17 @@ Publication and merge remain gated on green PR CI.
 The PR and final handoff record the resulting commit and CI URLs; this report
 does not use an impossible self-referencing commit hash.
 
+### CI Infrastructure Follow-Up
+
+The first hosted run (`41913349691`) passed secret scanning, frontend checks,
+dependency audit, Rust formatting/check/tests and Clippy, but its browser dev
+server stopped responding during the first suite. Production-preview suites
+still ran successfully; dev-server suites failed with connection refused.
+No merge was performed. The coordinator now records unexpected server exits,
+fails immediately if an owned server dies and prints the server logs. CI retains
+only bounded diagnostic logs and result ledgers for seven days, not browser
+profiles, binaries or caches. A fresh passing hosted run is still mandatory.
+
 ## Remaining QA Limitations
 
 - No new Computer Use/native smoke is claimed in this publication task.
