@@ -4,7 +4,7 @@
 
 NoteFlow is a local-first desktop app for notes, with a Markdown-first rich editor, projects, tags, full-text search, and optional AI powered by local or external models. Writing and organizing notes does not require an account or an internet connection.
 
-**Current release: 1.0.0-rc.6.** This is an unsigned Windows Release Candidate, not the final 1.0 release. This README describes the current source code, which includes corrections newer than the RC.6 tag. These changes require a local build until separately validated packages are published; existing RC.6 downloads are unchanged.
+**Current release: 1.0.0-rc.7.** This is an unsigned Windows Release Candidate, not the final 1.0 release. RC.7 packages the post-RC.6 editor, Markdown, performance and localization corrections. Existing RC.6 downloads are unchanged.
 
 ## Features
 
@@ -34,8 +34,8 @@ Screenshots show the browser-rendered application frontend with synthetic QA dat
 
 ## Install on Windows
 
-1. Open [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases) and select `1.0.0-rc.6`.
-2. The recommended installer is **`NoteFlow_1.0.0-rc.6_x64-setup.exe`** (NSIS, per-user installation). English and Russian MSI packages are alternatives for machine-wide installation. Normally, choose one installer type.
+1. Open [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases) and select `1.0.0-rc.7`.
+2. The recommended installer is **`NoteFlow_1.0.0-rc.7_x64-setup.exe`** (NSIS, per-user installation). English and Russian MSI packages are alternatives for machine-wide installation. Normally, choose one installer type.
 3. Optionally compare the download with `SHA256SUMS.txt`, using `Get-FileHash -Algorithm SHA256` in PowerShell.
 4. Run the installer and open NoteFlow. Back up important profile data before upgrading.
 
@@ -98,6 +98,6 @@ See [Development](docs/en/development.md), [Architecture](docs/en/architecture.m
 - macOS native behavior, signing and notarization require validation on a Mac.
 - The approved exact tag palette includes four light-theme text/background pairs below WCAG AA for small text; see the [palette report](docs/tasks/classic-vibrant-soft-tags.md).
 
-[Documentation index](docs/en/README.md) · [Troubleshooting](docs/en/troubleshooting.md) · [RC.6 release notes](docs/release/rc-1.0.0-rc.6-notes.md)
+[Documentation index](docs/en/README.md) · [Troubleshooting](docs/en/troubleshooting.md) · [RC.7 release notes](docs/release/rc-1.0.0-rc.7-notes.md)
 
 Historical reports and design/specification sources are retained. No license grant is implied: this repository currently has no project license file.

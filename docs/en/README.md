@@ -2,7 +2,7 @@
 
 [English README](../../README.md) | [Русский README](../../README.ru.md)
 
-These guides describe the current `1.0.0-rc.6` source code and post-RC6 corrections. They distinguish implemented behavior from published installers, requirements and unvalidated platform claims.
+These guides describe `1.0.0-rc.7`, including the post-RC6 corrections. They distinguish implemented behavior from requirements and unvalidated platform claims.
 
 | Guide | Purpose |
 | --- | --- |

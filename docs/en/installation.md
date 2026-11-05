@@ -4,16 +4,16 @@
 
 ## Windows
 
-Download packages only from the project’s [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases). The published RC is `1.0.0-rc.6`. Later source commits and documentation do not update existing installer downloads; build from source to try corrections newer than the release tag.
+Download packages only from the project’s [GitHub Releases](https://github.com/rubcrish-code/NoteFlow/releases). The current RC is `1.0.0-rc.7`, which includes the post-RC6 corrections. Existing RC.6 downloads have not been replaced.
 
-- **Recommended:** NSIS `NoteFlow_1.0.0-rc.6_x64-setup.exe`, installed for the current user.
+- **Recommended:** NSIS `NoteFlow_1.0.0-rc.7_x64-setup.exe`, installed for the current user.
 - **Alternative:** English or Russian x64 MSI, installed for the computer.
 - **QA only:** standalone EXE. Do not treat it as the normal distribution package.
 
 Use one installer type for everyday installation. Back up important data before an upgrade. Compare SHA-256 against the release’s `SHA256SUMS.txt` when verifying a download:
 
 ```powershell
-Get-FileHash -LiteralPath .\NoteFlow_1.0.0-rc.6_x64-setup.exe -Algorithm SHA256
+Get-FileHash -LiteralPath .\NoteFlow_1.0.0-rc.7_x64-setup.exe -Algorithm SHA256
 ```
 
 The RC is unsigned. SmartScreen may report an unknown publisher; do not disable Windows security. Installer clean-install, upgrade, uninstall, reinstall and coexistence results must be recorded for the exact package on an isolated account or VM. Windows 10 validation is separate from Windows 11 validation.

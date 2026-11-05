@@ -2,7 +2,7 @@
 
 [Documentation](README.md)
 
-This is a guide, not authorization to publish. Publishing source changes through a reviewed pull request does not publish new application packages or create a release. The current application version is `1.0.0-rc.6`; stable 1.0 requires separate release QA and maintainer approval.
+This is a guide, not authorization to publish. Publishing source changes through a reviewed pull request does not publish new application packages or create a release. The current application version is `1.0.0-rc.7`; stable 1.0 requires separate release QA and maintainer approval.
 
 ## Before packaging
 
@@ -15,7 +15,7 @@ This is a guide, not authorization to publish. Publishing source changes through
 
 Use the existing [Windows checklist](../release/windows-release-checklist.md), `scripts/release-windows.ps1` and `scripts/stage-windows-artifacts.ps1` according to their preconditions. The release script’s clean-tree requirement must not be weakened merely to get a pass on a corrective branch.
 
-MSI needs a numeric ProductVersion. The current rc.6 maps to `0.99.6`, below final `1.0.0`; retain the established UpgradeCode and canonical product identifier `com.noteflow.desktop`. Read the actual configuration before a future bump, rather than copying an old RC example.
+MSI needs a numeric ProductVersion. The current rc.7 maps to `0.99.7`, above rc.6 (`0.99.6`) and below final `1.0.0`; retain the established UpgradeCode and canonical product identifier `com.noteflow.desktop`. Read the actual configuration before a future bump, rather than copying an old RC example.
 
 Stage final NSIS setup, ru-RU MSI, en-US MSI, local QA EXE and `SHA256SUMS.txt` under the ignored versioned release directory. Hash the final bytes and compare staged files against build outputs. Publish the three installers and checksum list only after approval; standalone EXE is for QA.
 
