@@ -85,6 +85,7 @@ it("lost pointer capture ends resize mode and stops subsequent uncaptured deltas
   await act(async () => pointer("pointerdown", 100));
   assert.equal(handle.classList.contains("dragging"), true);
   await act(async () => pointer("pointermove", 120));
+  await act(async () => new Promise<void>((resolve) => dom.window.requestAnimationFrame(() => resolve())));
   assert.deepEqual(deltas, [20]);
   await act(async () => pointer("lostpointercapture", 120));
   assert.equal(handle.classList.contains("dragging"), false);

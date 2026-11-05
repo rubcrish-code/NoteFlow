@@ -1,3 +1,4 @@
+import { translate } from "./i18n";
 import { graphemeLength } from "./graphemes";
 
 export const ENTITY_NAME_MAX_LENGTH = 25;
@@ -11,7 +12,7 @@ export function entityNameLength(value: string) {
 }
 
 export function validateEntityName(value: string) {
-  if (!value.trim()) return "Введите название";
-  if (entityNameLength(value) > ENTITY_NAME_MAX_LENGTH) return "Максимум 25 символов";
+  if (!value.trim()) return translate("ui.bce24a210886");
+  if (entityNameLength(value) > ENTITY_NAME_MAX_LENGTH) return translate("ui.2a3e66d775e2");
   return "";
 }

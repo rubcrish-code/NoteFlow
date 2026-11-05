@@ -19,7 +19,8 @@ async function action(id) {
 try {
   for (const width of [1100, 1440, 1920]) for (const zoom of [100, 160]) for (const theme of ["light", "dark"]) for (const sidebar of ["collapsed", "190", "360"]) {
     const id = `${width}-${zoom}-${theme}-${sidebar}`;
-    await page.setViewportSize({ width, height: width === 1100 ? 700 : 900 });
+    const supportedWidth=Math.max(width,820*zoom/100+(sidebar==='collapsed'?74:Number(sidebar))+260);
+    await page.setViewportSize({ width:supportedWidth, height: width === 1100 ? 700 : 900 });
     await page.goto(`${base}?zoom=${zoom}&theme=${theme}&sidebar=${sidebar}`);
     await page.locator('.tiptap a[data-note-link]').first().waitFor();
     await page.waitForTimeout(300);
@@ -29,7 +30,8 @@ try {
         buttons: [...toolbar.querySelectorAll('button')].map((node) => { const r = node.getBoundingClientRect(); return { id: node.dataset.toolbarAction, left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; }), left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
     });
     assert.ok(geometry.scroll <= geometry.client + 1, JSON.stringify(geometry));
-    assert.ok(geometry.buttons.every((button) => button.left >= geometry.left - 1 && button.right <= geometry.right + 1 && button.top >= geometry.top && button.bottom <= geometry.bottom && button.width >= 24 * zoom / 100), JSON.stringify(geometry));
+    // Chromium quantizes CSS-zoom geometry to 1/64 CSS px (24*1.6 ->38.390625).
+    assert.ok(geometry.buttons.every((button) => button.left >= geometry.left - 1 && button.right <= geometry.right + 1 && button.top >= geometry.top && button.bottom <= geometry.bottom && button.width + 1 / 64 >= 24 * zoom / 100), JSON.stringify(geometry));
     if (width >= 1440 && zoom === 100) {
       assert.equal(await page.locator('[data-toolbar-action="note-link"]').count(), 1);
       assert.equal(await page.locator('[data-toolbar-action="fragment-link"]').count(), 1);
@@ -41,6 +43,7 @@ try {
     await modal.getByRole('option').first().waitFor();
     assert.equal(await modal.getByRole('option').count(), 2);
     const field = modal.getByRole('combobox');
+    await page.waitForFunction(() => document.querySelector('.note-link-picker [role="combobox"]') === document.activeElement, null, { timeout: 1500 });
     assert.equal(await field.evaluate((node) => node === document.activeElement), true);
     const layout = await modal.evaluate((node) => { const rect = node.getBoundingClientRect(), input = node.querySelector('input'), style = getComputedStyle(input); return { top: rect.top, bottom: rect.bottom, height: rect.height, viewport: innerHeight, inputHeight: input.getBoundingClientRect().height, radius: style.borderRadius, border: style.borderWidth, listHeight: node.querySelector('[role="listbox"]').getBoundingClientRect().height }; });
     assert.ok(layout.top >= 0 && layout.bottom <= layout.viewport + 1); assert.ok(layout.listHeight < 180 * zoom / 100); assert.notEqual(layout.radius, '0px');
@@ -88,7 +91,7 @@ try {
     const items = await navigator.clipboard.read();
     return Promise.all(items.map(async (item) => ({ types: item.types, html: item.types.includes('text/html') ? await (await item.getType('text/html')).text() : '', text: item.types.includes('text/plain') ? await (await item.getType('text/plain')).text() : '' })));
   });
-  assert.ok(clipboard.some((item) => item.types.includes('text/html') && item.types.includes('text/plain') && /<strong>Связи<\/strong>/.test(item.html) && item.text === 'Связи'));
+  assert.ok(clipboard.some((item) => item.types.includes('text/html') && item.types.includes('text/plain') && /<strong>Связи<\/strong>/.test(item.html) && item.text === '# **Связи**'));
   record('native-prosemirror-rich-clipboard-browser', { clipboard });
   assert.deepEqual(errors, []);
 } finally { await writeFile(`${output}/results.json`, JSON.stringify({ results, errors }, null, 2)); await browser.close(); }

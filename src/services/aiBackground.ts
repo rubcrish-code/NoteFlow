@@ -1,3 +1,4 @@
+import { translate } from "../shared/i18n";
 import { Channel, isTauri } from "@tauri-apps/api/core";
 import { invoke } from "./safeInvoke";
 
@@ -41,14 +42,14 @@ export class AiBackground<T> {
     const requestId = crypto.randomUUID(); const token = new AbortController(); this.tokens.set(key, token);
     this.jobs.set(key, { requestId, phase: "retrieving", question, userMessageId, text: "", error: "" });
     this.listeners.forEach((listener) => listener());
-    const check = () => { if (token.signal.aborted || this.get(key)?.requestId !== requestId) throw new Error("Запрос ИИ остановлен"); };
+    const check = () => { if (token.signal.aborted || this.get(key)?.requestId !== requestId) throw new Error(translate("ui.8e7391a0a35c")); };
     try {
       const result = await task({ check, update: (patch) => this.update(key, requestId, patch), control: { requestId, onChunk: (chunk) => {
         if (!token.signal.aborted) this.update(key, requestId, { text: chunk.reset ? chunk.text : (this.get(key)?.text ?? "") + chunk.text });
       } } });
       check(); this.update(key, requestId, { phase: "success", result });
     } catch (error) {
-      this.update(key, requestId, { phase: token.signal.aborted ? "stopped" : "error", text: "", error: token.signal.aborted ? "Запрос ИИ остановлен" : error instanceof Error ? error.message : "Не удалось получить ответ модели" });
+      this.update(key, requestId, { phase: token.signal.aborted ? "stopped" : "error", text: "", error: token.signal.aborted ? translate("ui.8e7391a0a35c") : error instanceof Error ? error.message : translate("ui.bed18cdc5e11") });
     } finally { if (this.get(key)?.requestId === requestId) this.tokens.delete(key); }
     return true;
   }

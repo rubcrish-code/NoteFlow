@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type PointerEvent, type Ref } from "react";
 import { cropPixels, intrinsicPoint, renderImageDocument, type AnnotationTool, type ImageAnnotation, type ImagePoint, type ImageSize } from "./imageEditorDocument";
 import type { Rect } from "./imageGeometry";
@@ -21,13 +22,14 @@ interface ImageAnnotationCanvasProps {
   ref?: Ref<ImageAnnotationCanvasHandle>;
 }
 const tools: Array<{ label: string; value: CanvasTool; icon: IconName }> = [
-  { label: "Перемещение", value: "move", icon: "hand" },
-  { label: "Карандаш", value: "pen", icon: "pen" }, { label: "Маркер", value: "marker", icon: "highlight" },
-  { label: "Линия", value: "line", icon: "minus" }, { label: "Стрелка", value: "arrow", icon: "annotationArrow" },
-  { label: "Прямоугольник", value: "rect", icon: "rectangle" }, { label: "Текст", value: "text", icon: "annotationText" },
+  { get label() { return translate("ui.0d11f9998965"); }, value: "move", icon: "hand" },
+  { get label() { return translate("ui.b46d14555e56"); }, value: "pen", icon: "pen" }, { get label() { return translate("ui.09715de08400"); }, value: "marker", icon: "highlight" },
+  { get label() { return translate("ui.d637da5ece15"); }, value: "line", icon: "minus" }, { get label() { return translate("ui.6cd1a9189488"); }, value: "arrow", icon: "annotationArrow" },
+  { get label() { return translate("ui.1a285a39bba0"); }, value: "rect", icon: "rectangle" }, { get label() { return translate("ui.3091aca226ef"); }, value: "text", icon: "annotationText" },
 ];
 
 export function ImageAnnotationCanvas({ image, size, crop, annotations, onCommit, onUpdate, onBusyChange, ref }: ImageAnnotationCanvasProps) {
+  useInterfaceLanguage();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const draftRef = useRef<PointerDraft | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -130,22 +132,22 @@ export function ImageAnnotationCanvas({ image, size, crop, annotations, onCommit
   } as CSSProperties : undefined;
   return <div className="image-annotation-tool">
     <div className="image-editor-toolbar">
-      <div className="image-editor-segmented" role="toolbar" aria-label="Инструменты рисования">
-        {tools.map((item) => <button aria-label={item.label} title={item.value === "move" ? "Перемещение элементов" : item.label} aria-pressed={tool === item.value} className={`image-drawing-tool ${tool === item.value ? "active" : ""}`} key={item.value}
+      <div className="image-editor-segmented" role="toolbar" aria-label={translate("ui.3108d28610b3")}>
+        {tools.map((item) => <button aria-label={item.label} title={item.value === "move" ? translate("ui.c0013ab1dda8") : item.label} aria-pressed={tool === item.value} className={`image-drawing-tool ${tool === item.value ? "active" : ""}`} key={item.value}
           disabled={dragging || text !== null} onClick={() => { clearSelection(); setTool(item.value); }} type="button"><Icon name={item.icon} /></button>)}
       </div>
-      <label className="image-editor-color">Цвет<input type="color" value={color} onChange={(event) => setColor(event.currentTarget.value)} /></label>
-      <label className="image-editor-range drawing-stroke-range" style={{ "--drawing-color": color } as CSSProperties}>Толщина<input aria-label="Толщина" type="range" min="2" max="18" value={lineWidth} onChange={(event) => setLineWidth(Number(event.currentTarget.value))} /><output>{lineWidth}</output></label>
+      <label className="image-editor-color">{translate("ui.92ab62ad6f3c")}<input type="color" value={color} onChange={(event) => setColor(event.currentTarget.value)} /></label>
+      <label className="image-editor-range drawing-stroke-range" style={{ "--drawing-color": color } as CSSProperties}>{translate("ui.3c149a80bb08")}<input aria-label={translate("ui.3c149a80bb08")} type="range" min="2" max="18" value={lineWidth} onChange={(event) => setLineWidth(Number(event.currentTarget.value))} /><output>{lineWidth}</output></label>
     </div>
     <div className="image-annotation-stage"><div className="image-annotation-surface" style={{ "--image-editor-aspect": cropPixels(size, crop).width / cropPixels(size, crop).height } as CSSProperties}>
-      <canvas ref={canvasRef} aria-label="Холст рисования" data-tool={tool} data-selected={selectedIndex !== null} data-dragging={dragging} tabIndex={0}
+      <canvas ref={canvasRef} aria-label={translate("ui.b1602cd8b098")} data-tool={tool} data-selected={selectedIndex !== null} data-dragging={dragging} tabIndex={0}
         onKeyDown={(event) => { if (event.key === "Escape" && clearSelection()) { event.preventDefault(); event.stopPropagation(); } }} onPointerDown={start} onPointerMove={move} onPointerUp={(event) => finish(event)}
         onPointerCancel={(event) => finish(event, true)} onLostPointerCapture={(event) => finish(event, true)} />
       {text ? <form className="image-annotation-text-entry" style={textPosition} onSubmit={(event) => { event.preventDefault(); confirmText(); }}>
-        <input aria-label="Текст на изображении" autoFocus value={text.value} onChange={(event) => setText({ ...text, value: event.currentTarget.value })}
+        <input aria-label={translate("ui.d3a50553eab4")} autoFocus value={text.value} onChange={(event) => setText({ ...text, value: event.currentTarget.value })}
           onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setText(null); } }} />
-        <button aria-label="Добавить текст" className="secondary-btn" type="submit">OK</button>
-        <button aria-label="Отменить текст" className="secondary-btn" type="button" onClick={() => setText(null)}>Отмена</button>
+        <button aria-label={translate("ui.d3802682f11b")} className="secondary-btn" type="submit">OK</button>
+        <button aria-label={translate("ui.67589d1853bd")} className="secondary-btn" type="button" onClick={() => setText(null)}>{translate("ui.8fbe9b75cbdf")}</button>
       </form> : null}
     </div></div>
   </div>;

@@ -1,3 +1,4 @@
+import { translate } from "./i18n";
 export interface ChatComposerStateInput {
   disabled?: boolean;
   isSubmitting?: boolean;
@@ -20,7 +21,7 @@ export function getChatComposerState({ disabled = false, isSubmitting = false, v
   return {
     canSubmit: !disabled && !isSubmitting && value.trim().length > 0,
     inputDisabled: disabled,
-    submitLabel: isSubmitting ? "Отправляем…" : "Отправить",
+    submitLabel: isSubmitting ? translate("ui.899dce11fb2c") : translate("ui.ceb68a9287da"),
   };
 }
 

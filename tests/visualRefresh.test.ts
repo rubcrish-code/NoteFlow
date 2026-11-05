@@ -34,7 +34,8 @@ describe("P2.0A lightweight visual foundation", () => {
   });
 
   it("preserves the complete toolbar registry and one-row overflow partition", () => {
-    assert.equal(EDITOR_TOOLBAR_ACTIONS.length, 30);
+    assert.equal(EDITOR_TOOLBAR_ACTIONS.length, 31);
+    assert.ok(EDITOR_TOOLBAR_ACTIONS.some((action) => action.id === "table"));
     assert.ok(EDITOR_TOOLBAR_ACTIONS.some((action) => action.id === "note-link"));
     assert.ok(EDITOR_TOOLBAR_ACTIONS.some((action) => action.id === "fragment-link"));
     for (const width of [280, 560, 980, 1440]) {

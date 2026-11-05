@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import type { TagColor, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
@@ -8,7 +9,7 @@ import { EntityNameCounter } from "../../shared/EntityNameCounter";
 
 export interface TagEditorValue {
   color: TagColor;
-  customColor: string;
+  customColor?: string;
   name: string;
 }
 
@@ -22,6 +23,7 @@ interface TagEditorModalProps {
 }
 
 export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: TagEditorModalProps) {
+  useInterfaceLanguage();
   const initialPaletteItem = useMemo(() => tag ? findTagPaletteItem(tag) : DEFAULT_TAG_PALETTE_ITEM, [tag]);
   const [draftName, setDraftName] = useState(tag?.name ?? "");
   const [selectedColorId, setSelectedColorId] = useState(initialPaletteItem.id);
@@ -41,6 +43,8 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
 
   const palette = initialPaletteItem.id === "current" ? [initialPaletteItem, ...TAG_COLOR_PALETTE] : TAG_COLOR_PALETTE;
   const selectedColor = palette.find((item) => item.id === selectedColorId) ?? initialPaletteItem;
+  const validationError = validateTagName(tags, tag?.id, draftName);
+  const visibleError = error || (draftName.trim() ? validationError : "");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -54,14 +58,14 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
     setIsSaving(true);
     try {
       await onSubmit({
-        color: selectedColor.color,
-        customColor: selectedColor.hex,
-        name: normalizeTagName(draftName),
+        color: tag && selectedColor.id === initialPaletteItem.id ? tag.color : selectedColor.color,
+        customColor: tag && selectedColor.id === initialPaletteItem.id ? tag.customColor : selectedColor.hex,
+        name: draftName === tag?.name ? draftName : normalizeTagName(draftName),
       });
       onClose();
     } catch (submitError) {
       const message = submitError instanceof Error ? submitError.message : String(submitError);
-      setError(message.includes("существует") ? "Тег с таким названием уже существует" : "Не удалось сохранить тег. Попробуйте ещё раз.");
+      setError(message.includes("существует") ? translate("ui.e1c7d27e2582") : translate("ui.ab436ee04db5"));
     } finally {
       setIsSaving(false);
     }
@@ -72,12 +76,12 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
       backdropClassName="modal-backdrop"
       className="tag-editor-dialog"
       closeDisabled={isSaving}
-      description={mode === "create" ? "Название и цвет помогут быстро находить связанные заметки." : "Изменения применятся ко всем заметкам с этим тегом."}
+      description={mode === "create" ? translate("ui.287280941c16") : translate("ui.58fcf6d444e1")}
       footer={(
         <div className="new-note-actions">
-          <button className="secondary-btn" disabled={isSaving} onClick={onClose} type="button">Отмена</button>
-          <button className="primary-btn" disabled={isSaving || Boolean(validateTagName(tags, tag?.id, draftName))} form="tag-editor-form" type="submit">
-            {isSaving ? "Сохраняем…" : mode === "create" ? "Создать тег" : "Сохранить"}
+          <button className="secondary-btn" disabled={isSaving} onClick={onClose} type="button">{translate("ui.8fbe9b75cbdf")}</button>
+          <button className="primary-btn" disabled={isSaving || Boolean(validationError)} form="tag-editor-form" type="submit">
+            {isSaving ? translate("ui.9c27c381dd8b") : mode === "create" ? translate("ui.cddfa0cf8597") : translate("ui.b4d30cae5289")}
           </button>
         </div>
       )}
@@ -85,14 +89,17 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
       onClose={onClose}
       open={open}
       size="compact"
-      title={mode === "create" ? "Новый тег" : "Редактировать тег"}
+      title={mode === "create" ? translate("ui.764e4b9bd472") : translate("ui.f9ffa8578a42")}
       titleId="tag-editor-title"
     >
       <form className="tag-editor-form" id="tag-editor-form" onSubmit={(event) => void handleSubmit(event)}>
-        <label className="field">
-          Название
+        <div className="field">
+          <label htmlFor="tag-editor-name">{translate("ui.0918b4ba9268")}</label>
           <input
-            aria-invalid={Boolean(error)}
+            id="tag-editor-name"
+            aria-describedby="tag-editor-feedback"
+            aria-invalid={Boolean(visibleError)}
+            disabled={isSaving}
             onChange={(event) => {
               setDraftName(event.currentTarget.value);
               setError("");
@@ -100,11 +107,11 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
             ref={inputRef}
             value={draftName}
           />
-        </label>
-        <EntityNameCounter value={draftName} />
+          <EntityNameCounter id="tag-editor-feedback" value={draftName} error={visibleError} legacy={draftName === tag?.name} />
+        </div>
         <fieldset className="tag-editor-colors">
-          <legend>Цвет</legend>
-          <div aria-label="Цвет тега" className="tag-editor-palette" role="radiogroup">
+          <legend>{translate("ui.92ab62ad6f3c")}</legend>
+          <div aria-label={translate("ui.5e834ad6e28b")} className="tag-editor-palette" role="radiogroup">
             {palette.map((item) => {
               const selected = item.id === selectedColor.id;
               return (
@@ -113,13 +120,14 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
                   aria-label={item.label}
                   className={selected ? "selected" : ""}
                   data-tooltip={item.label}
+                  disabled={isSaving}
                   key={item.id}
                   onClick={() => {
                     setSelectedColorId(item.id);
-                    setError("");
                   }}
                   role="radio"
-                  style={{ "--tag-swatch-color": item.hex } as CSSProperties}
+                  style={{ "--tag-swatch-light-color": item.hex, "--tag-swatch-text": item.foreground,
+                    "--tag-swatch-dark-color": item.darkBackground, "--tag-swatch-dark-text": item.darkForeground } as CSSProperties}
                   type="button"
                 >
                   {selected ? <Icon name="check" /> : null}
@@ -128,7 +136,6 @@ export function TagEditorModal({ mode, onClose, onSubmit, open, tag, tags }: Tag
             })}
           </div>
         </fieldset>
-        {error ? <div className="field-error" role="alert">{error}</div> : null}
       </form>
     </ModalShell>
   );

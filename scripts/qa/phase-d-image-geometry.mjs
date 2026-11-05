@@ -151,16 +151,26 @@ try {
     await page.waitForTimeout(180);
     assert.deepEqual(errors, []); console.log(`${width}x${height}@${zoom} ${theme}: PASS ${JSON.stringify(pixels)}`); cases++; await page.close();
   }
-  for (const [width, height] of [[800, 1200], [800, 800], [4096, 3072], [64, 48]]) {
-    const page = await browser.newPage({ viewport: { width: 1100, height: 700 } });
+  for (const [width, height, viewportHeight = 700] of [[800, 1200], [800, 800], [4096, 3072], [64, 48], [64, 48, 900], [64, 48, 1100]]) {
+    const page = await browser.newPage({ viewport: { width: 1100, height: viewportHeight } });
     await page.goto(`http://127.0.0.1:1420/scripts/qa/phase-d-image-fixture.html?width=${width}&height=${height}`);
     await page.locator(".image-crop-layer").waitFor();
     await page.getByRole("button", { name: "Рисование", exact: true }).click();
     await page.getByRole("button", { name: "Прямоугольник", exact: true }).click();
     const canvas = page.locator(".image-annotation-surface canvas"); await canvas.scrollIntoViewIfNeeded();
+    assert.equal(await canvas.evaluate((element) => element.getContext("2d")
+      .getImageData(0, 0, element.width, element.height).data
+      .some((value, index) => index % 4 === 2 && value > 0)), false, "the unannotated red/green fixture has no blue pixels");
     const box = await canvas.boundingBox();
     await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2); await page.mouse.down();
     await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.6, { steps: 5 }); await page.mouse.up();
+    await page.waitForFunction(() => {
+      const element = document.querySelector(".image-annotation-surface canvas");
+      return element.getContext("2d").getImageData(0, 0, element.width, element.height).data
+        .some((value, index) => index % 4 === 2 && value > 0);
+    });
+    assert.equal(await canvas.getAttribute("data-selected"), "false", "the reference bitmap must not include a selection overlay");
+    let reference = await canvas.evaluate((element) => element.toDataURL("image/png"));
     await page.getByRole("button", { name: "Обрезка", exact: true }).click();
     let expectedWidth = width;
     for (const pass of [1, 2]) {
@@ -170,18 +180,38 @@ try {
       const handle = await page.getByRole("button", { name: "Изменить область обрезки справа", exact: true }).boundingBox();
       await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2); await page.mouse.down();
       await page.mouse.move(layer.x + layer.width * 0.8, layer.y + layer.height / 2, { steps: 5 }); await page.mouse.up();
-      expectedWidth = await page.locator(".image-crop-rect").evaluate((element, bitmapWidth) => Math.round(parseFloat(element.style.width) / 100 * bitmapWidth), expectedWidth);
+      const crop = await page.locator(".image-crop-rect").evaluate((element) => ({
+        x: parseFloat(element.style.left), y: parseFloat(element.style.top),
+        width: parseFloat(element.style.width), height: parseFloat(element.style.height),
+      }));
+      assert.equal(crop.x, 0); assert.equal(crop.y, 0); assert.equal(crop.height, 100);
+      expectedWidth = Math.round(crop.width / 100 * expectedWidth);
       await page.getByRole("button", { name: "Применить", exact: true }).click();
-      const pixels = await page.locator("#qa-result").evaluate(async (element) => {
+      const pixels = await page.locator("#qa-result").evaluate(async (element, { reference, expectedWidth, height }) => {
         await element.decode(); const canvas = document.createElement("canvas"); canvas.width = element.naturalWidth; canvas.height = element.naturalHeight;
         const context = canvas.getContext("2d"); context.drawImage(element, 0, 0);
-        const bytes = context.getImageData(0, 0, canvas.width, canvas.height).data;
-        return { width: canvas.width, height: canvas.height, blue: bytes.some((value, index) => index % 4 === 2 && value > 120 && bytes[index - 2] < 120) };
-      });
-      assert.equal(pixels.width, expectedWidth); assert.equal(pixels.height, height); assert.ok(pixels.blue, `${width}x${height} lost annotation after crop ${pass}`);
+        const actual = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        const source = new Image(); source.src = reference; await source.decode();
+        canvas.width = source.naturalWidth; canvas.height = source.naturalHeight; context.drawImage(source, 0, 0);
+        const expected = context.getImageData(0, 0, expectedWidth, height).data;
+        const digest = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+          .map((value) => value.toString(16).padStart(2, "0")).join("");
+        // Tiny upscaled images have subpixel strokes. Compare every retained pixel,
+        // not an arbitrary saturation threshold that depends on the canvas renderer.
+        return { width: element.naturalWidth, height: element.naturalHeight,
+          expectedHash: await digest(expected), actualHash: await digest(actual),
+          blue: actual.some((value, index) => index % 4 === 2 && value > 0),
+          missingInkMatches: expected.length === actual.length && expected.every((value, index) => value === (index % 4 === 2 ? 0 : actual[index])),
+        };
+      }, { reference, expectedWidth, height });
+      assert.equal(pixels.width, expectedWidth); assert.equal(pixels.height, height);
+      assert.ok(pixels.blue, `${width}x${height} lost annotation after crop ${pass}`);
+      assert.equal(pixels.actualHash, pixels.expectedHash, `${width}x${height} changed retained RGBA pixels after crop ${pass}`);
+      assert.equal(pixels.missingInkMatches, false, "the pixel oracle must reject removal of the blue annotation");
+      reference = await page.locator("#qa-result").getAttribute("src");
       if (pass === 1) await page.getByRole("button", { name: "Редактор", exact: true }).click();
     }
-    console.log(`${width}x${height} draw -> crop -> reopen -> repeat crop: PASS`); cases++; await page.close();
+    console.log(`${width}x${height} in 1100x${viewportHeight} draw -> crop -> reopen -> repeat crop: PASS`); cases++; await page.close();
   }
 } finally { await browser.close(); }
 console.log(`${cases} real-canvas browser cases passed. Screenshots: ${output}`);

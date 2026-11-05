@@ -1,9 +1,10 @@
+import { translate, useInterfaceLanguage } from "./i18n";
 import { useImperativeHandle, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { Icon } from "./Icon";
 import { MenuPopover } from "./MenuPopover";
 import { getFocusableElements } from "./uiA11y";
 
-export const calendarMonths = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+export function getCalendarMonths() { return [translate("ui.c0dcf58dba31"), translate("ui.80abfad3c478"), translate("ui.869d8f1dd2aa"), translate("ui.6201bc1f385f"), translate("ui.b118c950a3f3"), translate("ui.326e32f8daef"), translate("ui.8721bc334237"), translate("ui.e3131072a647"), translate("ui.5d0c534ee151"), translate("ui.ff7cf15aabf8"), translate("ui.7c255450cd78"), translate("ui.f3c529c3c23d")]; }
 const MIN_YEAR = 100, MAX_YEAR = 9999, YEAR_PAGE_SIZE = 24;
 export interface CalendarCaptionHandle { dismiss: () => boolean; isOpen: () => boolean }
 interface CalendarCaptionProps {
@@ -14,6 +15,8 @@ interface CalendarCaptionProps {
 }
 
 export function CalendarCaption({ monthIndex, year, onChange, ref }: CalendarCaptionProps) {
+  useInterfaceLanguage();
+  const calendarMonths = getCalendarMonths();
   const [open, setOpen] = useState<"month" | "year" | null>(null);
   const openRef = useRef(open);
   openRef.current = open;
@@ -56,23 +59,23 @@ export function CalendarCaption({ monthIndex, year, onChange, ref }: CalendarCap
   const validQuery = /^\d{3,4}$/.test(yearQuery) && Number(yearQuery) >= MIN_YEAR && Number(yearQuery) <= MAX_YEAR;
   return <>
     <div className="date-picker-month-year">
-      <button className="date-picker-caption-trigger" aria-label="Месяц" aria-expanded={open === "month"} aria-haspopup="dialog" ref={monthRef} type="button" onClick={() => toggle("month")}><span className="date-picker-caption-label">{calendarMonths[monthIndex]}</span><Icon name="caret" /></button>
-      <button className="date-picker-caption-trigger" aria-label="Год" aria-expanded={open === "year"} aria-haspopup="dialog" ref={yearRef} type="button" onClick={() => toggle("year")}><span className="date-picker-caption-label">{year}</span><Icon name="caret" /></button>
+      <button className="date-picker-caption-trigger" aria-label={translate("ui.c90866545244")} aria-expanded={open === "month"} aria-haspopup="dialog" ref={monthRef} type="button" onClick={() => toggle("month")}><span className="date-picker-caption-label">{calendarMonths[monthIndex]}</span><Icon name="caret" /></button>
+      <button className="date-picker-caption-trigger" aria-label={translate("ui.d3b04324f281")} aria-expanded={open === "year"} aria-haspopup="dialog" ref={yearRef} type="button" onClick={() => toggle("year")}><span className="date-picker-caption-label">{year}</span><Icon name="caret" /></button>
     </div>
-    <MenuPopover anchorRef={open === "month" ? monthRef : yearRef} ariaLabel={open === "month" ? "Выбор месяца" : "Выбор года"}
+    <MenuPopover anchorRef={open === "month" ? monthRef : yearRef} ariaLabel={open === "month" ? translate("ui.b1cf6347ef83") : translate("ui.c932b4c6eea0")}
       className="date-caption-popover" role="dialog" isOpen={open !== null} onClose={close} preferredWidth={300} maxHeight={390}
       initialFocusSelector={`button[data-choice="${open === "month" ? monthIndex : year >= yearStart && year < yearStart + YEAR_PAGE_SIZE ? year : yearStart}"]`}>
       <div data-date-picker="true" ref={gridRef} onKeyDown={handleKeyDown}>
-        <div className="calendar-caption-title">{open === "month" ? "Месяц" : "Год"}</div>
+        <div className="calendar-caption-title">{open === "month" ? translate("ui.c90866545244") : translate("ui.d3b04324f281")}</div>
         {open === "year" ? <>
           <div className="calendar-year-navigation">
-            <button aria-label="Предыдущие годы" className="secondary-btn" disabled={yearStart === MIN_YEAR} type="button" onClick={() => setYearStart(clampPage(yearStart - YEAR_PAGE_SIZE))}><Icon name="back" /></button>
+            <button aria-label={translate("ui.2caf671180cb")} className="secondary-btn" disabled={yearStart === MIN_YEAR} type="button" onClick={() => setYearStart(clampPage(yearStart - YEAR_PAGE_SIZE))}><Icon name="back" /></button>
             <span>{yearStart}–{yearStart + YEAR_PAGE_SIZE - 1}</span>
-            <button aria-label="Следующие годы" className="secondary-btn" disabled={yearStart + YEAR_PAGE_SIZE - 1 === MAX_YEAR} type="button" onClick={() => setYearStart(clampPage(yearStart + YEAR_PAGE_SIZE))}><Icon name="forward" /></button>
+            <button aria-label={translate("ui.2590f9343a06")} className="secondary-btn" disabled={yearStart + YEAR_PAGE_SIZE - 1 === MAX_YEAR} type="button" onClick={() => setYearStart(clampPage(yearStart + YEAR_PAGE_SIZE))}><Icon name="forward" /></button>
           </div>
           <form className="calendar-year-search" onSubmit={(event) => { event.preventDefault(); if (validQuery) choose(Number(yearQuery)); }}>
-            <input aria-label="Перейти к году" placeholder="Перейти к году" inputMode="numeric" maxLength={4} value={yearQuery} onChange={(event) => setYearQuery(event.currentTarget.value)} />
-            <button aria-label="Выбрать год" className="secondary-btn" disabled={!validQuery} type="submit"><Icon name="forward" /></button>
+            <input aria-label={translate("ui.5e0f50841a61")} placeholder={translate("ui.5e0f50841a61")} inputMode="numeric" maxLength={4} value={yearQuery} onChange={(event) => setYearQuery(event.currentTarget.value)} />
+            <button aria-label={translate("ui.ee93f7478b53")} className="secondary-btn" disabled={!validQuery} type="submit"><Icon name="forward" /></button>
           </form>
         </> : null}
         <div className={`calendar-caption-grid ${open === "year" ? "years" : "months"}`}>

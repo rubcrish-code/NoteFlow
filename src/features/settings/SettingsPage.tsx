@@ -1,6 +1,7 @@
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { AppSection, SettingsPanel, ThemeMode } from "../../app/types";
+import type { AppLanguage, AppSection, SettingsPanel, ThemeMode } from "../../app/types";
 import * as dataService from "../../services/dataService";
 import type { BackupPreview, ExportResult, ImportBackupResult } from "../../services/dataService";
 import { Icon } from "../../shared/Icon";
@@ -33,11 +34,14 @@ import type { ModelDiscoveryOption, ModelDiscoveryState } from "./ModelSettingsU
 import { SemanticSearchSettings } from "./SemanticSearchSettings";
 import { getSettingsLayoutMode } from "./settingsResponsive";
 import { DeleteAllNotesControl } from "./DeleteAllNotesControl";
+import { uiMessage, localizeUiMessage } from "../../shared/uiMessages";
+import { InterfaceLanguageControl } from "./InterfaceLanguageControl";
 import type { PreparedMarkdownNote } from "./markdownImport";
 import {
   formatBackupDate,
   getBackupPreviewErrorMessage,
   getBackupRestoreErrorMessage,
+  wasBackupRestoreApplied,
   getBackupSummaryRows,
   getLegacyBackupHistoryNotice,
   initialBackupImportState,
@@ -45,6 +49,8 @@ import {
 } from "./backupImportFlow";
 
 interface SettingsPageProps {
+  language?: AppLanguage;
+  onLanguageChange?: (language: AppLanguage) => void;
   initialTarget?: "semantic-search";
   appZoomPercent: number;
   onApplyZoom?: (percent: number) => void;
@@ -68,19 +74,19 @@ interface SettingsPageProps {
 }
 
 const settingsPanels: Array<{ id: SettingsPanel; label: string }> = [
-  { id: "general", label: "Основные" },
-  { id: "models", label: "Модели ИИ" },
-  { id: "appearance", label: "Внешний вид" },
-  { id: "data", label: "Данные и экспорт" },
-  { id: "shortcuts", label: "Горячие клавиши" },
-  { id: "about", label: "О приложении" },
+  { id: "general", get label() { return translate("ui.d40de76d56d7"); } },
+  { id: "models", get label() { return translate("ui.05045a31fa7f"); } },
+  { id: "appearance", get label() { return translate("ui.c407960b916f"); } },
+  { id: "data", get label() { return translate("ui.6c32ef0d0712"); } },
+  { id: "shortcuts", get label() { return translate("ui.13b0a5cc9afc"); } },
+  { id: "about", get label() { return translate("ui.eca626bab07b"); } },
 ];
 
 const providerPresets = [
   {
     id: "openai",
     label: "OpenAI",
-    detail: "Публичный API с ключом",
+    get detail() { return translate("ui.95c1647cbf3f"); },
     icon: <Icon aria-hidden="true" name="bulb" />,
     url: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
@@ -91,7 +97,7 @@ const providerPresets = [
   {
     id: "ollama",
     label: "Ollama",
-    detail: "Локально на компьютере",
+    get detail() { return translate("ui.b7608054c1a4"); },
     icon: <Icon aria-hidden="true" name="gear" />,
     url: "http://127.0.0.1:11434",
     model: "qwen3-4b-local:latest",
@@ -102,7 +108,7 @@ const providerPresets = [
   {
     id: "lmstudio",
     label: "LM Studio",
-    detail: "Локальный OpenAI API",
+    get detail() { return translate("ui.e87192b5413e"); },
     icon: <Icon aria-hidden="true" name="chat" />,
     url: "http://localhost:1234/v1",
     model: "local-model",
@@ -113,7 +119,7 @@ const providerPresets = [
   {
     id: "custom",
     label: "OpenAI-compatible",
-    detail: "Свой сервер или другой API",
+    get detail() { return translate("ui.61b74f44cede"); },
     icon: <Icon aria-hidden="true" name="code" />,
     url: "http://localhost:8000/v1",
     model: "custom-model",
@@ -147,6 +153,8 @@ interface ProviderFormState {
 }
 
 export function SettingsPage({
+  language = getInterfaceLanguage(),
+  onLanguageChange,
   initialTarget,
   appZoomPercent,
   onApplyZoom,
@@ -168,6 +176,7 @@ export function SettingsPage({
   onZoomReset,
   sidebar,
 }: SettingsPageProps) {
+  useInterfaceLanguage();
   const [activePanel, setActivePanel] = useState<SettingsPanel>("models");
   const layoutRef = useRef<HTMLDivElement>(null);
   const layoutMode = getSettingsLayoutMode(useObservedPhysicalElementWidth(layoutRef));
@@ -181,8 +190,8 @@ export function SettingsPage({
   return (
     <PageShell activeSection="settings" onNavigate={onNavigate} onNewNote={onNewNote} onToast={onToast} sidebar={sidebar}>
       <div className={`settings-layout-inner settings-layout-${layoutMode}`} data-layout={layoutMode} ref={layoutRef}>
-        <aside aria-label="Разделы настроек" className="settings-nav-col">
-          <div className="nav-sec">Настройки</div>
+        <aside aria-label={translate("ui.2d73b4c38491")} className="settings-nav-col">
+          <div className="nav-sec">{translate("ui.985b5e0f2ccf")}</div>
           {settingsPanels.map((panel) => (
             <button
               aria-current={activePanel === panel.id ? "page" : undefined}
@@ -197,7 +206,7 @@ export function SettingsPage({
         </aside>
 
         <section className={`settings-content settings-content--${activePanel}`}>
-          {activePanel === "general" ? <GeneralSettings localProfileName={localProfileName} onEditLocalProfile={onEditLocalProfile} onReplayTraining={onReplayTraining} /> : null}
+          {activePanel === "general" ? <GeneralSettings language={language} onLanguageChange={onLanguageChange} localProfileName={localProfileName} onEditLocalProfile={onEditLocalProfile} onReplayTraining={onReplayTraining} /> : null}
           {activePanel === "models" ? <ModelsSettings onToast={onToast} /> : null}
           {activePanel === "appearance" ? (
             <AppearanceSettings
@@ -230,37 +239,45 @@ export function SettingsPage({
 }
 
 interface GeneralSettingsProps {
+  language: AppLanguage;
+  onLanguageChange?: (language: AppLanguage) => void;
   localProfileName: string;
   onEditLocalProfile: () => void;
   onReplayTraining?: () => void;
 }
 
-function GeneralSettings({ localProfileName, onEditLocalProfile, onReplayTraining }: GeneralSettingsProps) {
+function GeneralSettings({ language, onLanguageChange, localProfileName, onEditLocalProfile, onReplayTraining }: GeneralSettingsProps) {
+  useInterfaceLanguage();
   return (
     <div>
-      <div className="settings-title">Основные</div>
-      <div className="settings-subtitle">Профиль и основные сведения о локальной работе NoteFlow</div>
+      <div className="settings-title">{translate("ui.d40de76d56d7")}</div>
+      <div className="settings-subtitle">{translate("ui.b1a30806c4a9")}</div>
       <section className="settings-preference-group" aria-labelledby="general-profile-heading">
-        <div className="settings-preference-label" id="general-profile-heading">Профиль</div>
-        <div className="settings-preference-list">
+        <div className="settings-preference-label" id="general-profile-heading">{translate("ui.359497aff53e")}</div>
+        <div className="settings-preference-list settings-profile-preferences">
           <div className="settings-preference-row">
             <span className="settings-info-icon"><Icon name="person" /></span>
-            <span className="settings-preference-copy"><b>{localProfileName}</b><small>Локальный профиль · на этом устройстве</small></span>
-            <button className="secondary-btn compact" onClick={onEditLocalProfile} type="button">Изменить имя</button>
+            <span className="settings-preference-copy"><b>{localProfileName}</b><small>{translate("ui.3f71fc9d8719")}</small></span>
+            <button className="secondary-btn compact" onClick={onEditLocalProfile} type="button">{translate("ui.02e4f11754bc")}</button>
           </div>
           <div className="settings-preference-row">
             <span className="settings-info-icon"><Icon name="bulb" /></span>
-            <span className="settings-preference-copy"><b>Знакомство с NoteFlow</b></span>
-            <button className="secondary-btn compact" onClick={onReplayTraining} type="button">Пройти обучение</button>
+            <span className="settings-preference-copy"><b>{translate("ui.53cf22f872f0")}</b></span>
+            <button className="secondary-btn compact" onClick={onReplayTraining} type="button">{translate("ui.65cb604f8c5c")}</button>
+          </div>
+          <div className="settings-preference-row settings-preference-row--language">
+            <span className="settings-info-icon"><Icon name="gear" /></span>
+            <span className="settings-preference-copy" id="interface-language-label"><b>{uiMessage(language, "interfaceLanguage")}</b></span>
+            <InterfaceLanguageControl language={language} labelledBy="interface-language-label" onChange={onLanguageChange} />
           </div>
         </div>
       </section>
       <section className="settings-preference-group" aria-labelledby="general-app-heading">
-        <div className="settings-preference-label" id="general-app-heading">Приложение</div>
+        <div className="settings-preference-label" id="general-app-heading">{translate("ui.26b855cc1660")}</div>
         <div className="settings-preference-list">
           <div className="settings-preference-row">
             <span className="settings-info-icon"><Icon name="doc" /></span>
-            <span className="settings-preference-copy"><b>Данные на устройстве</b><small>Заметки и настройки хранятся локально. Регистрация не требуется.</small></span>
+            <span className="settings-preference-copy"><b>{translate("ui.47e443cadb08")}</b><small>{translate("ui.b76c0c496730")}</small></span>
           </div>
         </div>
       </section>
@@ -278,7 +295,7 @@ function getProviderPreset(providerType: LlmProviderType): ProviderPreset {
 
 function createProviderForm(preset: ProviderPreset = providerPresets[0]): ProviderFormState {
   return {
-    name: preset.id === "ollama" ? "Ollama локально" : preset.id === "lmstudio" ? "LM Studio локально" : "Основная модель",
+    name: preset.id === "ollama" ? translate("ui.272279d699f8") : preset.id === "lmstudio" ? translate("ui.454877947c87") : translate("ui.e04ce307babb"),
     providerType: preset.id,
     baseUrl: preset.url,
     apiKey: "",
@@ -322,12 +339,12 @@ function isLocalEndpoint(baseUrl: string) {
 
 function statusLabel(status: LlmProvider["lastStatus"]) {
   if (status === "success") {
-    return "Работает";
+    return translate("ui.0232a305412b");
   }
   if (status === "error") {
-    return "Ошибка";
+    return translate("ui.bf22dfeeba8b");
   }
-  return "Не проверялось";
+  return translate("ui.ce3074ea2225");
 }
 
 function sortProviders(providers: LlmProvider[]) {
@@ -394,30 +411,32 @@ function validateDraftForm(form: ProviderFormState, action: "listModels" | "save
   const errors: string[] = [];
   const baseUrl = form.baseUrl.trim();
   if (action === "save" && !form.name.trim()) {
-    errors.push("Укажите название подключения.");
+    errors.push(translate("ui.e79a81a9713e"));
   }
   if (!baseUrl) {
-    errors.push("Укажите Base URL.");
+    errors.push(translate("ui.ad199dabfd5a"));
   } else if (!/^https?:\/\//i.test(baseUrl)) {
-    errors.push("Base URL должен начинаться с http:// или https://.");
+    errors.push(translate("ui.6f80a2ae433f"));
   }
   if (form.providerType === "ollama" && /\/v1\/?$/i.test(baseUrl)) {
-    errors.push("Для Ollama используйте адрес без /v1, например http://127.0.0.1:11434.");
+    errors.push(translate("ui.787542b8b893"));
   }
   if (action === "save" && !form.chatModel.trim()) {
-    errors.push("Выберите или введите chat model.");
+    errors.push(uiMessage(getInterfaceLanguage(), "chatModelRequired"));
   }
   if (action === "save" && !isLocalProviderType(form.providerType) && !form.apiKey.trim() && !hasSavedApiKey) {
-    errors.push("Для внешнего provider нужен API key.");
+    errors.push(uiMessage(getInterfaceLanguage(), "externalProviderKeyRequired"));
   }
   return errors;
 }
 
 function LoadingInline({ label }: { label: string }) {
+  useInterfaceLanguage();
   return <span className="loading-inline">{label}</span>;
 }
 
 function ModelsSettings({ onToast }: ModelsSettingsProps) {
+  useInterfaceLanguage();
   const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>();
   const [isProviderModalOpen, setIsProviderModalOpen] = useState(false);
@@ -431,7 +450,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const [isLoadingProviders, setIsLoadingProviders] = useState(true);
   const [storageAction, setStorageAction] = useState<StorageAction>(null);
   const [networkOperation, setNetworkOperation] = useState<LlmNetworkOperation | null>(null);
-  const [message, setMessage] = useState("Подключения пока не проверялись.");
+  const [message, setMessage] = useState(translate("ui.93924c612310"));
   const [messageTone, setMessageTone] = useState<MessageTone>("neutral");
   const [showSecret, setShowSecret] = useState(false);
   const [providerDeleteRequest, setProviderDeleteRequest] = useState<{ id: string; name: string } | null>(null);
@@ -455,23 +474,23 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   const showApiKeyField = !isLocalProviderType(form.providerType);
   const showBaseUrlField = form.providerType !== "openai";
   const hasSavedApiKey = Boolean(selectedProvider && selectedProvider.id === form.id && selectedProvider.hasApiKey);
-  const keyLabel = selectedProvider?.hasApiKey ? "Ключ сохранён" : "Ключ не задан";
-  const privacyNotice = selectedProvider?.privacyNotice ?? (isLocalEndpoint(form.baseUrl) ? "Локальный endpoint: данные остаются на устройстве, если сервер действительно запущен локально." : "Внешний endpoint: при использовании модели выбранный контекст будет отправлен провайдеру.");
-  const modalTitle = draftMode === "edit" ? "Изменить модель" : "Добавить модель";
+  const keyLabel = selectedProvider?.hasApiKey ? translate("ui.4ac7196e286c") : translate("ui.8e407985cc2b");
+  const privacyNotice = selectedProvider?.privacyNotice ?? uiMessage(getInterfaceLanguage(), isLocalEndpoint(form.baseUrl) ? "localProviderPrivacy" : "externalProviderPrivacy");
+  const modalTitle = draftMode === "edit" ? translate("ui.a89464c13454") : translate("ui.2df38a36b3c0");
   const activeOperationMessage = isLoadingProviders
-    ? "Загружаем подключения…"
+    ? translate("ui.bb746d54d7ac")
     : isTestingConnection
-      ? "Проверяем подключение… Можно продолжать работу с настройками."
+      ? translate("ui.56d56768c4aa")
       : isLoadingModels
-        ? "Загружаем модели… Можно менять поля и переключать разделы."
+        ? translate("ui.1d2aba977c86")
         : storageAction === "save"
-          ? "Сохраняем подключение…"
+          ? translate("ui.fc93a302861b")
           : storageAction === "delete"
-            ? "Удаляем подключение…"
+            ? translate("ui.308d737388a9")
             : storageAction === "default"
-              ? "Назначаем основное подключение…"
+              ? translate("ui.bd32d3f7c071")
               : storageAction === "key"
-                ? "Удаляем API key…"
+                ? uiMessage(getInterfaceLanguage(), "apiKeyDeleting")
                 : null;
   const connectionNoteClass = ["connection-note", !activeOperationMessage && (messageTone === "error" || selectedProvider?.lastStatus === "error") ? "error" : "", activeOperationMessage ? "pending" : ""]
     .filter(Boolean)
@@ -541,8 +560,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       });
       const text =
         networkOperation.action === "listModels"
-          ? "Timeout: список моделей не был получен вовремя. Проверьте Base URL, endpoint и состояние локального сервера."
-          : "Timeout: проверка подключения не завершилась вовремя. Проверьте, запущена ли локальная модель и доступен ли endpoint.";
+          ? uiMessage(getInterfaceLanguage(), "modelsListTimeout")
+          : uiMessage(getInterfaceLanguage(), "connectionTestTimeout");
       updateMessage(text, "error");
       finishNetworkOperation(networkOperation);
     }, networkOperation.timeoutMs + 250);
@@ -561,10 +580,10 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
         }
         providersRef.current = loadedProviders;
         setProviders(loadedProviders);
-        updateMessage(loadedProviders.length > 0 ? "Подключения загружены из локальной базы." : "Подключений пока нет.");
+        updateMessage(loadedProviders.length > 0 ? translate("ui.a7c6ed51b199") : translate("ui.4e2e09c964c4"));
       } catch (error) {
         if (!cancelled) {
-          updateMessage(error instanceof Error ? error.message : "Не удалось загрузить подключения LLM", "error");
+          updateMessage(error instanceof Error ? error.message : uiMessage(getInterfaceLanguage(), "providerConnectionsLoadFailed"), "error");
         }
       } finally {
         if (!cancelled) {
@@ -710,7 +729,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       { markDirty: false },
     );
     setIsProviderModalOpen(true);
-    updateMessage("Выберите тип провайдера и заполните минимальные параметры.");
+    updateMessage(translate("ui.cfa6d10630a7"));
   }
 
   function openEditProvider(provider: LlmProvider) {
@@ -727,7 +746,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     setShowSecret(false);
     replaceForm(formFromProvider(provider), { markDirty: false });
     setIsProviderModalOpen(true);
-    updateMessage(provider.statusMessage ?? "Подключение открыто для редактирования.", provider.lastStatus === "error" ? "error" : "neutral");
+    updateMessage(provider.statusMessage ?? translate("ui.e36839c21a2b"), provider.lastStatus === "error" ? "error" : "neutral");
   }
 
   function closeProviderModal() {
@@ -818,10 +837,10 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     try {
       const savedProvider = await saveCurrentProvider();
       closeProviderModal();
-      updateMessage(savedProvider.hasApiKey ? "Подключение сохранено. API key находится в защищённом хранилище ОС." : "Подключение сохранено без API key.");
-      onToast("Подключение LLM сохранено");
+      updateMessage(uiMessage(getInterfaceLanguage(), savedProvider.hasApiKey ? "providerSavedWithKey" : "providerSavedWithoutKey"));
+      onToast(uiMessage(getInterfaceLanguage(), "providerConnectionSaved"));
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Не удалось сохранить подключение";
+      const text = error instanceof Error ? error.message : translate("ui.6b43eddb211f");
       updateMessage(text, "error");
       onToast(text);
     } finally {
@@ -847,8 +866,8 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     }
     const operation = beginNetworkOperation("listModels", snapshot);
     setModelDiscoveryState("loading");
-    setModelDiscoveryMessage("Загружаем актуальный список моделей…");
-    updateMessage("Загружаем модели…");
+    setModelDiscoveryMessage(translate("ui.69e52b16892b"));
+    updateMessage(translate("ui.954eb9132da8"));
     try {
       const result = await llmProviderService.listLlmModelsForDraft(draftInputFromForm(snapshot), traceContext(operation));
       if (!isNetworkResultCurrent(operation)) {
@@ -868,10 +887,10 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       onToast(result.message);
     } catch (error) {
       if (isNetworkOperationActive(operation)) {
-        const text = error instanceof Error ? error.message : "Не удалось получить список моделей";
+        const text = error instanceof Error ? error.message : translate("ui.df3da8c2f928");
         setModelOptions([]);
         setModelDiscoveryState("error");
-        setModelDiscoveryMessage(`${text}. Можно указать Model ID вручную.`);
+        setModelDiscoveryMessage(translate("ui.aa69dc88b895", { p0: text }));
         updateMessage(text, "error");
         onToast(text);
       } else {
@@ -903,7 +922,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       return;
     }
     const operation = beginNetworkOperation("testConnection", snapshot);
-    updateMessage("Проверяем подключение…");
+    updateMessage(translate("ui.a4ef42e083b8"));
     try {
       const result = await llmProviderService.testLlmProviderDraft(draftInputFromForm(snapshot), traceContext(operation));
       if (!isNetworkResultCurrent(operation)) {
@@ -922,7 +941,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       onToast(result.message);
     } catch (error) {
       if (isNetworkOperationActive(operation)) {
-        const text = error instanceof Error ? error.message : "Не удалось проверить подключение";
+        const text = error instanceof Error ? error.message : translate("ui.52d1b618953f");
         updateMessage(text, "error");
         onToast(text);
       } else {
@@ -940,7 +959,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
   async function handleCheckSavedProvider(provider: LlmProvider) {
     const snapshot = formFromProvider(provider);
     const operation = beginNetworkOperation("testConnection", snapshot);
-    updateMessage(`Проверяем подключение ${provider.name}…`);
+    updateMessage(translate("ui.15da91161dd5", { p0: provider.name }));
     try {
       const result = await llmProviderService.testLlmProvider(provider.id, traceContext(operation));
       if (!isProviderOperationResultCurrent(operation)) {
@@ -961,7 +980,7 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       onToast(result.message);
     } catch (error) {
       if (isNetworkOperationActive(operation)) {
-        const text = error instanceof Error ? error.message : "Не удалось проверить подключение";
+        const text = error instanceof Error ? error.message : translate("ui.52d1b618953f");
         updateMessage(text, "error");
         onToast(text);
       } else {
@@ -984,10 +1003,10 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     try {
       const updatedProvider = await llmProviderService.deleteLlmProviderKey(form.id);
       updateProviderInState(updatedProvider);
-      updateMessage("API key удалён из защищённого хранилища.");
-      onToast("API key удалён");
+      updateMessage(uiMessage(getInterfaceLanguage(), "apiKeyDeletedSecurely"));
+      onToast(uiMessage(getInterfaceLanguage(), "apiKeyDeleted"));
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Не удалось удалить API key";
+      const text = error instanceof Error ? error.message : uiMessage(getInterfaceLanguage(), "apiKeyDeleteFailed");
       updateMessage(text, "error");
       onToast(text);
     } finally {
@@ -1006,10 +1025,10 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       if (currentFormRef.current.id === providerId) {
         closeProviderModal();
       }
-      updateMessage("Подключение удалено.");
-      onToast("Подключение LLM удалено");
+      updateMessage(translate("ui.8627d8457c53"));
+      onToast(uiMessage(getInterfaceLanguage(), "providerConnectionDeleted"));
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Не удалось удалить подключение";
+      const text = error instanceof Error ? error.message : translate("ui.ac75bdf507d4");
       updateMessage(text, "error");
       onToast(text);
     } finally {
@@ -1030,10 +1049,10 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
     try {
       const updatedProvider = await llmProviderService.setDefaultLlmProvider(providerId);
       updateProviderInState(updatedProvider);
-      updateMessage("Подключение назначено основным.");
-      onToast("Основная модель обновлена");
+      updateMessage(translate("ui.18b3424dddfb"));
+      onToast(translate("ui.4b9029f23efe"));
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Не удалось назначить основное подключение";
+      const text = error instanceof Error ? error.message : translate("ui.de7f43faf7f9");
       updateMessage(text, "error");
       onToast(text);
     } finally {
@@ -1062,12 +1081,12 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       { markDirty: Boolean(current.id) || isDraftDirty },
     );
     setDraftMode(current.id ? "edit" : "new");
-    updateMessage("Заполните параметры и сохраните подключение.");
+    updateMessage(translate("ui.ab68977ea3c7"));
   }
 
   function handleCancelDraft() {
     closeProviderModal();
-    updateMessage("Черновик подключения отменён.");
+    updateMessage(translate("ui.66a0b84e605d"));
   }
 
   function updateDraft(values: Partial<ProviderFormState>) {
@@ -1081,28 +1100,26 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
 
   return (
     <div className="model-settings-page">
-      <div className="settings-title">Модели ИИ</div>
-      <div className="settings-subtitle">Подключайте модели для генерации текста и смыслового поиска по базе заметок</div>
+      <div className="settings-title">{translate("ui.05045a31fa7f")}</div>
+      <div className="settings-subtitle">{translate("ui.3e26154bf418")}</div>
       <section className="model-settings-section">
         <SettingsSectionHeader
           action={providers.length > 0 ? (
             <button className="primary-btn compact" disabled={isLoadingProviders || storageAction !== null} onClick={() => openAddProvider()} type="button">
-              Добавить модель
-            </button>
+              {translate("ui.2df38a36b3c0")}</button>
           ) : null}
-          description="Генерируют и редактируют текст, отвечают на вопросы и используются в ИИ-помощнике"
-          info="Эти модели создают текст: отвечают на вопросы, редактируют заметки, сокращают, объясняют и выполняют другие действия ИИ-помощника. API key хранится только в защищённом хранилище операционной системы."
-          title="Модели для ИИ-помощника"
+          description={translate("ui.b9e32c887ff1")}
+          info={uiMessage(getInterfaceLanguage(), "generativeModelsInfo")}
+          title={translate("ui.d2481f60ed6b")}
         />
         <div className="settings-card llm-provider-list-card model-settings-card">
         {providers.length === 0 && !isLoadingProviders ? (
           <div className="llm-empty-state-card model-empty-state">
             <div className="llm-empty-icon" aria-hidden="true"><Icon name="logo" /></div>
-            <b>Модель ИИ пока не подключена</b>
-            <p>Подключите модель для работы ИИ-помощника и чата</p>
+            <b>{translate("ui.a4e5e8b1abd0")}</b>
+            <p>{translate("ui.ce77c555ef32")}</p>
             <button className="primary-btn" onClick={() => openAddProvider()} type="button">
-              Добавить модель
-            </button>
+              {translate("ui.2df38a36b3c0")}</button>
           </div>
         ) : null}
         {providers.length > 0 ? (
@@ -1118,48 +1135,47 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
                     <div>
                       <div className="llm-provider-card-title">
                         <b>{provider.name}</b>
-                        {provider.isDefault ? <span className="llm-default-badge">Основное</span> : null}
+                        {provider.isDefault ? <span className="llm-default-badge">{translate("ui.11355a292cbb")}</span> : null}
                       </div>
-                      <small>{preset.label} · {provider.chatModel || "модель не выбрана"}</small>
+                      <small>{preset.label} · {provider.chatModel || translate("ui.1e7c1d7c478a")}</small>
                     </div>
                     <ModelStatusBadge
                       busy={isProviderTesting}
-                      label={isProviderTesting ? "Проверяем" : statusLabel(provider.lastStatus)}
+                      label={isProviderTesting ? translate("ui.349423c80f2d") : statusLabel(provider.lastStatus)}
                       tone={provider.lastStatus === "success" ? "success" : provider.lastStatus === "error" ? "error" : "neutral"}
                     />
                   </div>
                   <div className="llm-provider-card-meta">
                     <span>{provider.baseUrl}</span>
-                    {provider.statusMessage ? <span>{provider.statusMessage}</span> : null}
+                    {provider.statusMessage ? <span>{localizeUiMessage(getInterfaceLanguage(), provider.statusMessage)}</span> : null}
                   </div>
                   <div className="llm-provider-card-actions model-profile-actions">
                     <button className="secondary-btn compact" disabled={isProviderTesting || storageAction !== null} onClick={() => void handleCheckSavedProvider(provider)} type="button">
-                      {isProviderTesting ? <LoadingInline label="Проверяем…" /> : "Проверить подключение"}
+                      {isProviderTesting ? <LoadingInline label={translate("ui.62ed32eb225c")} /> : translate("ui.d6d828dc8806")}
                     </button>
                     <button className="secondary-btn compact" disabled={storageAction !== null} onClick={() => openEditProvider(provider)} type="button">
-                      Изменить
-                    </button>
+                      {translate("ui.b8b151d41743")}</button>
                     <details className="model-card-more">
-                      <summary aria-label={`Дополнительные действия: ${provider.name}`} className="row-menu-trigger"><Icon name="dots" /></summary>
+                      <summary aria-label={translate("ui.551a138fd76c", { p0: provider.name })} className="row-menu-trigger"><Icon name="dots" /></summary>
                       <div className="model-card-more-menu">
                         <button disabled={provider.isDefault || storageAction === "default"} onClick={() => void setDefaultProvider(provider.id)} type="button">
-                          {storageAction === "default" ? <LoadingInline label="Назначение…" /> : "Сделать основным"}
+                          {storageAction === "default" ? <LoadingInline label={translate("ui.63354cdf0114")} /> : translate("ui.12606cfe703d")}
                         </button>
                         <button className="danger" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest({ id: provider.id, name: provider.name })} type="button">
-                          {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить"}
+                          {storageAction === "delete" ? <LoadingInline label={translate("ui.987b4d34bbaf")} /> : translate("ui.be99b1361201")}
                         </button>
                       </div>
                     </details>
                   </div>
                   <div aria-live="polite" className={`model-card-operation ${isProviderTesting ? "visible" : ""}`}>
-                    {isProviderTesting ? "Проверяем подключение…" : "\u00A0"}
+                    {isProviderTesting ? translate("ui.a4ef42e083b8") : "\u00A0"}
                   </div>
                 </article>
               );
             })}
           </div>
         ) : null}
-        {shouldShowConnectionNote ? <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div> : null}
+        {shouldShowConnectionNote ? <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : localizeUiMessage(getInterfaceLanguage(), message)}</div> : null}
         </div>
       </section>
       <div id="semantic-search-settings">
@@ -1168,87 +1184,87 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       {isProviderModalOpen && !providerDeleteRequest ? (
         <SettingsModalShell
           className="llm-provider-modal"
-          description={privacyNotice === "Локальный endpoint: данные остаются на устройстве, если сервер действительно запущен локально." ? "Данные остаются на устройстве, только если сервер работает локально" : privacyNotice}
-          eyebrow={draftMode === "edit" ? "Редактирование" : "Новая модель"}
+          description={privacyNotice === uiMessage(getInterfaceLanguage(), "localProviderPrivacy") ? translate("ui.ea9b94efa0a4") : privacyNotice}
+          eyebrow={draftMode === "edit" ? translate("ui.c547312308d6") : translate("ui.9e2f48ac11ac")}
           footer={(
             <div className="settings-modal-footer-layout">
               <div className="settings-modal-footer-leading">
                 {form.id ? (
                   <button className="danger-btn" disabled={storageAction === "delete"} onClick={handleDeleteProvider} type="button">
-                    {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить модель"}
+                    {storageAction === "delete" ? <LoadingInline label={translate("ui.987b4d34bbaf")} /> : translate("ui.46cb5952c6b3")}
                   </button>
                 ) : null}
               </div>
               <div className="settings-modal-footer-actions">
-                <button className="ghost-btn" disabled={storageAction !== null} onClick={handleCancelDraft} type="button">Отмена</button>
+                <button className="ghost-btn" disabled={storageAction !== null} onClick={handleCancelDraft} type="button">{translate("ui.8fbe9b75cbdf")}</button>
                 <button className="secondary-btn" disabled={isTestingConnection} onClick={() => void handleTestConnection()} type="button">
-                  {isTestingConnection ? <LoadingInline label="Проверяем…" /> : "Проверить подключение"}
+                  {isTestingConnection ? <LoadingInline label={translate("ui.62ed32eb225c")} /> : translate("ui.d6d828dc8806")}
                 </button>
                 <button className="primary-btn" disabled={storageAction === "save"} onClick={() => void handleSave()} type="button">
-                  {storageAction === "save" ? <LoadingInline label="Сохранение…" /> : draftMode === "edit" ? "Сохранить изменения" : "Сохранить модель"}
+                  {storageAction === "save" ? <LoadingInline label={translate("ui.bd97450c8556")} /> : draftMode === "edit" ? translate("ui.744cf2b21999") : translate("ui.1fc49b9d5038")}
                 </button>
               </div>
             </div>
           )}
           onClose={closeProviderModal}
           size="wide"
-          status={shouldShowConnectionNote ? <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : message}</div> : null}
+          status={shouldShowConnectionNote ? <div className={connectionNoteClass}>{activeOperationMessage ? <LoadingInline label={activeOperationMessage} /> : localizeUiMessage(getInterfaceLanguage(), message)}</div> : null}
           title={modalTitle}
           titleId="llm-provider-modal-title"
         >
             <ProviderTypeSelector
-              ariaLabel="Тип подключения модели ИИ"
+              ariaLabel={translate("ui.48e1ed23281f")}
               initialFocusRef={modalInitialFocusRef}
               onChange={(providerType) => {
                 const provider = getProviderPreset(providerType);
                 applyPreset(provider);
-                onToast(`Выбран провайдер: ${provider.label}`);
+                onToast(translate("ui.29d06b3ce4c4", { p0: provider.label }));
               }}
               options={providerPresets}
               value={form.providerType}
             />
             <div className="form-grid llm-provider-modal-form">
               <label className="field full">
-                <span className="field-label">Название подключения <InfoHint text="Понятное вам имя подключения. Оно не отправляется модели." /></span>
-                <input onChange={(event) => updateDraft({ name: event.currentTarget.value })} placeholder="Например, Ollama Local" value={form.name} />
+                <span className="field-label">{translate("ui.8c96c91a7c22") + " "}<InfoHint text={translate("ui.ea22ec2b9cb0")} /></span>
+                <input onChange={(event) => updateDraft({ name: event.currentTarget.value })} placeholder={translate("ui.e8934501fc37")} value={form.name} />
               </label>
               {showBaseUrlField ? (
                 <label className="field full">
-                  <span className="field-label">Base URL <InfoHint text="Адрес сервера модели. Для локальной модели это адрес Ollama или LM Studio, для облачной — адрес API провайдера." /></span>
+                  <span className="field-label">Base URL <InfoHint text={translate("ui.6d65e1dbbeca")} /></span>
                   <input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })} placeholder={form.providerType === "ollama" ? "http://127.0.0.1:11434" : "https://…/v1"} value={form.baseUrl} />
                   <span className="field-help">
                     {form.providerType === "ollama"
-                      ? "Для Ollama используйте адрес без /v1: http://127.0.0.1:11434."
+                      ? translate("ui.1799ad123045")
                       : form.providerType === "lmstudio"
-                        ? "Для LM Studio обычно используется http://localhost:1234/v1."
-                        : "Например: http://localhost:1234/v1 или https://api.example.com/v1."}
+                        ? translate("ui.e1ca904a862b")
+                        : translate("ui.77f0b06d1142")}
                   </span>
                 </label>
               ) : null}
               {showApiKeyField ? (
                 <label className="field full">
-                  <span className="field-label">API key <InfoHint text="Ключ доступа провайдера. После сохранения хранится в защищённом хранилище ОС и не включается в резервные копии." /></span>
+                  <span className="field-label">{uiMessage(getInterfaceLanguage(), "apiKeyLabel")} <InfoHint text={translate("ui.99564ced5a72")} /></span>
                   <div className="secret-wrap">
                     <input
                       autoComplete="off"
                       onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })}
-                      placeholder={hasSavedApiKey ? "Введите новый ключ, чтобы заменить сохранённый" : "Введите ключ, если он требуется"}
+                      placeholder={hasSavedApiKey ? translate("ui.f7be614de448") : translate("ui.0d297d1988cc")}
                       type={showSecret ? "text" : "password"}
                       value={form.apiKey}
                     />
                     <button onClick={() => setShowSecret((current) => !current)} type="button">
-                      {showSecret ? "Скрыть" : "Показать"}
+                      {showSecret ? translate("ui.0a2a4b837761") : translate("ui.1e5bec3aab1c")}
                     </button>
                     <button disabled={!hasSavedApiKey || storageAction === "key"} onClick={() => void handleDeleteKey()} type="button">
-                      {storageAction === "key" ? <LoadingInline label="Удаляем…" /> : "Удалить ключ"}
+                      {storageAction === "key" ? <LoadingInline label={translate("ui.044870c94eb5")} /> : translate("ui.43c89af66bce")}
                     </button>
                   </div>
-                  <span className={`field-help key-state ${hasSavedApiKey ? "ok" : "warn"}`}>{keyLabel}. Реальный ключ не возвращается в форму после сохранения.</span>
+                  <span className={`field-help key-state ${hasSavedApiKey ? "ok" : "warn"}`}>{keyLabel}{translate("ui.3373780883a6")}</span>
                 </label>
               ) : null}
               <ModelDiscoveryField
-                label="Модель чата"
-                manualPlaceholder="Введите ID модели"
+                label={translate("ui.0b7e1c1fd95e")}
+                manualPlaceholder={translate("ui.b794e5d9029e")}
                 manualValue={form.chatModel}
                 onDiscover={() => void handleLoadModels()}
                 onManualChange={(chatModel) => updateDraft({ chatModel })}
@@ -1260,50 +1276,49 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
               />
               <label className="field switch-field full">
                 <span>
-                  <b>Основное подключение</b>
-                  <small>Использовать по умолчанию для AI-функций</small>
+                  <b>{translate("ui.6479b9c3faad")}</b>
+                  <small>{translate("ui.082a0ee0cbd0")}</small>
                 </span>
                 <input checked={form.isDefault} onChange={(event) => updateDraft({ isDefault: event.currentTarget.checked })} type="checkbox" />
               </label>
             </div>
             <details className="advanced-settings">
-              <summary>Дополнительные параметры</summary>
+              <summary>{translate("ui.e0e021a0411e")}</summary>
               <div className="form-grid advanced-grid llm-provider-modal-form">
                 {!showBaseUrlField ? (
                   <label className="field full">
-                    <span className="field-label">Base URL <InfoHint text="Адрес API. Для стандартного OpenAI оставьте значение по умолчанию." /></span>
+                    <span className="field-label">Base URL <InfoHint text={translate("ui.97a56b72893c")} /></span>
                     <input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value })} value={form.baseUrl} />
-                    <span className="field-help">Стандартный OpenAI endpoint обычно не нужно менять.</span>
+                    <span className="field-help">{uiMessage(getInterfaceLanguage(), "defaultEndpointHelp")}</span>
                   </label>
                 ) : null}
                 <label className="field">
-                  <span className="field-label">Тайм-аут, сек. <InfoHint text="Максимальное время ожидания ответа модели. При превышении запрос завершится с ошибкой." /></span>
+                  <span className="field-label">{translate("ui.0aa98568e37c") + " "}<InfoHint text={translate("ui.63b0e2e185ae")} /></span>
                   <input max="600" min="5" onChange={(event) => updateDraft({ timeoutSec: event.currentTarget.value })} type="number" value={form.timeoutSec} />
                 </label>
                 <label className="field">
-                  <span className="field-label">Контекст, токенов <InfoHint text="Объём текста, который модель может учитывать за один запрос. Значение должно соответствовать возможностям модели." /></span>
+                  <span className="field-label">{translate("ui.5d96e2525119") + " "}<InfoHint text={translate("ui.e8bec986518f")} /></span>
                   <input min="1024" onChange={(event) => updateDraft({ contextSize: event.currentTarget.value })} step="1024" type="number" value={form.contextSize} />
                 </label>
                 <label className="field">
-                  <span className="field-label">Температура <InfoHint text="Низкое значение делает ответы более предсказуемыми, высокое — более разнообразными." /></span>
+                  <span className="field-label">{translate("ui.8aa1d054af3f") + " "}<InfoHint text={translate("ui.2cb32055ae4d")} /></span>
                   <input max="2" min="0" onChange={(event) => updateDraft({ temperature: event.currentTarget.value })} step="0.1" type="number" value={form.temperature} />
                 </label>
                 <label className="field full">
-                  <span className="field-label">Дополнительные HTTP-заголовки <InfoHint text="Несекретные параметры, требуемые сервером. Ключи и Authorization сюда вводить нельзя." /></span>
+                  <span className="field-label">{translate("ui.f0bedc374fcf") + " "}<InfoHint text={translate("ui.553f1c8ed039")} /></span>
                   <textarea onChange={(event) => updateDraft({ customHeadersJson: event.currentTarget.value })} placeholder='{"X-Organization":"example"}' rows={3} value={form.customHeadersJson} />
-                  <span className="field-help">Секретные заголовки вроде Authorization или X-API-Key запрещены. Используйте поле API key.</span>
+                  <span className="field-help">{uiMessage(getInterfaceLanguage(), "secretHeadersHelp")}</span>
                 </label>
                 <label className="field">
-                  <span className="field-label">Путь списка моделей <InfoHint text="Путь API для получения доступных моделей, относительно Base URL." /></span>
+                  <span className="field-label">{translate("ui.fce2f8b5665b") + " "}<InfoHint text={translate("ui.b470098e65bc")} /></span>
                   <input onChange={(event) => updateDraft({ modelsEndpoint: event.currentTarget.value })} value={form.modelsEndpoint} />
                 </label>
                 <label className="field">
-                  <span className="field-label">Путь чата <InfoHint text="Путь API для отправки сообщений, относительно Base URL." /></span>
+                  <span className="field-label">{translate("ui.adc8f764c722") + " "}<InfoHint text={translate("ui.9c0a4e9f0d29")} /></span>
                   <input onChange={(event) => updateDraft({ chatEndpoint: event.currentTarget.value })} value={form.chatEndpoint} />
                 </label>
                 <label className="field">
-                  Путь embeddings
-                  <input onChange={(event) => updateDraft({ embeddingsEndpoint: event.currentTarget.value })} value={form.embeddingsEndpoint} />
+                  {translate("ui.45d6cf54d1fc")}<input onChange={(event) => updateDraft({ embeddingsEndpoint: event.currentTarget.value })} value={form.embeddingsEndpoint} />
                 </label>
               </div>
             </details>
@@ -1311,22 +1326,22 @@ function ModelsSettings({ onToast }: ModelsSettingsProps) {
       ) : null}
       {providerDeleteRequest ? (
         <SettingsModalShell
-          description={`Модель «${providerDeleteRequest.name}» и её настройки будут удалены. Это действие не удаляет заметки.`}
+          description={translate("ui.feb7654f9c00", { p0: providerDeleteRequest.name })}
           dismissOnBackdrop={false}
           footer={(
             <div className="settings-modal-footer-actions">
-              <button className="ghost-btn" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest(null)} type="button">Отмена</button>
+              <button className="ghost-btn" disabled={storageAction === "delete"} onClick={() => setProviderDeleteRequest(null)} type="button">{translate("ui.8fbe9b75cbdf")}</button>
               <button className="danger-btn" disabled={storageAction === "delete"} onClick={() => void deleteProvider(providerDeleteRequest.id)} type="button">
-                {storageAction === "delete" ? <LoadingInline label="Удаление…" /> : "Удалить модель"}
+                {storageAction === "delete" ? <LoadingInline label={translate("ui.987b4d34bbaf")} /> : translate("ui.46cb5952c6b3")}
               </button>
             </div>
           )}
           onClose={() => setProviderDeleteRequest(null)}
           size="compact"
-          title="Удалить модель?"
+          title={translate("ui.6463a4301723")}
           titleId="llm-provider-delete-title"
         >
-          <div className="settings-confirm-note">Сохранённый API key будет удалён из защищённого хранилища операционной системы.</div>
+          <div className="settings-confirm-note">{uiMessage(getInterfaceLanguage(), "deletedKeyInfo")}</div>
         </SettingsModalShell>
       ) : null}
     </div>
@@ -1345,18 +1360,19 @@ interface AppearanceSettingsProps {
 }
 
 export function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToast, onApplyZoom }: AppearanceSettingsProps) {
+  useInterfaceLanguage();
   const [draftZoom, setDraftZoom] = useState(appZoomPercent);
   useEffect(() => setDraftZoom(appZoomPercent), [appZoomPercent]);
   const options: Array<{ id: ThemeMode; label: string }> = [
-    { id: "light", label: "Светлая" },
-    { id: "dark", label: "Тёмная" },
-    { id: "system", label: "Как в системе" },
+    { id: "light", label: translate("ui.f0cd3a603372") },
+    { id: "dark", label: translate("ui.1eecfcaa7bdb") },
+    { id: "system", label: translate("ui.29e4a4bd7a17") },
   ];
 
   return (
     <div>
-      <div className="settings-title">Внешний вид</div>
-      <div className="settings-subtitle">Тема приложения настраивается только в этом разделе</div>
+      <div className="settings-title">{translate("ui.c407960b916f")}</div>
+      <div className="settings-subtitle">{translate("ui.ca5da33efa1a")}</div>
       <div className="settings-card">
         <div className="theme-options">
           {options.map((option) => (
@@ -1366,7 +1382,7 @@ export function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToa
               key={option.id}
               onClick={() => {
                 onThemeChange(option.id);
-                onToast(option.id === "dark" ? "Включена тёмная тема" : option.id === "system" ? "Тема синхронизирована с системой" : "Включена светлая тема");
+                onToast(option.id === "dark" ? translate("ui.3d89357ed715") : option.id === "system" ? translate("ui.5697406a1712") : translate("ui.d99d8a179999"));
               }}
               type="button"
             >
@@ -1385,20 +1401,20 @@ export function AppearanceSettings({ appZoomPercent, theme, onThemeChange, onToa
       <div className="settings-card zoom-settings-card">
         <div className="settings-section-head">
           <div>
-            <b>Масштаб интерфейса</b>
+            <b>{translate("ui.be517dba6cd0")}</b>
           </div>
         </div>
         <div className="zoom-settings-row">
-          <button className="zoom-step-btn" data-tooltip="Уменьшить масштаб" disabled={draftZoom <= APP_ZOOM_MIN} onClick={() => setDraftZoom((value) => getNextAppZoom(value, "decrease"))} type="button">
+          <button className="zoom-step-btn" data-tooltip={translate("ui.47e0cda1709b")} disabled={draftZoom <= APP_ZOOM_MIN} onClick={() => setDraftZoom((value) => getNextAppZoom(value, "decrease"))} type="button">
             <Icon name="minus" />
           </button>
-          <button className="zoom-reset-btn" data-tooltip="Сбросить масштаб" onClick={() => setDraftZoom(getNextAppZoom(draftZoom, "reset"))} type="button">
+          <button className="zoom-reset-btn" data-tooltip={translate("ui.b40f0749a663")} onClick={() => setDraftZoom(getNextAppZoom(draftZoom, "reset"))} type="button">
             {draftZoom}%
           </button>
-          <button className="zoom-step-btn" data-tooltip="Увеличить масштаб" disabled={draftZoom >= APP_ZOOM_MAX} onClick={() => setDraftZoom((value) => getNextAppZoom(value, "increase"))} type="button">
+          <button className="zoom-step-btn" data-tooltip={translate("ui.08235006182d")} disabled={draftZoom >= APP_ZOOM_MAX} onClick={() => setDraftZoom((value) => getNextAppZoom(value, "increase"))} type="button">
             <Icon name="plus" />
           </button>
-          <button className="primary-btn compact" disabled={draftZoom === appZoomPercent || !onApplyZoom} onClick={() => onApplyZoom?.(draftZoom)} type="button">Применить</button>
+          <button className="primary-btn compact" disabled={draftZoom === appZoomPercent || !onApplyZoom} onClick={() => onApplyZoom?.(draftZoom)} type="button">{translate("ui.e15f960d93eb")}</button>
         </div>
       </div>
     </div>
@@ -1415,10 +1431,10 @@ interface DataSettingsProps {
 }
 
 const knowledgeStatusLabels: Record<KnowledgeIndexStatusCode, string> = {
-  current: "Актуальна",
-  failed: "Требует внимания",
-  needs_update: "Ожидает обработки",
-  pending: "Обновляется",
+  get current() { return translate("ui.f161093e0e41"); },
+  get failed() { return translate("ui.34dc848e1848"); },
+  get needs_update() { return translate("ui.b4cc048b12d7"); },
+  get pending() { return translate("ui.6fa6aaf4897b"); },
 };
 
 export function getKnowledgeStatusLabel(status: KnowledgeIndexStatusCode) {
@@ -1427,23 +1443,24 @@ export function getKnowledgeStatusLabel(status: KnowledgeIndexStatusCode) {
 
 export function formatKnowledgeCheckedAt(value?: string | null, now = new Date()) {
   if (!value) {
-    return "Ещё не проверялась";
+    return translate("ui.7f6f82b6ee5d");
   }
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) {
-    return "Время проверки недоступно";
+    return translate("ui.0deee1b2df75");
   }
   const isToday = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  return isToday ? `сегодня, ${formatDisplayTime(date)}` : formatDisplayDateTime(date);
+  return isToday ? translate("ui.0d21785a18ed", { p0: formatDisplayTime(date) }) : formatDisplayDateTime(date);
 }
 
 function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDeleteAllNotes, onToast }: DataSettingsProps) {
+  useInterfaceLanguage();
   const importInputRef = useRef<HTMLInputElement>(null);
   const importRequestIdRef = useRef(0);
   const knowledgeMoreRef = useRef<HTMLDetailsElement>(null);
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeIndexStatus | null>(null);
   const [knowledgeOperation, setKnowledgeOperation] = useState<KnowledgeIndexOperation | null>(null);
-  const [knowledgeMessage, setKnowledgeMessage] = useState("Загружаем состояние базы знаний…");
+  const [knowledgeMessage, setKnowledgeMessage] = useState(translate("ui.e774b94c6323"));
   const [knowledgeHasError, setKnowledgeHasError] = useState(false);
   const [isRebuildConfirmationOpen, setIsRebuildConfirmationOpen] = useState(false);
   const [selectedBackupFile, setSelectedBackupFile] = useState<File | null>(null);
@@ -1463,10 +1480,10 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
       }
       setBackupExportResult(result);
       setBackupExportState("success");
-      onToast("Резервная копия создана");
+      onToast(translate("ui.c48a81becc83"));
     } catch {
       setBackupExportState("error");
-      onToast("Не удалось создать резервную копию");
+      onToast(translate("ui.91774126930e"));
     }
   }
 
@@ -1501,7 +1518,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
       const result = await onImportBackup(selectedBackupFile);
       dispatchImport({ type: "restoreSucceeded", result });
     } catch (error) {
-      const appliedButNotReloaded = String(error).includes("интерфейс не удалось обновить");
+      const appliedButNotReloaded = wasBackupRestoreApplied(error);
       dispatchImport({
         type: appliedButNotReloaded ? "restoreAppliedButReloadFailed" : "restoreFailed",
         message: getBackupRestoreErrorMessage(appliedButNotReloaded),
@@ -1522,7 +1539,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
       },
       () => {
         if (isActive) {
-          setKnowledgeMessage("Не удалось получить состояние базы знаний");
+          setKnowledgeMessage(translate("ui.0837825fdbfd"));
           setKnowledgeHasError(true);
         }
       },
@@ -1540,24 +1557,24 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
     }
     setKnowledgeOperation(operation);
     setKnowledgeHasError(false);
-    setKnowledgeMessage(operation === "rebuild" ? "Заново обрабатываем все заметки…" : "Проверяем новые и изменённые заметки…");
+    setKnowledgeMessage(operation === "rebuild" ? translate("ui.3d19942efa9b") : translate("ui.69c879d21eee"));
     try {
       const result = await knowledgeService.runKnowledgeIndexOperation(operation);
       const status = await knowledgeService.getKnowledgeIndexStatus();
       setKnowledgeStatus(status);
       const message =
         result.errors > 0
-          ? "Не удалось обновить базу знаний полностью. Попробуйте ещё раз"
+          ? translate("ui.c2ab74da81fb")
           : operation === "rebuild"
-            ? `База знаний успешно пересоздана · Обработано заметок: ${result.processedNotes} · Создано фрагментов: ${result.createdChunks} · ${(result.durationMs / 1000).toFixed(1)} с`
+            ? translate("ui.4bf4ad5d9ecd", { p0: result.processedNotes, p1: result.createdChunks, p2: (result.durationMs / 1000).toFixed(1) })
             : result.processedNotes === 0
-              ? "Всё уже актуально · изменений не найдено"
-              : `База знаний обновлена · Обновлено заметок: ${result.processedNotes} · Создано фрагментов: ${result.createdChunks}`;
+              ? translate("ui.ec271fe4e5c1")
+              : translate("ui.d16e3995f2ff", { p0: result.processedNotes, p1: result.createdChunks });
       setKnowledgeMessage(message);
       setKnowledgeHasError(result.errors > 0);
       onToast(message);
     } catch {
-      setKnowledgeMessage("Не удалось обновить базу знаний. Попробуйте ещё раз");
+      setKnowledgeMessage(translate("ui.70af1f098abb"));
       setKnowledgeHasError(true);
     } finally {
       setKnowledgeOperation(null);
@@ -1570,13 +1587,13 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
 
   return (
     <div>
-      <div className="settings-title">Данные и экспорт</div>
-      <div className="settings-subtitle">Резервные копии профиля, импорт и восстановление данных</div>
+      <div className="settings-title">{translate("ui.6c32ef0d0712")}</div>
+      <div className="settings-subtitle">{translate("ui.cf5cf7e8cc84")}</div>
       <div className="settings-card knowledge-index-card">
         <div className="settings-section-head knowledge-index-head">
           <div>
-            <b>База знаний <InfoHint text="Индекс обновляется после сохранения заметки. Облачная обработка запускается только после вашего согласия." /></b>
-            <span>NoteFlow делит длинные заметки на небольшие части, чтобы точнее находить нужную информацию при ИИ-поиске</span>
+            <b>{translate("ui.0e708d91b542") + " "}<InfoHint text={translate("ui.86871f98874d")} /></b>
+            <span>{translate("ui.e3e26fcf82e9")}</span>
           </div>
           <span className={`status-pill ${visibleKnowledgeStatus === "current" ? "ok" : visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
             {knowledgeOperation ? <span aria-hidden="true" className="button-spinner" /> : null}
@@ -1584,27 +1601,26 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
           </span>
         </div>
         <div className="knowledge-index-metrics">
-          <div><span>Заметки</span><b>{knowledgeStatus?.indexedNotes ?? 0} из {knowledgeStatus?.totalNotes ?? 0}</b></div>
-          <div><span>Фрагменты заметок для ИИ-поиска <InfoHint text="Небольшие части ваших заметок. Поиск находит подходящие части, чтобы ИИ не пришлось читать всю базу сразу. Оригинальные заметки не меняются." /></span><b>{knowledgeStatus?.chunkCount ?? 0}</b></div>
-          <div><span>Последняя проверка</span><b>{formatKnowledgeCheckedAt(knowledgeStatus?.lastCheckedAt)}</b></div>
+          <div><span>{translate("ui.04a18b51cdc2")}</span><b>{knowledgeStatus?.indexedNotes ?? 0} {" " + translate("ui.7f4adf318ef3") + " "}{knowledgeStatus?.totalNotes ?? 0}</b></div>
+          <div><span>{translate("ui.7740a339bb23") + " "}<InfoHint text={translate("ui.2be259278cb2")} /></span><b>{knowledgeStatus?.chunkCount ?? 0}</b></div>
+          <div><span>{translate("ui.9be8166876fa")}</span><b>{formatKnowledgeCheckedAt(knowledgeStatus?.lastCheckedAt)}</b></div>
         </div>
         <div aria-live="polite" className={`knowledge-index-message ${knowledgeHasError || visibleKnowledgeStatus === "failed" ? "error" : ""}`}>
-          {knowledgeMessage || "Новые и изменённые заметки добавляются автоматически"}
+          {knowledgeMessage || translate("ui.8f310ac36e2e")}
         </div>
         <div className="knowledge-index-actions">
           <details className="knowledge-index-more" ref={knowledgeMoreRef}>
-            <summary>Восстановление индекса</summary>
+            <summary>{translate("ui.3e016b2f8764")}</summary>
             <div className="knowledge-repair-action">
-              <b>Исправление проблем <InfoHint text="Заново создаёт только индекс поиска. Заметки, вложения и история чатов сохраняются." /></b>
-              <span>Удаляет служебные данные базы знаний и создаёт их заново. Ваши заметки не изменятся.</span>
+              <b>{translate("ui.f33d9e4ff8c3") + " "}<InfoHint text={translate("ui.4f2aedbda5ee")} /></b>
+              <span>{translate("ui.7f760981901a")}</span>
               <button
                 className="export-action secondary"
                 disabled={knowledgeOperation !== null}
                 onClick={() => setIsRebuildConfirmationOpen(true)}
                 type="button"
               >
-                Пересоздать базу знаний
-              </button>
+                {translate("ui.275baebeba46")}</button>
             </div>
           </details>
         </div>
@@ -1612,27 +1628,27 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
       <div className="settings-card export-card">
         <div className="export-action-group">
           <div className="export-action-head">
-            <b>Резервная копия <InfoHint text="Сохраняет заметки, вложения, историю чатов и настройки. API-ключи в копию не входят. Восстановление заменяет данные профиля." /></b>
-            <span>Все данные профиля</span>
+            <b>{translate("ui.9eb508eda2fc") + " "}<InfoHint text={translate("ui.f601bae90b23")} /></b>
+            <span>{translate("ui.7b8fbb035299")}</span>
           </div>
           <div className="export-action-list">
             <button className="export-action primary" disabled={backupExportState === "creating"} onClick={() => void createExternalBackup()} type="button">
               {backupExportState === "creating" ? <span aria-hidden="true" className="button-spinner" /> : <Icon name="archive" />}
-              {backupExportState === "creating" ? "Создаём копию…" : "Создать резервную копию"}
+              {backupExportState === "creating" ? translate("ui.c0ee8274f4aa") : translate("ui.3470dda3c733")}
             </button>
           </div>
           {backupExportState === "success" && backupExportResult ? (
             <div aria-live="polite" className="backup-export-status">
-              <span>Резервная копия создана: {backupExportResult.path}</span>
-              <button className="export-action secondary" onClick={() => void dataService.revealExportedItem(backupExportResult.path).catch(() => onToast("Не удалось показать файл в Проводнике"))} type="button">Показать в Проводнике</button>
+              <span>{translate("ui.e75dac20814d") + " "}{backupExportResult.path}</span>
+              <button className="export-action secondary" onClick={() => void dataService.revealExportedItem(backupExportResult.path).catch(() => onToast(translate("ui.7918fe1f67bc")))} type="button">{translate("ui.36f0db3dc1f9")}</button>
             </div>
           ) : null}
-          {backupExportState === "error" ? <p className="backup-export-error" role="alert">Не удалось создать резервную копию. Проверьте доступность выбранной папки и повторите попытку.</p> : null}
+          {backupExportState === "error" ? <p className="backup-export-error" role="alert">{translate("ui.fcb2802c9d53")}</p> : null}
         </div>
         <div className="export-action-group recovery">
           <div className="export-action-head">
-            <b>Импорт и восстановление <InfoHint text="Перед восстановлением вы увидите состав копии. Данные профиля будут заменены; сначала сохраните текущую резервную копию." /></b>
-            <span>Резервная копия NoteFlow</span>
+            <b>{translate("ui.8cba0e421a68") + " "}<InfoHint text={translate("ui.46206bedc908")} /></b>
+            <span>{translate("ui.212d147a222b")}</span>
           </div>
           <button
             className="export-action secondary"
@@ -1641,7 +1657,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
             type="button"
           >
             {importState.phase === "previewing" ? <span aria-hidden="true" className="button-spinner" /> : <Icon name="attach" />}
-            {importState.phase === "previewing" ? "Проверяем копию…" : "Импорт резервной копии"}
+            {importState.phase === "previewing" ? translate("ui.f937d971148d") : translate("ui.98ae9a5c79b9")}
           </button>
         </div>
         <input
@@ -1668,18 +1684,18 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
           className="backup-import-modal"
           closeDisabled={importState.phase === "restoring"}
           description={importState.phase === "success" || importState.phase === "applied"
-            ? "Данные профиля заменены содержимым выбранной резервной копии."
-            : "Проверьте содержимое перед восстановлением данных профиля."}
+            ? translate("ui.1d43b5e8b51f")
+            : translate("ui.430e28240206")}
           dismissOnBackdrop={false}
           footer={(
             <div className="settings-modal-footer-layout">
               <div className="settings-modal-footer-leading" />
               <div className="settings-modal-footer-actions">
                 {importState.phase === "success" || importState.phase === "applied" ? (
-                  <button className="primary-btn" onClick={closeBackupImport} type="button">Закрыть</button>
+                  <button className="primary-btn" onClick={closeBackupImport} type="button">{translate("ui.a7a4033657e8")}</button>
                 ) : (
                   <>
-                    <button className="secondary-btn" disabled={importState.phase === "restoring"} onClick={closeBackupImport} type="button">Отмена</button>
+                    <button className="secondary-btn" disabled={importState.phase === "restoring"} onClick={closeBackupImport} type="button">{translate("ui.8fbe9b75cbdf")}</button>
                     {importState.preview ? (
                       <button
                         className="primary-btn"
@@ -1688,7 +1704,7 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
                         type="button"
                       >
                         {importState.phase === "restoring" ? <span aria-hidden="true" className="button-spinner" /> : null}
-                        {importState.phase === "restoring" ? "Восстанавливаем…" : importState.phase === "error" ? "Попробовать снова" : "Восстановить"}
+                        {importState.phase === "restoring" ? translate("ui.61e4c28148ff") : importState.phase === "error" ? translate("ui.89dbfb95162f") : translate("ui.76f55a988f8a")}
                       </button>
                     ) : null}
                   </>
@@ -1698,20 +1714,20 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
           )}
           onClose={closeBackupImport}
           size="compact"
-          title={importState.phase === "success" || importState.phase === "applied" ? "Резервная копия восстановлена" : "Восстановить резервную копию?"}
+          title={importState.phase === "success" || importState.phase === "applied" ? translate("ui.05d9a7026a3c") : translate("ui.53fe536b4f9b")}
           titleId="backup-import-title"
         >
           {importState.phase === "previewing" ? (
             <div aria-live="polite" className="backup-import-loading">
               <span aria-hidden="true" className="button-spinner" />
-              <span>Проверяем файл и вложения. Текущие данные пока не изменяются.</span>
+              <span>{translate("ui.007bde39e781")}</span>
             </div>
           ) : null}
           {importState.preview && importState.phase !== "success" && importState.phase !== "applied" ? (
             <div className="backup-import-preview">
               <div className="backup-import-meta">
-                <b>Резервная копия от {formatBackupDate(importState.preview.exportedAt)}</b>
-                <span>{importState.preview.appVersion ? `Создана в NoteFlow ${importState.preview.appVersion}` : `Формат резервной копии ${importState.preview.formatVersion}`}</span>
+                <b>{translate("ui.c12cce23cc10") + " "}{formatBackupDate(importState.preview.exportedAt)}</b>
+                <span>{importState.preview.appVersion ? translate("ui.a06b8c215702", { p0: importState.preview.appVersion }) : translate("ui.9cf00b5e6f90", { p0: importState.preview.formatVersion })}</span>
               </div>
               <div className="backup-import-counts">
                 {getBackupSummaryRows(importState.preview.contents).map(([label, count]) => (
@@ -1723,18 +1739,17 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
               ) : null}
               {importState.preview.missingAttachmentFiles > 0 ? (
                 <div className="backup-import-notice warning">
-                  В старой резервной копии недоступны некоторые файлы вложений: {importState.preview.missingAttachmentFiles}.
+                  {translate("ui.38b99fcacab2")}{importState.preview.missingAttachmentFiles}.
                 </div>
               ) : null}
               <div className="backup-import-notice danger">
-                Восстановление заменит заметки, проекты, теги, вложения и поддерживаемую историю чатов данными из резервной копии.
-              </div>
+                {translate("ui.fdc7f5693f30")}</div>
             </div>
           ) : null}
           {importState.phase === "restoring" ? (
             <div aria-live="polite" className="backup-import-loading">
               <span aria-hidden="true" className="button-spinner" />
-              <span>Восстанавливаем данные и проверяем поиск. Не закрывайте NoteFlow.</span>
+              <span>{translate("ui.a601db1372ff")}</span>
             </div>
           ) : null}
           {importState.phase === "error" ? (
@@ -1752,8 +1767,8 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
               </div>
               <div className="backup-import-notice success">
                 {importState.result.indexesUpdating
-                  ? "Заметки и чаты восстановлены. Базу знаний нужно обновить в этом разделе."
-                  : "Заметки, чаты, поиск и база знаний находятся в согласованном состоянии."}
+                  ? translate("ui.ac55946f40b3")
+                  : translate("ui.55e76aca03e4")}
               </div>
             </div>
           ) : null}
@@ -1761,11 +1776,11 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
       ) : null}
       {isRebuildConfirmationOpen ? (
         <SettingsModalShell
-          description="NoteFlow заново обработает все заметки. Сами заметки и их форматирование не изменятся. Операция может занять некоторое время."
+          description={translate("ui.f61a7ff1e912")}
           dismissOnBackdrop={false}
           footer={(
             <div className="settings-modal-footer-actions">
-              <button className="secondary-btn" onClick={() => setIsRebuildConfirmationOpen(false)} type="button">Отмена</button>
+              <button className="secondary-btn" onClick={() => setIsRebuildConfirmationOpen(false)} type="button">{translate("ui.8fbe9b75cbdf")}</button>
               <button
                 className="primary-btn"
                 onClick={() => {
@@ -1777,16 +1792,15 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
                 }}
                 type="button"
               >
-                Пересоздать
-              </button>
+                {translate("ui.669f46232d41")}</button>
             </div>
           )}
           onClose={() => setIsRebuildConfirmationOpen(false)}
           size="compact"
-          title="Пересоздать базу знаний?"
+          title={translate("ui.7eb178875491")}
           titleId="knowledge-rebuild-title"
         >
-          <div className="settings-confirm-note">Поиск продолжит работать во время обновления базы знаний.</div>
+          <div className="settings-confirm-note">{translate("ui.86537d2db4b4")}</div>
         </SettingsModalShell>
       ) : null}
     </div>
@@ -1794,17 +1808,19 @@ function DataSettings({ onBackupCreate, onBackupPreview, onImportBackup, onDelet
 }
 
 function ShortcutsSettings() {
+  useInterfaceLanguage();
   return (
     <div>
-      <div className="settings-title">Горячие клавиши</div>
-      <div className="settings-subtitle">Сочетания, которые уже работают в приложении. На macOS используйте ⌘ вместо Ctrl</div>
-      <ShortcutGroup label="Навигация" shortcuts={APP_SHORTCUTS} />
-      <ShortcutGroup label="Редактор" shortcuts={EDITOR_SHORTCUTS} />
+      <div className="settings-title">{translate("ui.13b0a5cc9afc")}</div>
+      <div className="settings-subtitle">{translate("ui.47b253e71085")}</div>
+      <ShortcutGroup label={translate("ui.e638fc3afbee")} shortcuts={APP_SHORTCUTS} />
+      <ShortcutGroup label={translate("ui.119d528f623e")} shortcuts={EDITOR_SHORTCUTS} />
     </div>
   );
 }
 
 function ShortcutGroup({ label, shortcuts }: { label: string; shortcuts: readonly ShortcutReference[] }) {
+  useInterfaceLanguage();
   return (
     <section className="settings-preference-group shortcuts-group" aria-label={label}>
       <div className="settings-preference-label">{label}</div>
@@ -1812,7 +1828,7 @@ function ShortcutGroup({ label, shortcuts }: { label: string; shortcuts: readonl
         {shortcuts.map((shortcut) => (
           <div className="shortcut-row" key={shortcut.id}>
             <span>{shortcut.label}</span>
-            <span className="shortcut-keys" aria-label={shortcut.keys.join(" плюс ")}>
+            <span className="shortcut-keys" aria-label={shortcut.keys.join(translate("ui.b21dc376bc9b"))}>
               {shortcut.keys.map((key, index) => (
                 <span className="shortcut-key-part" key={`${shortcut.id}-${key}`}>
                   {index > 0 ? <span aria-hidden="true" className="shortcut-plus">+</span> : null}
@@ -1828,6 +1844,7 @@ function ShortcutGroup({ label, shortcuts }: { label: string; shortcuts: readonl
 }
 
 function AboutSettings() {
+  useInterfaceLanguage();
   const [version, setVersion] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1846,13 +1863,13 @@ function AboutSettings() {
 
   return (
     <div>
-      <div className="settings-title">О приложении</div>
-      <div className="settings-subtitle">Локальные заметки, Markdown-first редактор и ИИ-инструменты с контролем приватности</div>
+      <div className="settings-title">{translate("ui.eca626bab07b")}</div>
+      <div className="settings-subtitle">{translate("ui.4dee7bd999d8")}</div>
       <div className="settings-card about-card">
         <span className="about-mark"><Icon name="logo" /></span>
         <span>
           <b>NoteFlow</b>
-          <small aria-live="polite">{version === null ? "Получаем версию…" : version ? `Версия ${version}` : "Версия недоступна"}</small>
+          <small aria-live="polite">{version === null ? translate("ui.9a1dab606e38") : version ? translate("ui.b75044b0b24d", { p0: version }) : translate("ui.4715357cba83")}</small>
         </span>
       </div>
     </div>

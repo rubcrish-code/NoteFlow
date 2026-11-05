@@ -1,22 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { EDITOR_TOOLBAR_ACTIONS, getEditorToolbarLayoutMode, resolveEditorToolbarActions } from "../src/features/editor/editorToolbarLayout";
+import { EDITOR_TOOLBAR_ACTIONS, EDITOR_TOOLBAR_MIN_WIDTH, getEditorToolbarLayoutMode, resolveEditorToolbarActions } from "../src/features/editor/editorToolbarLayout";
 import { getRagLayoutMode, resolveRagPanelVisibility } from "../src/features/rag/ragResponsiveLayout";
 
 function occupiedToolbarWidth(actions: ReturnType<typeof resolveEditorToolbarActions>, narrow: boolean) {
   const separators = actions.visibleActions.filter((action, index) =>
     index < actions.visibleActions.length - 1 && action.group !== actions.visibleActions[index + 1].group,
   ).length;
-  const itemCount = actions.visibleActions.length + Number(actions.overflowActions.length > 0);
-  return (narrow ? 16 : 24) + actions.visibleActions.length * (narrow ? 29 : 30)
-    + separators * (narrow ? 5 : 7) + Math.max(0, itemCount - 1)
-    + (actions.overflowActions.length > 0 ? 30 : 0);
+  return (narrow ? 16 : 24) + actions.visibleActions.length * (narrow ? 24 : 28)
+    + separators * (narrow ? 3 : 5) + (narrow ? 0 : actions.visibleActions.length - 1);
 }
 
 describe("production layout regressions", () => {
   it("keeps the complete toolbar, including AI, within its measured width", () => {
-    for (const width of [100, 160, 240, 320, 480, 560, 720, 980, 1100]) {
+    for (const width of [EDITOR_TOOLBAR_MIN_WIDTH, 900, 980, 1000, 1100]) {
       const layout = resolveEditorToolbarActions(width);
+      assert.equal(layout.overflowActions.length, 0);
       assert.ok(occupiedToolbarWidth(layout, getEditorToolbarLayoutMode(width) === "narrow") <= width, `toolbar clipped at ${width}px`);
       assert.deepEqual(
         new Set([...layout.visibleActions, ...layout.overflowActions].map((action) => action.id)),

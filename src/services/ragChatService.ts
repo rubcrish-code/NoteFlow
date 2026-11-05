@@ -1,5 +1,7 @@
+import { translate, getInterfaceLanguage } from "../shared/i18n";
 import { invoke } from "./safeInvoke";
 import type { SemanticSearchResult } from "./embeddingService";
+import { localizeUiMessage } from "../shared/uiMessages";
 import { streamArguments, type AiRequestControl } from "./aiBackground";
 import { isTauri } from "@tauri-apps/api/core";
 
@@ -65,7 +67,7 @@ export class RagGenerationError extends Error {
   readonly retryable: boolean;
 
   constructor(code: string, message: string, retryable: boolean) {
-    super(message);
+    super(localizeUiMessage(getInterfaceLanguage(), message));
     this.name = "RagGenerationError";
     this.code = code;
     this.retryable = retryable;
@@ -125,7 +127,7 @@ function mapSource(value: SemanticSearchResult, index: number): RagMessageSource
   const record = value as SemanticSearchResult & { sourceId?: unknown; citationNumber?: unknown };
   return {
     ...value,
-    noteTitle: value.noteTitle.trim() || "Без названия",
+    noteTitle: value.noteTitle.trim() || translate("ui.f5db3a12b79c"),
     sourceId: typeof record.sourceId === "string" && record.sourceId ? record.sourceId : `S${index + 1}`,
     citationNumber: typeof record.citationNumber === "number" && Number.isInteger(record.citationNumber)
       ? record.citationNumber
@@ -150,7 +152,7 @@ export async function listRagChats() {
   return (await invoke<RagChatDto[]>("list_rag_chats")).map(mapChat);
 }
 
-export async function createRagChat(title = "Новый чат") {
+export async function createRagChat(title = translate("ui.c44ad59fc33d")) {
   return mapChat(await invoke<RagChatDto>("create_rag_chat", { request: { title } }));
 }
 
@@ -228,14 +230,14 @@ function normalizeGenerationError(error: unknown): RagGenerationError {
     if (typeof value.message === "string") {
       return new RagGenerationError(
         typeof value.code === "string" ? value.code : "generation_error",
-        value.message,
+        localizeUiMessage(getInterfaceLanguage(), value.message),
         value.retryable !== false,
       );
     }
   }
   return new RagGenerationError(
     "generation_error",
-    error instanceof Error ? error.message : typeof error === "string" ? error : "Не удалось сформировать ответ по базе заметок.",
+    localizeUiMessage(getInterfaceLanguage(), error instanceof Error ? error.message : typeof error === "string" ? error : translate("ui.b5825ad78d79")),
     true,
   );
 }

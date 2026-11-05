@@ -17,6 +17,7 @@ function capture() {
     opacity: +getComputedStyle(button.querySelector("span")).opacity, rootScroll: document.documentElement.scrollWidth, viewport: innerWidth };
 }
 async function load(zoom = 100, theme = "light") {
+  await page.setViewportSize({ width: Math.max(1100, Math.ceil(820 * zoom / 100 + 190 + 260)), height: 700 });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto(url(zoom, theme)); await page.locator(".tiptap").waitFor(); await settlePanelLayout(page);
 }

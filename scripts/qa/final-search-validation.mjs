@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+const {chromium}=await import(process.env.NOTEFLOW_QA_PLAYWRIGHT||'playwright');
+const output='releases/qa/final-search-validation';await mkdir(output,{recursive:true});
+const results=[];const browser=await chromium.launch({channel:'msedge',headless:true});
+const page=await browser.newPage({viewport:{width:1920,height:1080}});
+const pass=name=>{results.push({name,pass:true});console.log(`PASS ${name}`)};
+try{
+ await page.goto('http://127.0.0.1:1420/scripts/qa/final-ux-fixture.html?perf-notes=2');await page.locator('.tiptap').waitFor();
+ await page.locator('.tiptap').evaluate(n=>n.editor.commands.setContent({type:'doc',content:Array.from({length:400},()=>({type:'paragraph',content:[{type:'text',text:'слово слово слово 😀'}]}))}));
+ await page.waitForFunction(()=>window.finalQa.notes()[0].contentVersion>1);
+ await page.getByRole('status',{name:'Сохранено',exact:true}).waitFor();
+ await page.locator('[data-tooltip="Чат по заметке"]').click();await page.locator('.note-chat').waitFor();
+ await page.locator('.tiptap').evaluate(n=>n.editor.commands.focus(2,{scrollIntoView:false}));
+ await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+ await page.locator('.tiptap').evaluate(n=>n.editor.commands.setTextSelection({from:2,to:5}));
+ const baseline=await page.locator('.tiptap').evaluate(n=>({doc:n.editor.getJSON(),selection:n.editor.state.selection.toJSON(),version:window.finalQa.notes()[0].contentVersion}));
+ assert.equal(await page.locator('[data-toolbar-action]').count(),31);pass('31 direct toolbar controls retained');
+ await page.keyboard.press('Control+f');const query=page.getByRole('textbox',{name:'Найти в заметке',exact:true});await query.waitFor({state:'visible'});await query.fill('слово');
+ const counter=page.locator('.note-editor-search [role="status"]');await counter.filter({hasText:'1 из 1200'}).waitFor();pass('Ctrl+F opens focused NoteFlow query with 1200 matches');
+ await page.keyboard.press('Enter');await counter.filter({hasText:'2 из 1200'}).waitFor();pass('Enter navigates forward');
+ await page.keyboard.press('Shift+Enter');await counter.filter({hasText:'1 из 1200'}).waitFor();pass('Shift+Enter navigates backward');
+ await page.keyboard.press('F3');await counter.filter({hasText:'2 из 1200'}).waitFor();await page.keyboard.press('Shift+F3');await counter.filter({hasText:'1 из 1200'}).waitFor();pass('F3 and Shift+F3 navigate without browser UI');
+ await page.locator('.tiptap').evaluate(n=>n.editor.commands.focus(undefined,{scrollIntoView:false}));await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+ await page.keyboard.press('Control+f');await page.waitForFunction(()=>document.activeElement===document.querySelector('.note-editor-search input'));pass('Repeated Ctrl+F refocuses an already open query');
+ await page.keyboard.press('Escape');await page.locator('.note-editor-search').waitFor({state:'detached'});await page.waitForFunction(()=>document.querySelector('.tiptap').editor.view.hasFocus());
+ assert.ok(await page.locator('.note-chat').isVisible());assert.deepEqual(await page.locator('.tiptap').evaluate(n=>n.editor.state.selection.toJSON()),baseline.selection);pass('Escape restores editor selection without closing AI panel');
+ await page.keyboard.press('Control+f');await query.fill('несуществующее');await counter.filter({hasText:'Нет совпадений'}).waitFor();await query.fill('');await counter.filter({hasText:'Нет совпадений'}).waitFor();await query.fill('слово');await counter.filter({hasText:'1 из 1200'}).waitFor();pass('No results, empty query and restoring a query remain correct');
+ await page.waitForTimeout(1200);assert.deepEqual(await page.locator('.tiptap').evaluate(n=>n.editor.getJSON()),baseline.doc);assert.equal(await page.evaluate(()=>window.finalQa.notes()[0].contentVersion),baseline.version);pass('Search selection and navigation do not mutate document or autosave');
+ await page.locator('.tiptap').evaluate(n=>n.editor.commands.focus(2,{scrollIntoView:false}));await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.keyboard.press('a');
+ const oracle=await page.locator('.tiptap').evaluate(async n=>{const {noteSearchMatches}=await import('/src/features/editor/noteSearch.ts');const e=n.editor,p=e.state.plugins.find(p=>p.key.startsWith('note-search$')),s=p.getState(e.state);return {actual:s.matches,expected:noteSearchMatches(e.state,s.query),decorations:s.decorations.find().map(d=>({from:d.from,to:d.to}))}});
+ assert.deepEqual(oracle.actual,oracle.expected);assert.deepEqual(oracle.decorations,oracle.expected);assert.equal(oracle.actual.length,1199);pass('Editing active 1200-match search equals full-search oracle');
+ await page.locator('.cards .card-hit').nth(1).click();await page.locator('.ed-title').filter({hasText:'QA заметка 1'}).waitFor();
+ assert.equal(await page.locator('.tiptap').evaluate(n=>n.editor.state.plugins.find(p=>p.key.startsWith('note-search$')).getState(n.editor.state).matches.length),0);pass('Note switch has no previous-note ranges');
+ const geometry=await page.locator('[role="toolbar"]').evaluate(n=>{const r=n.getBoundingClientRect(),b=[...n.querySelectorAll('button')].map(x=>{const r=x.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,width:r.width}});return {width:r.width,right:r.right,client:n.clientWidth,scroll:n.scrollWidth,viewport:innerWidth,buttons:b}});
+ assert.equal(geometry.buttons.length,31);assert.ok(geometry.scroll<=geometry.client+1);assert.ok(geometry.right<=geometry.viewport+1);assert.ok(geometry.buttons.every(b=>Math.abs(b.top-geometry.buttons[0].top)<1));pass('Search/chat interactions preserve single-row toolbar geometry');
+}finally{await writeFile(`${output}/results.json`,JSON.stringify({results},null,2));await browser.close()}

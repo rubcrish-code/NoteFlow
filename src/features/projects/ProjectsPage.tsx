@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useCallback, useRef, useState, type FormEvent } from "react";
 import type { AppSection, ProjectCard } from "../../app/types";
 import { Icon } from "../../shared/Icon";
@@ -25,6 +26,7 @@ interface ProjectsPageProps {
 }
 
 export function ProjectsPage({ projects, onArchiveProject, onDeleteProject, onExportProject, onCreateProject, onNavigate, onNewNote, onOpenProject, onToast, onUpdateProject, sidebar }: ProjectsPageProps) {
+  useInterfaceLanguage();
   const [editingProject, setEditingProject] = useState<ProjectCard | null>(null);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [pendingArchive, setPendingArchive] = useState<ProjectCard | null>(null);
@@ -44,7 +46,7 @@ export function ProjectsPage({ projects, onArchiveProject, onDeleteProject, onEx
       await onArchiveProject(pendingArchive.id);
       setPendingArchive(null);
     } catch {
-      setArchiveError("Не удалось архивировать проект. Попробуйте ещё раз.");
+      setArchiveError(translate("ui.37620a1acc76"));
     } finally {
       setArchiveBusy(false);
     }
@@ -55,12 +57,11 @@ export function ProjectsPage({ projects, onArchiveProject, onDeleteProject, onEx
       <div className="projects-page-content">
         <header className="content-page-header">
           <div>
-            <div className="page-title">Проекты</div>
-            <div className="page-subtitle">Организуйте заметки и материалы по направлениям работы</div>
+            <div className="page-title">{translate("ui.5029f02d0a94")}</div>
+            <div className="page-subtitle">{translate("ui.a2e3e2ccca3f")}</div>
           </div>
           <button className="primary-btn compact" onClick={() => { setEditingProject(null); setIsProjectModalOpen(true); }} type="button">
-            <Icon name="plus" /> Новый проект
-          </button>
+            <Icon name="plus" /> {translate("ui.15d568b010da")}</button>
         </header>
         <div className="project-grid">
           {projects.map((project) => (
@@ -80,7 +81,7 @@ export function ProjectsPage({ projects, onArchiveProject, onDeleteProject, onEx
               <button
                 aria-expanded={openMenuId === project.id}
                 aria-haspopup="menu"
-                aria-label={`Действия с проектом «${project.title}»`}
+                aria-label={translate("ui.4f9dd257d14f", { p0: project.title })}
                 className="row-menu-trigger project-menu-trigger"
                 onClick={(event) => {
                   menuAnchorRef.current = event.currentTarget;
@@ -90,23 +91,23 @@ export function ProjectsPage({ projects, onArchiveProject, onDeleteProject, onEx
               >
                 <Icon name="dots" />
               </button>
-              <MenuPopover anchorRef={menuAnchorRef} ariaLabel={`Действия с проектом «${project.title}»`} className="row-actions-menu" isOpen={openMenuId === project.id} onClose={closeMenu} preferredWidth={210}>
-                <button onClick={() => { closeMenu(); setEditingProject(project); setIsProjectModalOpen(true); }} role="menuitem" type="button">Изменить проект</button>
+              <MenuPopover anchorRef={menuAnchorRef} ariaLabel={translate("ui.4f9dd257d14f", { p0: project.title })} className="row-actions-menu" isOpen={openMenuId === project.id} onClose={closeMenu} preferredWidth={210}>
+                <button onClick={() => { closeMenu(); setEditingProject(project); setIsProjectModalOpen(true); }} role="menuitem" type="button">{translate("ui.0f1ec316eb07")}</button>
                 <button disabled={Boolean(exportBusy)} onClick={() => {
                   if (exportBusy) return;
                   setExportBusy(project.id);
-                  void onExportProject(project).then(closeMenu).catch((error) => onToast(error instanceof Error && error.message === "Не удалось сохранить изменения перед экспортом." ? error.message : "Не удалось экспортировать проект.")).finally(() => setExportBusy(""));
-                }} role="menuitem" type="button">{exportBusy === project.id ? <span aria-hidden="true" className="button-spinner" /> : null}{exportBusy === project.id ? "Сохраняем…" : "Экспортировать"}</button>
-                <button onClick={() => { closeMenu(); setArchiveError(""); setPendingArchive(project); }} role="menuitem" type="button">Архивировать</button>
+                  void onExportProject(project).then(closeMenu).catch((error) => onToast(error instanceof Error && error.message === translate("ui.c93e1d253df2") ? error.message : translate("ui.93d7691cdd49"))).finally(() => setExportBusy(""));
+                }} role="menuitem" type="button">{exportBusy === project.id ? <span aria-hidden="true" className="button-spinner" /> : null}{exportBusy === project.id ? translate("ui.9c27c381dd8b") : translate("ui.78dfcef11633")}</button>
+                <button onClick={() => { closeMenu(); setArchiveError(""); setPendingArchive(project); }} role="menuitem" type="button">{translate("ui.1137508af8ff")}</button>
                 <div className="nf-menu-separator" />
-                <button className="danger" disabled={!onDeleteProject} onClick={() => { closeMenu(); setPendingDelete(project); }} role="menuitem" type="button">Удалить проект</button>
+                <button className="danger" disabled={!onDeleteProject} onClick={() => { closeMenu(); setPendingDelete(project); }} role="menuitem" type="button">{translate("ui.b8d719c6e9a4")}</button>
               </MenuPopover>
             </article>
           ))}
           {projects.length === 0 ? (
             <div className="page-empty-state project-empty-state">
               <span className="page-empty-icon"><Icon name="folder" /></span>
-              <div><b>Проектов пока нет</b><span>Создайте проект, чтобы собрать связанные заметки в одном месте.</span></div>
+              <div><b>{translate("ui.3a82717b96cc")}</b><span>{translate("ui.cf12c71acae0")}</span></div>
             </div>
           ) : null}
         </div>
@@ -130,13 +131,13 @@ export function ProjectsPage({ projects, onArchiveProject, onDeleteProject, onEx
           backdropClassName="confirm-backdrop"
           className="confirm-dialog"
           closeDisabled={archiveBusy}
-          description={`«${pendingArchive.title}» и активные заметки проекта переместятся в Архив. Заметки можно будет просматривать и восстановить вместе с проектом.`}
+          description={translate("ui.d022082fa099", { p0: pendingArchive.title })}
           dismissOnBackdrop={false}
-          footer={<div className="new-note-actions"><button className="secondary-btn" disabled={archiveBusy} onClick={() => setPendingArchive(null)} type="button">Отмена</button><button className="primary-btn" disabled={archiveBusy} onClick={() => void archiveProject()} type="button">{archiveBusy ? "Архивируем…" : "Архивировать"}</button></div>}
+          footer={<div className="new-note-actions"><button className="secondary-btn" disabled={archiveBusy} onClick={() => setPendingArchive(null)} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="primary-btn" disabled={archiveBusy} onClick={() => void archiveProject()} type="button">{archiveBusy ? translate("ui.3b4cda39e966") : translate("ui.1137508af8ff")}</button></div>}
           onClose={() => setPendingArchive(null)}
           open
           size="compact"
-          title="Архивировать проект?"
+          title={translate("ui.5bf08bac9f74")}
           titleId="archive-project-title"
         >
           {archiveError ? <div className="field-error" role="alert">{archiveError}</div> : null}
@@ -154,6 +155,7 @@ interface ProjectEditorModalProps {
 }
 
 function ProjectEditorModal({ onClose, onSave, project, projects }: ProjectEditorModalProps) {
+  useInterfaceLanguage();
   const [title, setTitle] = useState(project?.title ?? "");
   const [description, setDescription] = useState(project?.description ?? "");
   const [busy, setBusy] = useState(false);
@@ -166,14 +168,14 @@ function ProjectEditorModal({ onClose, onSave, project, projects }: ProjectEdito
     const validation = title.trim() === project?.title ? "" : validateEntityName(title);
     if (validation) { setError(validation); return; }
     if (projects.some((item) => item.id !== project?.id && item.title.trim().toLocaleLowerCase("ru-RU") === title.trim().toLocaleLowerCase("ru-RU"))) {
-      setError("Проект с таким названием уже существует."); return;
+      setError(translate("ui.26fee8c88f7e")); return;
     }
     setBusy(true);
     setError("");
     try {
       await onSave(normalizeEntityName(title), description.trim());
     } catch (cause) {
-      setError(cause instanceof PublicCommandError && (cause.code === "PROJECT_TITLE_EXISTS" || cause.code === "TITLE_TOO_LONG") ? cause.message : "Не удалось сохранить проект. Проверьте название и попробуйте ещё раз.");
+      setError(cause instanceof PublicCommandError && (cause.code === "PROJECT_TITLE_EXISTS" || cause.code === "TITLE_TOO_LONG") ? cause.message : translate("ui.fa68a2c25e54"));
     } finally {
       setBusy(false);
     }
@@ -184,19 +186,18 @@ function ProjectEditorModal({ onClose, onSave, project, projects }: ProjectEdito
       backdropClassName="modal-backdrop"
       className="new-note-dialog project-dialog"
       closeDisabled={busy}
-      description="Проект хранится локально вместе со связанными заметками."
-      footer={<div className="new-note-actions"><button className="secondary-btn" disabled={busy} onClick={onClose} type="button">Отмена</button><button className="primary-btn" disabled={busy || Boolean(validateEntityName(title)) && title.trim() !== project?.title} form="project-editor-form" type="submit">{busy ? "Сохраняем…" : project ? "Сохранить" : "Создать"}</button></div>}
+      description={translate("ui.723a03094b8c")}
+      footer={<div className="new-note-actions"><button className="secondary-btn" disabled={busy} onClick={onClose} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="primary-btn" disabled={busy || Boolean(validateEntityName(title)) && title.trim() !== project?.title} form="project-editor-form" type="submit">{busy ? translate("ui.9c27c381dd8b") : project ? translate("ui.b4d30cae5289") : translate("ui.e2be34974ae4")}</button></div>}
       initialFocusRef={titleInputRef}
       onClose={onClose}
       open
       size="compact"
-      title={project ? "Изменить проект" : "Новый проект"}
+      title={project ? translate("ui.0f1ec316eb07") : translate("ui.15d568b010da")}
       titleId="project-editor-title"
     >
       <form className="new-note-form" id="project-editor-form" onSubmit={(event) => void submit(event)}>
-        <label>Название<input aria-invalid={Boolean(error) || Boolean(validateEntityName(title)) && title.trim() !== project?.title} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder="Например, Исследование рынка" ref={titleInputRef} value={title} /><EntityNameCounter value={title} /></label>
-        <label>Описание<input maxLength={500} onChange={(event) => setDescription(event.currentTarget.value)} placeholder="Короткое описание проекта" value={description} /></label>
-        {error ? <div className="field-error" role="alert">{error}</div> : null}
+        <label>{translate("ui.0918b4ba9268")}<input aria-invalid={Boolean(error) || Boolean(validateEntityName(title)) && title.trim() !== project?.title} onChange={(event) => { setTitle(event.currentTarget.value); setError(""); }} placeholder={translate("ui.2274ee4860e5")} ref={titleInputRef} value={title} /><EntityNameCounter value={title} error={error} legacy={title.trim() === project?.title} /></label>
+        <label>{translate("ui.b3680f2cba5f")}<input maxLength={500} onChange={(event) => setDescription(event.currentTarget.value)} placeholder={translate("ui.d4ee51f1183d")} value={description} /></label>
       </form>
     </ModalShell>
   );

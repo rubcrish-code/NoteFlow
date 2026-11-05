@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "./i18n";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
@@ -50,6 +51,7 @@ export function ModalShell({
   title,
   titleId,
 }: ModalShellProps) {
+  useInterfaceLanguage();
   const generatedTitleId = useId();
   const resolvedTitleId = titleId ?? generatedTitleId;
   const descriptionId = description ? `${resolvedTitleId}-description` : undefined;
@@ -167,11 +169,11 @@ export function ModalShell({
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
           <button
-            aria-label="Закрыть окно"
+            aria-label={translate("ui.db9cc7b22ffd")}
             className={`nf-modal-close ${closeButtonClassName}`.trim()}
             disabled={closeDisabled}
             onClick={requestClose}
-            title="Закрыть"
+            title={translate("ui.a7a4033657e8")}
             type="button"
           >
             <Icon name="x" />

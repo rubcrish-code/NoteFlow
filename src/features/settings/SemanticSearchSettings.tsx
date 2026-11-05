@@ -1,5 +1,7 @@
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useRef, useState } from "react";
 import * as embeddingService from "../../services/embeddingService";
+import { uiMessage } from "../../shared/uiMessages";
 import type {
   EmbeddingIndexStatus,
   EmbeddingIndexUpdateResult,
@@ -44,7 +46,7 @@ type Confirmation = { type: "delete"; profile: EmbeddingProfile } | { type: "reb
 
 const presets: Record<EmbeddingProviderType, Omit<ProfileForm, "id" | "apiKey" | "deleteApiKey" | "enabled">> = {
   ollama: {
-    name: "Ollama локально",
+    get name() { return translate("ui.272279d699f8"); },
     providerType: "ollama",
     baseUrl: "http://127.0.0.1:11434",
     embeddingsEndpoint: "/api/embed",
@@ -54,7 +56,7 @@ const presets: Record<EmbeddingProviderType, Omit<ProfileForm, "id" | "apiKey" |
     locality: "local",
   },
   openai: {
-    name: "OpenAI смысловой поиск (RAG)",
+    get name() { return translate("ui.7c5b738b475f"); },
     providerType: "openai",
     baseUrl: "https://api.openai.com/v1",
     embeddingsEndpoint: "/embeddings",
@@ -64,7 +66,7 @@ const presets: Record<EmbeddingProviderType, Omit<ProfileForm, "id" | "apiKey" |
     locality: "cloud",
   },
   custom: {
-    name: "Своя модель смыслового поиска (RAG)",
+    get name() { return translate("ui.f4de47941760"); },
     providerType: "custom",
     baseUrl: "http://localhost:8000/v1",
     embeddingsEndpoint: "/embeddings",
@@ -76,9 +78,9 @@ const presets: Record<EmbeddingProviderType, Omit<ProfileForm, "id" | "apiKey" |
 };
 
 const semanticProviderOptions = [
-  { id: "ollama", label: "Ollama", detail: "Локально на компьютере", icon: <Icon aria-hidden="true" name="gear" /> },
-  { id: "openai", label: "OpenAI-compatible", detail: "Совместимый облачный API", icon: <Icon aria-hidden="true" name="search" /> },
-  { id: "custom", label: "Свой API", detail: "Локальный или внешний endpoint", icon: <Icon aria-hidden="true" name="code" /> },
+  { id: "ollama", label: "Ollama", get detail() { return translate("ui.b7608054c1a4"); }, icon: <Icon aria-hidden="true" name="gear" /> },
+  { id: "openai", label: "OpenAI-compatible", get detail() { return translate("ui.d3d9b4e13912"); }, icon: <Icon aria-hidden="true" name="search" /> },
+  { id: "custom", get label() { return translate("ui.e4c7fed82824"); }, get detail() { return uiMessage(getInterfaceLanguage(), "customProviderDetail"); }, icon: <Icon aria-hidden="true" name="code" /> },
 ] as const;
 
 function emptyForm(providerType: EmbeddingProviderType = "ollama"): ProfileForm {
@@ -103,6 +105,7 @@ function profileForm(profile: EmbeddingProfile): ProfileForm {
 }
 
 export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps) {
+  useInterfaceLanguage();
   const [profiles, setProfiles] = useState<EmbeddingProfile[]>([]);
   const [statuses, setStatuses] = useState<Record<string, EmbeddingIndexStatus>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -141,7 +144,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
         if (!cancelled) setStatuses(nextStatuses);
       },
       () => {
-        if (!cancelled) showMessage("Не удалось загрузить настройки смыслового поиска (RAG)", true);
+        if (!cancelled) showMessage(translate("ui.9ded97d82e67"), true);
       },
     ).finally(() => {
       if (!cancelled) setIsLoading(false);
@@ -236,14 +239,14 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
 
   async function loadModels() {
     if (!form.baseUrl.trim()) {
-      showMessage("Укажите адрес подключения", true);
+      showMessage(translate("ui.4f1baea6134f"), true);
       return;
     }
     const operationId = ++modelListOperationIdRef.current;
     const snapshot = form;
     setModelDiscoveryState("loading");
-    setModelDiscoveryMessage("Загружаем актуальный список моделей…");
-    showMessage("Загружаем модели…");
+    setModelDiscoveryMessage(translate("ui.69e52b16892b"));
+    showMessage(translate("ui.954eb9132da8"));
     try {
       const result = await embeddingService.listEmbeddingModels({
         profileId: snapshot.id,
@@ -261,8 +264,8 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       if (modelListOperationIdRef.current === operationId) {
         setModelOptions([]);
         setModelDiscoveryState("error");
-        setModelDiscoveryMessage("Не удалось получить список моделей. Можно указать Model ID вручную.");
-        showMessage("Не удалось получить список моделей. Укажите название вручную.", true);
+        setModelDiscoveryMessage(translate("ui.5d8255fee6d7"));
+        showMessage(translate("ui.dc58ae9a561f"), true);
       }
     }
   }
@@ -270,7 +273,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   async function saveProfile() {
     const input = formInput(form);
     if (!input) {
-      showMessage("Заполните название, адрес и модель смыслового поиска (RAG)", true);
+      showMessage(translate("ui.695ca8a885ef"), true);
       return;
     }
     setSaving(true);
@@ -279,10 +282,10 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       await refreshProfiles();
       await refreshStatus(saved.id);
       setIsFormOpen(false);
-      showMessage("Настройки смыслового поиска (RAG) сохранены");
-      onToast("Настройки смыслового поиска (RAG) сохранены");
+      showMessage(translate("ui.aee0b3e51f8b"));
+      onToast(translate("ui.aee0b3e51f8b"));
     } catch (error) {
-      showMessage(errorText(error, "Не удалось сохранить настройки"), true);
+      showMessage(errorText(error, translate("ui.6e7ee8b60e28")), true);
     } finally {
       setSaving(false);
     }
@@ -291,7 +294,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   async function testProfile(profile: EmbeddingProfile) {
     const operationId = ++testOperationIdRef.current;
     setTestingProfileId(profile.id);
-    showMessage(`Проверяем ${profile.name}…`);
+    showMessage(translate("ui.007dce40df5c", { p0: profile.name }));
     try {
       const result = await embeddingService.testEmbeddingProvider(profile.id);
       if (testOperationIdRef.current !== operationId) return;
@@ -301,7 +304,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       onToast(result.message);
     } catch (error) {
       if (testOperationIdRef.current === operationId) {
-        showMessage(errorText(error, "Не удалось проверить подключение"), true);
+        showMessage(errorText(error, translate("ui.52d1b618953f")), true);
       }
     } finally {
       if (testOperationIdRef.current === operationId) setTestingProfileId(null);
@@ -330,17 +333,17 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       if (operation === "rebuild") {
         setConfirmation({ type: "rebuild", profile: updated });
       } else {
-        showMessage("Облачная обработка разрешена. Новые и изменённые заметки будут обрабатываться автоматически.");
+        showMessage(translate("ui.b9caefce9693"));
       }
     } catch (error) {
-      showMessage(errorText(error, "Не удалось сохранить согласие"), true);
+      showMessage(errorText(error, translate("ui.696ef5b57226")), true);
     }
   }
 
   async function runIndexOperation(profile: EmbeddingProfile, operation: IndexOperation) {
     const operationId = ++indexOperationIdRef.current;
     setIndexOperation({ profileId: profile.id, type: operation });
-    showMessage(operation === "rebuild" ? "Пересоздаём смысловой поиск (RAG)…" : "Обновляем смысловой поиск (RAG)…");
+    showMessage(operation === "rebuild" ? translate("ui.b93b7b6423b7") : translate("ui.7a106076bb28"));
     try {
       const result = operation === "rebuild"
         ? await embeddingService.rebuildEmbeddingIndex(profile.id)
@@ -352,7 +355,7 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       onToast(text);
     } catch (error) {
       if (indexOperationIdRef.current === operationId) {
-        showMessage(errorText(error, "Не удалось обновить смысловой поиск (RAG)"), true);
+        showMessage(errorText(error, translate("ui.7dc39a687b6e")), true);
         await refreshStatus(profile.id);
       }
     } finally {
@@ -363,9 +366,9 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
   async function cancelIndexing(profileId: string) {
     try {
       const accepted = await embeddingService.cancelEmbeddingIndexing(profileId);
-      showMessage(accepted ? "Останавливаем после текущей группы фрагментов…" : "Активное обновление уже завершено");
+      showMessage(accepted ? translate("ui.8fe5792daa88") : translate("ui.ee5bd5098508"));
     } catch (error) {
-      showMessage(errorText(error, "Не удалось остановить обновление"), true);
+      showMessage(errorText(error, translate("ui.fa8ef520ad8e")), true);
     }
   }
 
@@ -379,10 +382,10 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
         return next;
       });
       setConfirmation(null);
-      showMessage("Настройки смыслового поиска (RAG) удалены");
-      onToast("Настройки смыслового поиска (RAG) удалены");
+      showMessage(translate("ui.a439a92f7a83"));
+      onToast(translate("ui.a439a92f7a83"));
     } catch (error) {
-      showMessage(errorText(error, "Не удалось удалить настройки"), true);
+      showMessage(errorText(error, translate("ui.5c18cceeaa8a")), true);
     }
   }
 
@@ -391,22 +394,21 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       <SettingsSectionHeader
         action={profiles.length > 0 ? (
           <button className="primary-btn compact" disabled={isLoading} onClick={openNewProfile} type="button">
-            Добавить модель
-          </button>
+            {translate("ui.2df38a36b3c0")}</button>
         ) : null}
-        description="Находит связанные по смыслу фрагменты заметок и используется для поиска по базе знаний"
-        info="Модель смыслового поиска не создаёт ответы. Она находит связанные по смыслу фрагменты во всей базе заметок. В RAG найденные фрагменты используются как источники для ответа ИИ."
-        title="Смысловой поиск (RAG)"
+        description={translate("ui.eec9c58998a8")}
+        info={translate("ui.8f2fccf325bd")}
+        title={translate("ui.56451952c80c")}
       />
 
       <div className="settings-card semantic-profile-list-card model-settings-card">
-        {isLoading ? <div className="semantic-empty-state">Загружаем настройки…</div> : null}
+        {isLoading ? <div className="semantic-empty-state">{translate("ui.a709de0bacba")}</div> : null}
         {!isLoading && profiles.length === 0 ? (
           <div className="semantic-empty-state model-empty-state">
             <span className="semantic-empty-icon"><Icon name="search" /></span>
-            <b>Смысловой поиск (RAG) пока не настроен</b>
-            <p>Подключите локальную или облачную модель, чтобы искать заметки по смыслу</p>
-            <button className="primary-btn" onClick={openNewProfile} type="button">Добавить модель</button>
+            <b>{translate("ui.8582d8af4783")}</b>
+            <p>{translate("ui.cf159cb36ac8")}</p>
+            <button className="primary-btn" onClick={openNewProfile} type="button">{translate("ui.2df38a36b3c0")}</button>
           </div>
         ) : null}
         {profiles.map((profile) => {
@@ -418,44 +420,44 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
               <div className="semantic-profile-head model-profile-head">
                 <span className="semantic-profile-icon"><Icon name="search" /></span>
                 <div className="semantic-profile-title">
-                  <div><b>{profile.name}</b><span className={`locality-badge ${profile.locality}`}>{profile.locality === "local" ? "Локально" : "Облачно"}</span></div>
+                  <div><b>{profile.name}</b><span className={`locality-badge ${profile.locality}`}>{profile.locality === "local" ? translate("ui.bbf7909a971c") : translate("ui.702517297fb6")}</span></div>
                   <small>{providerLabel(profile.providerType)} · {profile.model}</small>
                 </div>
                 <ModelStatusBadge
                   busy={Boolean(operation || testing || status?.status === "indexing")}
-                  label={operation ? "Обновляется" : testing ? "Проверяем" : indexStatusLabel(status?.status, profile.lastStatus)}
+                  label={operation ? translate("ui.6fa6aaf4897b") : testing ? translate("ui.349423c80f2d") : indexStatusLabel(status?.status, profile.lastStatus)}
                   tone={status?.status === "failed" ? "error" : status?.status === "partial" ? "warning" : status?.status === "current" ? "success" : profile.lastStatus === "error" ? "error" : "neutral"}
                 />
               </div>
               <div className="semantic-profile-metrics">
-                <span><small>Модель</small><b>{profile.model}</b></span>
-                <span><small>Обработано</small><b>{status ? `${status.indexedChunks} из ${status.totalChunks}` : "—"}</b></span>
-                <span><small>Осталось</small><b>{status?.pendingChunks ?? "—"}</b></span>
-                <span><small>Последняя проверка</small><b>{formatDate(status?.lastCheckedAt ?? profile.lastCheckedAt)}</b></span>
+                <span><small>{translate("ui.f3bdf7cce355")}</small><b>{profile.model}</b></span>
+                <span><small>{translate("ui.e8aff9df9a4f")}</small><b>{status ? translate("ui.872e50273d01", { p0: status.indexedChunks, p1: status.totalChunks }) : "—"}</b></span>
+                <span><small>{translate("ui.0246a2516cda")}</small><b>{status?.pendingChunks ?? "—"}</b></span>
+                <span><small>{translate("ui.9be8166876fa")}</small><b>{formatDate(status?.lastCheckedAt ?? profile.lastCheckedAt)}</b></span>
               </div>
               {(operation || status?.status === "indexing") && status ? (
-                <div className="semantic-progress" aria-label="Прогресс обновления">
+                <div className="semantic-progress" aria-label={translate("ui.e504f5e074b1")}>
                   <span style={{ width: `${progressPercent(status)}%` }} />
                 </div>
               ) : null}
               <div className="semantic-profile-actions model-profile-actions">
                 <button className="secondary-btn compact" disabled={testing || Boolean(operation)} onClick={() => void testProfile(profile)} type="button">
-                  {testing ? "Проверяем…" : "Проверить подключение"}
+                  {testing ? translate("ui.62ed32eb225c") : translate("ui.d6d828dc8806")}
                 </button>
-                <button className="secondary-btn compact" disabled={Boolean(operation)} onClick={() => openProfile(profile)} type="button">Изменить</button>
+                <button className="secondary-btn compact" disabled={Boolean(operation)} onClick={() => openProfile(profile)} type="button">{translate("ui.b8b151d41743")}</button>
                 {operation ? (
-                  <button className="secondary-btn compact" onClick={() => void cancelIndexing(profile.id)} type="button">Остановить</button>
-                ) : profile.locality === "cloud" && !profile.hasCloudConsent ? <button className="primary-btn compact" onClick={() => setConsentRequest({ profile, operation: "update" })} type="button">Разрешить облачную обработку</button> : null}
+                  <button className="secondary-btn compact" onClick={() => void cancelIndexing(profile.id)} type="button">{translate("ui.3396400da0c4")}</button>
+                ) : profile.locality === "cloud" && !profile.hasCloudConsent ? <button className="primary-btn compact" onClick={() => setConsentRequest({ profile, operation: "update" })} type="button">{translate("ui.9049012a92bd")}</button> : null}
                 <details className="semantic-more-actions model-card-more">
-                  <summary aria-label={`Дополнительные действия: ${profile.name}`} className="row-menu-trigger"><Icon name="dots" /></summary>
+                  <summary aria-label={translate("ui.551a138fd76c", { p0: profile.name })} className="row-menu-trigger"><Icon name="dots" /></summary>
                   <div className="semantic-more-menu">
-                    <button disabled={Boolean(operation)} onClick={() => requestIndexOperation(profile, "rebuild")} type="button">Восстановить индекс поиска</button>
-                    <button className="danger" disabled={Boolean(operation)} onClick={() => setConfirmation({ type: "delete", profile })} type="button">Удалить модель</button>
+                    <button disabled={Boolean(operation)} onClick={() => requestIndexOperation(profile, "rebuild")} type="button">{translate("ui.145e3d43dcad")}</button>
+                    <button className="danger" disabled={Boolean(operation)} onClick={() => setConfirmation({ type: "delete", profile })} type="button">{translate("ui.46cb5952c6b3")}</button>
                   </div>
                 </details>
               </div>
               <div aria-live="polite" className={`model-card-operation ${operation || testing ? "visible" : ""}`}>
-                {operation ? "Обновляем смысловой поиск (RAG)…" : testing ? "Проверяем подключение…" : "\u00A0"}
+                {operation ? translate("ui.7a106076bb28") : testing ? translate("ui.a4ef42e083b8") : "\u00A0"}
               </div>
             </article>
           );
@@ -466,32 +468,32 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
       {isFormOpen ? (
         <SettingsModalShell
           className="semantic-profile-modal"
-          description="Модель смыслового поиска настраивается отдельно от ИИ-помощника"
-          eyebrow={form.id ? "Редактирование" : "Новая модель"}
+          description={translate("ui.5818dc61c42e")}
+          eyebrow={form.id ? translate("ui.c547312308d6") : translate("ui.9e2f48ac11ac")}
           footer={(
             <div className="settings-modal-footer-actions">
-              <button className="ghost-btn" disabled={saving} onClick={() => setIsFormOpen(false)} type="button">Отмена</button>
-              <button className="primary-btn" disabled={saving} onClick={() => void saveProfile()} type="button">{saving ? "Сохраняем…" : "Сохранить модель"}</button>
+              <button className="ghost-btn" disabled={saving} onClick={() => setIsFormOpen(false)} type="button">{translate("ui.8fbe9b75cbdf")}</button>
+              <button className="primary-btn" disabled={saving} onClick={() => void saveProfile()} type="button">{saving ? translate("ui.9c27c381dd8b") : translate("ui.1fc49b9d5038")}</button>
             </div>
           )}
           onClose={() => setIsFormOpen(false)}
           size="standard"
           status={message ? <div aria-live="polite" className={`semantic-settings-message ${messageError ? "error" : ""}`}>{message}</div> : null}
-          title={form.id ? "Изменить модель смыслового поиска (RAG)" : "Новая модель смыслового поиска (RAG)"}
+          title={form.id ? translate("ui.fa8fc1f354c6") : translate("ui.2f036e2a8b12")}
           titleId="semantic-form-title"
         >
             <ProviderTypeSelector
-              ariaLabel="Тип подключения смыслового поиска (RAG)"
+              ariaLabel={translate("ui.413dab73ea59")}
               onChange={changeProviderType}
               options={semanticProviderOptions}
               value={form.providerType}
             />
             <div className="form-grid semantic-profile-form">
-              <label className="field full"><span className="field-label">Название <InfoHint text="Имя этого подключения в NoteFlow. Не влияет на выбор модели на сервере." /></span><input onChange={(event) => updateForm({ name: event.currentTarget.value })} value={form.name} /></label>
-              <label className="field full"><span className="field-label">Адрес подключения <InfoHint text="Адрес Ollama, LM Studio или облачного API модели. Секретный ключ вводится отдельно." /></span><input onChange={(event) => updateForm({ baseUrl: event.currentTarget.value })} spellCheck={false} value={form.baseUrl} /></label>
+              <label className="field full"><span className="field-label">{translate("ui.0918b4ba9268") + " "}<InfoHint text={translate("ui.d5f826844c80")} /></span><input onChange={(event) => updateForm({ name: event.currentTarget.value })} value={form.name} /></label>
+              <label className="field full"><span className="field-label">{translate("ui.771987b20028") + " "}<InfoHint text={translate("ui.1254d44d55ad")} /></span><input onChange={(event) => updateForm({ baseUrl: event.currentTarget.value })} spellCheck={false} value={form.baseUrl} /></label>
               <ModelDiscoveryField
-                label="Модель смыслового поиска (RAG)"
-                manualPlaceholder="Укажите Model ID"
+                label={translate("ui.0d70b4d4281c")}
+                manualPlaceholder={translate("ui.2fb0c108bf96")}
                 manualValue={form.model}
                 onDiscover={() => void loadModels()}
                 onManualChange={(model) => updateForm({ model })}
@@ -501,16 +503,16 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
                 state={modelDiscoveryState}
                 statusMessage={modelDiscoveryMessage}
               />
-              <label className="field full"><span className="field-label">Режим <InfoHint text="Локальная обработка остаётся на вашем компьютере. Облачная отправляет фрагменты провайдеру только после вашего согласия." /></span><select onChange={(event) => updateForm({ locality: event.currentTarget.value === "cloud" ? "cloud" : "local" })} value={form.locality}><option value="local">Локально</option><option value="cloud">Облачно</option></select></label>
-              <label className="field full"><span className="field-label">Путь смыслового поиска (RAG) <InfoHint text="Путь API, который принимает текст и возвращает его числовое представление. Для Ollama обычно /api/embed." /></span><input onChange={(event) => updateForm({ embeddingsEndpoint: event.currentTarget.value })} spellCheck={false} value={form.embeddingsEndpoint} /></label>
-              <label className="field"><span className="field-label">Размер группы <InfoHint text="Сколько фрагментов отправлять за один запрос. Уменьшите значение, если сервер перегружен." /></span><input min="1" max="128" onChange={(event) => updateForm({ batchSize: event.currentTarget.value })} type="number" value={form.batchSize} /></label>
-              <label className="field"><span className="field-label">Ожидание ответа, сек. <InfoHint text="Максимальное время ожидания одного запроса к модели смыслового поиска." /></span><input min="5" max="300" onChange={(event) => updateForm({ timeoutSeconds: event.currentTarget.value })} type="number" value={form.timeoutSeconds} /></label>
-              <label className="field full"><span className="field-label">API key <InfoHint text="Ключ провайдера хранится в защищённом хранилище ОС и не попадает в резервную копию. Для локальной Ollama обычно не нужен." /></span><input autoComplete="off" onChange={(event) => updateForm({ apiKey: event.currentTarget.value, deleteApiKey: false })} placeholder={form.id ? "Оставьте пустым, чтобы сохранить текущий ключ" : "Не нужен для локальной Ollama"} type="password" value={form.apiKey} /></label>
-              {form.id ? <button className="text-danger-action" onClick={() => updateForm({ apiKey: "", deleteApiKey: true })} type="button">{form.deleteApiKey ? "Сохранённый ключ будет удалён" : "Удалить сохранённый ключ"}</button> : null}
+              <label className="field full"><span className="field-label">{translate("ui.3f53fb873461") + " "}<InfoHint text={translate("ui.223e1d31b992")} /></span><select onChange={(event) => updateForm({ locality: event.currentTarget.value === "cloud" ? "cloud" : "local" })} value={form.locality}><option value="local">{translate("ui.bbf7909a971c")}</option><option value="cloud">{translate("ui.702517297fb6")}</option></select></label>
+              <label className="field full"><span className="field-label">{translate("ui.7f8c135289e8") + " "}<InfoHint text={translate("ui.7a9f23146b6b")} /></span><input onChange={(event) => updateForm({ embeddingsEndpoint: event.currentTarget.value })} spellCheck={false} value={form.embeddingsEndpoint} /></label>
+              <label className="field"><span className="field-label">{translate("ui.5490b592170f") + " "}<InfoHint text={translate("ui.4f430dd8b782")} /></span><input min="1" max="128" onChange={(event) => updateForm({ batchSize: event.currentTarget.value })} type="number" value={form.batchSize} /></label>
+              <label className="field"><span className="field-label">{translate("ui.03d6a2be39cd") + " "}<InfoHint text={translate("ui.8686788e9699")} /></span><input min="5" max="300" onChange={(event) => updateForm({ timeoutSeconds: event.currentTarget.value })} type="number" value={form.timeoutSeconds} /></label>
+              <label className="field full"><span className="field-label">{uiMessage(getInterfaceLanguage(), "apiKeyLabel")} <InfoHint text={translate("ui.f4f562137249")} /></span><input autoComplete="off" onChange={(event) => updateForm({ apiKey: event.currentTarget.value, deleteApiKey: false })} placeholder={form.id ? translate("ui.6ac2830d253e") : translate("ui.526354f4aff3")} type="password" value={form.apiKey} /></label>
+              {form.id ? <button className="text-danger-action" onClick={() => updateForm({ apiKey: "", deleteApiKey: true })} type="button">{form.deleteApiKey ? translate("ui.54b18559d945") : translate("ui.2ff51a1f2a43")}</button> : null}
               {profiles.find((profile) => profile.id === form.id)?.dimensions ? (
                 <details className="semantic-technical-details full">
-                  <summary>Технические сведения</summary>
-                  <span>Размерность модели: {profiles.find((profile) => profile.id === form.id)?.dimensions}</span>
+                  <summary>{translate("ui.57492dd6ea0f")}</summary>
+                  <span>{translate("ui.d68f25ecf14b") + " "}{profiles.find((profile) => profile.id === form.id)?.dimensions}</span>
                 </details>
               ) : null}
             </div>
@@ -519,43 +521,43 @@ export function SemanticSearchSettings({ onToast }: SemanticSearchSettingsProps)
 
       {consentRequest ? (
         <SettingsModalShell
-          description="Для смыслового поиска (RAG) NoteFlow отправит текст смысловых фрагментов выбранному провайдеру. API-ключ хранится в защищённом системном хранилище."
+          description={translate("ui.8edc7bcbf59f")}
           footer={(
             <div className="settings-modal-footer-actions">
-              <button className="ghost-btn" onClick={() => setConsentRequest(null)} type="button">Отмена</button>
-              <button className="primary-btn" onClick={() => void acceptConsent()} type="button">Разрешить и продолжить</button>
+              <button className="ghost-btn" onClick={() => setConsentRequest(null)} type="button">{translate("ui.8fbe9b75cbdf")}</button>
+              <button className="primary-btn" onClick={() => void acceptConsent()} type="button">{translate("ui.f46095dd8495")}</button>
             </div>
           )}
           onClose={() => setConsentRequest(null)}
           size="compact"
-          title="Разрешить обработку заметок облачной моделью?"
+          title={translate("ui.d2efd1ca7c95")}
           titleId="cloud-consent-title"
         >
-          <div className="settings-confirm-note">Разрешение действует только для выбранной модели смыслового поиска (RAG).</div>
+          <div className="settings-confirm-note">{translate("ui.20c8adc94247")}</div>
         </SettingsModalShell>
       ) : null}
 
       {confirmation ? (
         <SettingsModalShell
-          description={confirmation.type === "delete" ? "Модель смыслового поиска (RAG) и её производный индекс будут удалены. Заметки и другие подключения не изменятся." : "NoteFlow удалит только производные данные выбранной модели и создаст их заново. Заметки останутся без изменений."}
+          description={confirmation.type === "delete" ? translate("ui.c22e8940d7c3") : translate("ui.3da6af8442e4")}
           dismissOnBackdrop={false}
           footer={(
             <div className="settings-modal-footer-actions">
-              <button className="ghost-btn" onClick={() => setConfirmation(null)} type="button">Отмена</button>
+              <button className="ghost-btn" onClick={() => setConfirmation(null)} type="button">{translate("ui.8fbe9b75cbdf")}</button>
               <button className={confirmation.type === "delete" ? "danger-btn" : "primary-btn"} onClick={() => {
                 const current = confirmation;
                 setConfirmation(null);
                 if (current.type === "delete") void deleteProfile(current.profile);
                 else void runIndexOperation(current.profile, "rebuild");
-              }} type="button">{confirmation.type === "delete" ? "Удалить модель" : "Пересоздать"}</button>
+              }} type="button">{confirmation.type === "delete" ? translate("ui.46cb5952c6b3") : translate("ui.669f46232d41")}</button>
             </div>
           )}
           onClose={() => setConfirmation(null)}
           size="compact"
-          title={confirmation.type === "delete" ? "Удалить модель смыслового поиска (RAG)?" : "Пересоздать смысловой поиск (RAG)?"}
+          title={confirmation.type === "delete" ? translate("ui.99308be3b5de") : translate("ui.6028839c1339")}
           titleId="semantic-confirm-title"
         >
-          <div className="settings-confirm-note">{confirmation.type === "delete" ? "Операция необратима для настроек модели." : "Во время пересоздания обычный поиск продолжит работать."}</div>
+          <div className="settings-confirm-note">{confirmation.type === "delete" ? translate("ui.bf4992684cfc") : translate("ui.4a11965b0a86")}</div>
         </SettingsModalShell>
       ) : null}
     </section>
@@ -585,18 +587,18 @@ function formInput(form: ProfileForm): SaveEmbeddingProfileInput | null {
 function providerLabel(providerType: EmbeddingProviderType) {
   if (providerType === "ollama") return "Ollama";
   if (providerType === "openai") return "OpenAI-compatible";
-  return "Свой API";
+  return translate("ui.e4c7fed82824");
 }
 
 function indexStatusLabel(status: EmbeddingIndexStatus["status"] | undefined, providerStatus: EmbeddingProfile["lastStatus"]) {
-  if (status === "current") return "Актуален";
-  if (status === "partial") return "Частично готов";
-  if (status === "failed") return "Требует внимания";
-  if (status === "indexing") return "Обновляется";
-  if (status === "pending") return "Ожидает обработки";
-  if (providerStatus === "success") return "Ожидает обработки";
-  if (providerStatus === "error") return "Ошибка подключения";
-  return "Не проверено";
+  if (status === "current") return translate("ui.d1afd048facb");
+  if (status === "partial") return translate("ui.db5f5f88fafb");
+  if (status === "failed") return translate("ui.34dc848e1848");
+  if (status === "indexing") return translate("ui.6fa6aaf4897b");
+  if (status === "pending") return translate("ui.b4cc048b12d7");
+  if (providerStatus === "success") return translate("ui.b4cc048b12d7");
+  if (providerStatus === "error") return translate("ui.2e4dbae57696");
+  return translate("ui.773a16f5248a");
 }
 
 function progressPercent(status: EmbeddingIndexStatus) {
@@ -605,15 +607,15 @@ function progressPercent(status: EmbeddingIndexStatus) {
 }
 
 function formatDate(value?: string | null) {
-  if (!value) return "Ещё не проверялся";
-  return formatDisplayDateTime(value) || "Ещё не проверялся";
+  if (!value) return translate("ui.4081c1b1a46c");
+  return formatDisplayDateTime(value) || translate("ui.4081c1b1a46c");
 }
 
 function resultMessage(result: EmbeddingIndexUpdateResult) {
-  if (result.cancelled) return `Обновление остановлено. Готово фрагментов: ${result.indexedChunks}`;
-  if (result.failedChunks > 0) return `Обновление завершено частично. Не обработано: ${result.failedChunks}`;
-  if (result.indexedChunks === 0) return "Смысловой поиск (RAG) уже актуален";
-  return `Смысловой поиск (RAG) обновлён: ${result.indexedChunks} фрагментов`;
+  if (result.cancelled) return translate("ui.0b0df97a4f0d", { p0: result.indexedChunks });
+  if (result.failedChunks > 0) return translate("ui.32afb15b46da", { p0: result.failedChunks });
+  if (result.indexedChunks === 0) return translate("ui.584c077100f4");
+  return translate("ui.657097f6e321", { p0: result.indexedChunks });
 }
 
 function errorText(error: unknown, fallback: string) {

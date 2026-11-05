@@ -1,3 +1,4 @@
+import { translate } from "../shared/i18n";
 import type { Note } from "../app/types";
 import { AiBackground } from "./aiBackground";
 import { ChatDrafts } from "../shared/ChatDrafts";
@@ -24,7 +25,7 @@ export async function sendNoteChatInBackground(note: Note, question: string, sel
     const result = await runNoteAi({ kind: "chat", scope: selectedText ? "selection" : "note", question, context }, job.control);
     job.check();
     if (result.status !== "success" || !result.response.trim()) {
-      throw new Error(result.message || "Не удалось получить ответ модели");
+      throw new Error(result.message || translate("ui.bed18cdc5e11"));
     }
     return saveNoteChatMessage(note.id, "assistant", result.response);
   });

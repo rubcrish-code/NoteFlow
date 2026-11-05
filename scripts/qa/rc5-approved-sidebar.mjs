@@ -107,8 +107,9 @@ async function motion(direction, baseline) {
 
 try {
   for (const width of [1100, 1440, 1920]) for (const zoom of [100, 160]) for (const theme of ["light", "dark"]) {
-    const id = `${width}-${zoom}-${theme}`, url = `http://127.0.0.1:1420/scripts/qa/rc5-final-ui.html?zoom=${zoom}&theme=${theme}`;
-    await page.setViewportSize({ width, height: width === 1100 ? 700 : 900 });
+    const supportedWidth = Math.max(width, 360 + 376 + 820 * zoom / 100);
+    const id = `requested-${width}-supported-${supportedWidth}-${zoom}-${theme}`, url = `http://127.0.0.1:1420/scripts/qa/rc5-final-ui.html?zoom=${zoom}&theme=${theme}`;
+    await page.setViewportSize({ width: supportedWidth, height: width === 1100 ? 700 : 900 });
     await page.goto(`${url}&reset=1`); await page.locator(".tiptap").waitFor(); await page.waitForTimeout(700);
     const baseline = await snapshot(`initial-${id}`);
     for (const [step, setting] of [190, 250, 320, 360, 320, 250, 190, 360].entries()) {

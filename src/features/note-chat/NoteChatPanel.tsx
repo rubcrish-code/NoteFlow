@@ -1,5 +1,7 @@
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { ChatMessage, Note } from "../../app/types";
+import type { AppLanguage, ChatMessage, Note } from "../../app/types";
+import { localizeUiMessage, uiMessage } from "../../shared/uiMessages";
 import {
   acceptNoteAiPrivacy,
   getNoteAiStatus,
@@ -14,22 +16,25 @@ import { ResizeHandle } from "../../shared/ResizeHandle";
 import { ChatMarkdown, getNoteChatSourceTitle } from "./ChatMarkdown";
 
 interface NoteChatPanelProps {
+  language?: AppLanguage;
   note: Note;
   onClose: () => void;
   onOpenAiSettings: () => void;
   onResize: (deltaX: number) => void;
+  onResizeStart?: (handle: HTMLDivElement) => void;
+  onResizeEnd?: () => void;
   onResetWidth: () => void;
   onToast: (message: string) => void;
   selectedText?: string;
 }
 
 const suggestedPrompts = [
-  "Сделай краткое резюме",
-  "Что здесь главное?",
-  "Выдели задачи",
-  "Найди ошибки",
-  "Перепиши официально",
-  "Объясни простыми словами",
+  translate("ui.817daeaa3e40"),
+  translate("ui.a7a2418df2c0"),
+  translate("ui.fbd3aef15335"),
+  translate("ui.8e44d4ea6e5a"),
+  translate("ui.900923dd030d"),
+  translate("ui.bac493a86696"),
 ];
 
 type CopyFeedback = {
@@ -41,7 +46,8 @@ interface ClipboardWriter {
   writeText(value: string): Promise<void> | void;
 }
 
-export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onResetWidth, onToast, selectedText: editorSelectedText }: NoteChatPanelProps) {
+export function NoteChatPanel({ language = getInterfaceLanguage(), note, onClose, onOpenAiSettings, onResize, onResizeStart, onResizeEnd, onResetWidth, onToast, selectedText: editorSelectedText }: NoteChatPanelProps) {
+  useInterfaceLanguage();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const draft = useSyncExternalStore(noteChatDrafts.subscribe, () => noteChatDrafts.get(note.id));
   const setDraft = (text: string) => noteChatDrafts.set(note.id, text);
@@ -107,7 +113,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
     } catch (error) {
       if (isMountedRef.current && requestId === historyRequestIdRef.current && noteIdRef.current === noteId) {
         setMessages([]);
-        onToast(`Не удалось загрузить историю чата заметки: ${safeErrorMessage(error)}`);
+        onToast(translate("ui.e25bb59ceaf5", { p0: safeErrorMessage(error) }));
       }
     } finally {
       if (isMountedRef.current && requestId === historyRequestIdRef.current && noteIdRef.current === noteId) {
@@ -120,7 +126,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
     const requestId = ++statusRequestIdRef.current;
     setIsStatusLoading(true);
     try {
-      const status = await getNoteAiStatus();
+      const status = await getNoteAiStatus(language);
       if (!isMountedRef.current || requestId !== statusRequestIdRef.current) {
         return null;
       }
@@ -135,7 +141,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
           privacyAccepted: false,
           privacyNotice: "",
           canUse: false,
-          message: String(error),
+          message: localizeUiMessage(language, error instanceof Error ? error.message : uiMessage(language, "providerConnectionsLoadFailed")),
         });
       }
       return null;
@@ -154,9 +160,9 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
 
     setIsAcceptingPrivacy(true);
     try {
-      setAiStatus(await acceptNoteAiPrivacy(status.privacyScope));
-    } catch (error) {
-      onToast(`Не удалось сохранить подтверждение AI privacy: ${safeErrorMessage(error)}`);
+      setAiStatus(await acceptNoteAiPrivacy(status.privacyScope, language));
+    } catch {
+      onToast(uiMessage(language, "aiPrivacySaveFailed"));
     } finally {
       if (isMountedRef.current) {
         setIsAcceptingPrivacy(false);
@@ -173,15 +179,15 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
     const status = aiStatus ?? (await refreshStatus());
     if (!isMountedRef.current || noteIdRef.current !== note.id) return;
     if (!status?.hasProvider) {
-      onToast("Сначала выберите default LLM provider в настройках моделей");
+      onToast(uiMessage(language, "chooseDefaultProvider"));
       return;
     }
     if (!status.privacyAccepted) {
-      onToast("Подтвердите предупреждение AI privacy перед отправкой текста");
+      onToast(uiMessage(language, "confirmAiPrivacy"));
       return;
     }
     if (!status.canUse) {
-      onToast(status.message);
+      onToast(localizeUiMessage(language, status.message));
       return;
     }
 
@@ -216,10 +222,10 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
 
   return (
     <aside className="note-chat">
-      <ResizeHandle className="chat-resize" label="Изменить ширину чата" onResize={(deltaX) => onResize(-deltaX)} onReset={onResetWidth} />
+      <ResizeHandle className="chat-resize" label={translate("ui.a326f9463d95")} onResize={(deltaX) => onResize(-deltaX)} onReset={onResetWidth} onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
       <div className="nc-top">
-        <span className="t">Чат по заметке</span>
-        <button className="x" onClick={onClose} type="button">
+        <span className="t">{translate("ui.38ac0283cd7c")}</span>
+        <button aria-label={language === "en" ? "Close note chat" : translate("ui.c31af56d6246")} data-tooltip={language === "en" ? "Close note chat" : translate("ui.c31af56d6246")} className="x" onClick={onClose} type="button">
           <Icon name="x" />
         </button>
       </div>
@@ -227,47 +233,44 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
         {isStatusLoading ? (
           <div className="note-chat-status">
             <span className="button-spinner" />
-            <span>Проверяем модель…</span>
+            <span>{translate("ui.ba49a376c503")}</span>
           </div>
         ) : null}
         {isHistoryLoading ? (
           <div className="note-chat-status">
             <span className="button-spinner" />
-            <span>Загружаем историю…</span>
+            <span>{translate("ui.efb18c179df6")}</span>
           </div>
         ) : null}
         {!isStatusLoading && aiStatus && !aiStatus.hasProvider ? (
           <div className="note-chat-empty">
-            <b>ИИ-модель не подключена</b>
-            <span>Выберите default provider в настройках, чтобы задавать вопросы по текущей заметке.</span>
+            <b>{uiMessage(language, "aiModelNotConnected")}</b>
+            <span>{uiMessage(language, "noteChatChooseDefaultProvider")}</span>
             <button className="primary-btn compact" onClick={onOpenAiSettings} type="button">
-              Подключить модель
-            </button>
+              {translate("ui.0258588f30ad")}</button>
           </div>
         ) : null}
         {!isStatusLoading && aiStatus?.hasProvider && !aiStatus.privacyAccepted ? (
           <div className="note-chat-empty privacy">
-            <b>{aiStatus.isLocal ? "Локальная модель" : "Внешний AI provider"}</b>
-            <span>{aiStatus.privacyNotice}</span>
+            <b>{uiMessage(language, aiStatus.isLocal ? "localAiModel" : "externalAiProvider")}</b>
+            <span>{localizeUiMessage(language, aiStatus.privacyNotice)}</span>
             <button className="primary-btn compact" disabled={isAcceptingPrivacy} onClick={() => void handleAcceptPrivacy()} type="button">
               {isAcceptingPrivacy ? <span className="button-spinner" /> : null}
-              Подтвердить
-            </button>
+              {translate("ui.27bca309f5f8")}</button>
           </div>
         ) : null}
         {!isStatusLoading && aiStatus?.hasProvider && aiStatus.privacyAccepted && !aiStatus.canUse ? (
           <div className="note-chat-empty error">
-            <b>Модель недоступна</b>
-            <span>{aiStatus.message}</span>
+            <b>{translate("ui.734946718252")}</b>
+            <span>{localizeUiMessage(language, aiStatus.message)}</span>
             <button className="secondary-btn compact" onClick={onOpenAiSettings} type="button">
-              Открыть настройки
-            </button>
+              {translate("ui.7c8ef82d31bc")}</button>
           </div>
         ) : null}
         {!isHistoryLoading && canSend && messages.length === 0 ? (
           <div className="note-chat-empty chat-history-empty">
-            <b>Истории пока нет</b>
-            <span>Задайте вопрос по текущей заметке. Чат сохранится только после первого сообщения.</span>
+            <b>{translate("ui.6c37656d4bf9")}</b>
+            <span>{translate("ui.c49e2b75896a")}</span>
           </div>
         ) : null}
         {messages.map((message) =>
@@ -275,7 +278,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
             <div className="bub-u" key={message.id}>
               <span className="plain-chat-text">{message.text}</span>
               <button
-                aria-label="Скопировать сообщение"
+                aria-label={translate("ui.efb6957fa025")}
                 className={`note-chat-copy chat-copy-icon ${copyFeedback?.messageId === message.id ? copyFeedback.status : ""}`}
                 onClick={() => void handleCopyMessage(message)}
                 data-tooltip={copyTitle(copyFeedback, message.id)}
@@ -300,10 +303,10 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
                 <div className="note-chat-message-meta">
                   <div className="src">
                     <Icon name="doc" />
-                    <span>источник: «{sourceTitle}»</span>
+                    <span>{translate("chat.source", { title: sourceTitle })}</span>
                   </div>
                   <button
-                    aria-label="Скопировать сообщение"
+                    aria-label={translate("ui.efb6957fa025")}
                     className={`note-chat-copy chat-copy-icon ${copyFeedback?.messageId === message.id ? copyFeedback.status : ""}`}
                     onClick={() => void handleCopyMessage(message)}
                     data-tooltip={copyTitle(copyFeedback, message.id)}
@@ -316,7 +319,7 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
             </div>
           ),
         )}
-        {isSending ? <div className="bub-a loading" aria-live="polite">{job?.text ? <ChatMarkdown content={job.text} /> : <><span className="button-spinner" /><span>ИИ думает…</span></>}</div> : null}
+        {isSending ? <div className="bub-a loading" aria-live="polite">{job?.text ? <ChatMarkdown content={job.text} /> : <><span className="button-spinner" /><span>{translate("ui.ff2ef5dde2ff")}</span></>}</div> : null}
         {job?.phase === "error" || job?.phase === "stopped" ? <div className="bub-a error" role="alert">{job.error}</div> : null}
         {messages.length === 0 ? (
           <div className="note-chat-suggestions">
@@ -330,14 +333,14 @@ export function NoteChatPanel({ note, onClose, onOpenAiSettings, onResize, onRes
       </div>
       <div className="nc-in">
         <ChatComposer
-          ariaLabel="Сообщение по текущей заметке"
+          ariaLabel={translate("ui.f6ad4fff9a57")}
           className="note-chat-composer"
           disabled={!canSend}
           isSubmitting={isSending}
           onChange={setDraft}
           onSubmit={() => void handleSend()}
           onStop={() => void noteChatJobs.stop(note.id)}
-          placeholder="Спросить по заметке…"
+          placeholder={translate("ui.e07a5a1e4c8d")}
           value={draft}
         />
       </div>
@@ -360,9 +363,9 @@ function getSelectedTextFromWindow() {
 
 function copyTitle(copyFeedback: CopyFeedback | null, messageId: string) {
   if (copyFeedback?.messageId !== messageId) {
-    return "Скопировать";
+    return translate("ui.f02956c16588");
   }
-  return copyFeedback.status === "copied" ? "Скопировано" : "Не удалось скопировать";
+  return copyFeedback.status === "copied" ? translate("ui.d2d08c715ee6") : translate("ui.f400e0b540f3");
 }
 
 function getClipboardWriter(): ClipboardWriter | null {
@@ -374,7 +377,7 @@ function getClipboardWriter(): ClipboardWriter | null {
 
 export async function copyAssistantMessageText(messageContent: string, clipboard: ClipboardWriter | null = getClipboardWriter()) {
   if (!clipboard) {
-    throw new Error("Clipboard API недоступен");
+    throw new Error(translate("ui.704bb7a80f2c"));
   }
   await clipboard.writeText(messageContent);
 }
@@ -383,5 +386,5 @@ function safeErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message;
   }
-  return String(error || "Не удалось получить ответ модели");
+  return String(error || translate("ui.bed18cdc5e11"));
 }

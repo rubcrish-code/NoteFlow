@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readLocalizedSource as readFileSync } from "./helpers/readLocalizedSource";
 import { describe, it } from "node:test";
 import { EDITOR_TOOLBAR_ACTIONS } from "../src/features/editor/editorToolbarLayout";
 
@@ -59,7 +59,7 @@ describe("toolbar and block insert menu contract", () => {
   });
 
   it("keeps AI clickable when no model is connected", () => {
-    assert.match(formattingToolbarSource, /ИИ-модель не подключена/);
+    assert.match(formattingToolbarSource, /uiMessage\(language, "aiModelNotConnected"\)/);
     assert.match(formattingToolbarSource, /Подключить модель/);
     assert.match(formattingToolbarSource, /onOpenAiSettings/);
   });

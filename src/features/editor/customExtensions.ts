@@ -1,3 +1,4 @@
+import { translate, subscribeInterfaceLanguage } from "../../shared/i18n";
 import { Mark, Node, mergeAttributes } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
 import { formatDisplayDate } from "../../shared/displayDate";
@@ -169,7 +170,7 @@ export const Callout = Node.create({
           commands.insertContent({
             type: this.name,
             attrs: { variant: attrs.variant ?? "info" },
-            content: [{ type: "paragraph", content: [{ type: "text", text: "Новая выноска" }] }],
+            content: [{ type: "paragraph", content: [{ type: "text", text: translate("ui.a7d77d7d4562") }] }],
           }),
     };
   },
@@ -242,7 +243,7 @@ export const DetailsBlock = Node.create({
       const sync = () => {
         dom.dataset.open = String(Boolean(current.attrs.open));
         button.setAttribute("aria-expanded", String(Boolean(current.attrs.open)));
-        button.setAttribute("aria-label", current.attrs.open ? "Свернуть блок" : "Развернуть блок");
+        button.setAttribute("aria-label", current.attrs.open ? translate("ui.7063e6010bd2") : translate("ui.209f2e112c93"));
         button.textContent = current.attrs.open ? "−" : "+";
       };
       button.onmousedown = (event) => event.preventDefault();
@@ -256,11 +257,12 @@ export const DetailsBlock = Node.create({
         editor.view.dispatch(tr);
       };
       sync();
+      const unsubscribeLanguage = subscribeInterfaceLanguage(sync);
       return { dom, contentDOM,
         update(next) { if (next.type !== current.type) return false; current = next; sync(); return true; },
         stopEvent: (event) => button.contains(event.target as globalThis.Node),
         ignoreMutation: (mutation) => mutation.type !== "selection" && (mutation.target === dom || button.contains(mutation.target)),
-        destroy() { button.onclick = null; button.onmousedown = null; },
+        destroy() { unsubscribeLanguage(); button.onclick = null; button.onmousedown = null; },
       };
     };
   },
@@ -274,10 +276,10 @@ export const DetailsBlock = Node.create({
             type: this.name,
             attrs: { open: true },
             content: [
-              { type: "detailsSummary", content: [{ type: "text", text: "Заголовок блока" }] },
+              { type: "detailsSummary", content: [{ type: "text", text: translate("ui.b32883af0bd4") }] },
               {
                 type: "detailsContent",
-                content: [{ type: "paragraph", content: [{ type: "text", text: "Содержимое сворачиваемого блока" }] }],
+                content: [{ type: "paragraph", content: [{ type: "text", text: translate("ui.6530d35c8aa2") }] }],
               },
             ],
           }),
@@ -390,6 +392,29 @@ export const InlineDate = Node.create({
     return ["time", mergeAttributes(HTMLAttributes, { "data-type": "inline-date", class: "inline-date", datetime: value }), formatDate(value)];
   },
 
+  addNodeView() {
+    return ({ node }) => {
+      let current = node;
+      const dom = document.createElement("time");
+      dom.className = "inline-date";
+      dom.dataset.type = "inline-date";
+      const sync = () => {
+        const value = String(current.attrs.value ?? "");
+        dom.setAttribute("datetime", value);
+        dom.dataset.value = value;
+        dom.textContent = formatDate(value);
+      };
+      sync();
+      const unsubscribeLanguage = subscribeInterfaceLanguage(sync);
+      return {
+        dom,
+        update(next) { if (next.type !== current.type) return false; current = next; sync(); return true; },
+        ignoreMutation: () => true,
+        destroy: unsubscribeLanguage,
+      };
+    };
+  },
+
   addCommands() {
     return {
       insertInlineDate:
@@ -404,7 +429,7 @@ export const InlineDate = Node.create({
 });
 
 export function formatInlineDate(value: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? formatDisplayDate(value) || "Дата" : "Дата";
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? formatDisplayDate(value) || translate("ui.232a0ead182b") : translate("ui.232a0ead182b");
 }
 
 const formatDate = formatInlineDate;

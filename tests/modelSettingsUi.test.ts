@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { uiMessage } from "../src/shared/uiMessages";
+import { readLocalizedSource as readFileSync } from "./helpers/readLocalizedSource";
 import { describe, it } from "node:test";
 
 const sharedSource = readFileSync("src/features/settings/ModelSettingsUi.tsx", "utf8");
@@ -117,7 +118,8 @@ describe("unified model settings UI", () => {
   });
 
   it("shares non-actionable information hints with hover, keyboard focus and Escape", () => {
-    assert.match(chatSource, /Эти модели создают текст: отвечают на вопросы, редактируют заметки, сокращают, объясняют/);
+    assert.match(chatSource, /info=\{uiMessage\(getInterfaceLanguage\(\), "generativeModelsInfo"\)\}/);
+    assert.match(uiMessage("ru", "generativeModelsInfo"), /Эти модели создают текст: отвечают на вопросы, редактируют заметки, сокращают, объясняют/);
     assert.match(semanticSource, /Модель смыслового поиска не создаёт ответы\. Она находит связанные по смыслу фрагменты во всей базе заметок/);
     assert.match(semanticSource, /В RAG найденные фрагменты используются как источники для ответа ИИ/);
     assert.match(sharedSource, /<InfoHint/);
@@ -170,7 +172,7 @@ describe("unified model settings UI", () => {
     assert.match(stylesSource, /\.settings-layout-narrow :is\(\.model-load-control, \.secret-wrap, \.input-action\)[\s\S]*flex-direction: column/);
     assert.match(stylesSource, /overflow-wrap: anywhere/);
     assert.match(appShellSource, /"--app-page-padding-x"/);
-    assert.match(appShellSource, /usePhysicalViewportWidth\(appZoom\.zoomPercent\)/);
+    assert.match(appShellSource, /usePhysicalViewportWidth\(appZoom\.zoomPercent, appZoom\.useCssZoomFallback\)/);
     assert.doesNotMatch(appShellSource, /"--app-page-sidebar-max"|app-zoom-(?:high|elevated)/);
   });
 });

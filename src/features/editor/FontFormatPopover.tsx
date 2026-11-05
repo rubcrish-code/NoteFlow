@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import type { CSSProperties, MouseEvent, RefObject } from "react";
 import { Icon } from "../../shared/Icon";
 import {
@@ -31,29 +32,30 @@ export function FontFormatPopover({
   popoverRef,
   style,
 }: FontFormatPopoverProps) {
+  useInterfaceLanguage();
   const currentFontLabel = getFontFamilyLabel(draft.fontFamily);
-  const currentSizeLabel = draft.fontSize || "по умолчанию";
+  const currentSizeLabel = draft.fontSize || translate("ui.fe7ef244bbd0");
 
   function updateDraft(nextDraft: Partial<FontFormatDraft>) {
     onChange({ ...draft, ...nextDraft });
   }
 
   return (
-    <div aria-label="Шрифт и размер текста" className="font-format-popover" ref={popoverRef} role="dialog" style={style}>
+    <div aria-label={translate("ui.fc69eed57334")} className="font-format-popover" ref={popoverRef} role="dialog" style={style}>
       <div className="font-popover-head">
         <div>
-          <b>Шрифт и размер</b>
+          <b>{translate("ui.9161c26f391b")}</b>
           <span>
             {currentFontLabel} · {currentSizeLabel}
           </span>
         </div>
-        <button aria-label="Закрыть" className="editor-popover-close" onClick={onCancel} onMouseDown={preventMouseFocus} type="button">
+        <button aria-label={translate("ui.a7a4033657e8")} className="editor-popover-close" onClick={onCancel} onMouseDown={preventMouseFocus} type="button">
           <Icon name="x" />
         </button>
       </div>
 
       <div className="font-popover-section">
-        <div className="font-popover-sec">ШРИФТ</div>
+        <div className="font-popover-sec">{translate("ui.09afe00f0a23")}</div>
         <div className="font-family-list">
           {fontFamilyOptions.map((option) => (
             <FontFamilyButton
@@ -67,7 +69,7 @@ export function FontFormatPopover({
       </div>
 
       <div className="font-popover-section">
-        <div className="font-popover-sec">РАЗМЕР</div>
+        <div className="font-popover-sec">{translate("ui.d541bc04bcf7")}</div>
         <div className="font-size-grid">
           {fontSizeOptions.map((size) => (
             <button
@@ -86,14 +88,11 @@ export function FontFormatPopover({
 
       <div className="font-popover-actions">
         <button className="font-action reset" onClick={onReset} onMouseDown={preventMouseFocus} type="button">
-          Сбросить
-        </button>
+          {translate("ui.407f871778d3")}</button>
         <button className="font-action secondary" onClick={onCancel} onMouseDown={preventMouseFocus} type="button">
-          Отмена
-        </button>
+          {translate("ui.8fbe9b75cbdf")}</button>
         <button className="font-action primary" onClick={onApply} onMouseDown={preventMouseFocus} type="button">
-          Применить
-        </button>
+          {translate("ui.e15f960d93eb")}</button>
       </div>
     </div>
   );
@@ -106,6 +105,7 @@ interface FontFamilyButtonProps {
 }
 
 function FontFamilyButton({ isActive, onSelect, option }: FontFamilyButtonProps) {
+  useInterfaceLanguage();
   return (
     <button
       aria-pressed={isActive}

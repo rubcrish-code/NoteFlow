@@ -80,7 +80,7 @@ describe("Tiptap dependency security boundary", () => {
     const lock = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
       packages: Record<string, { version?: string; license?: string }>;
     };
-    const tiptap = Object.entries(lock.packages).filter(([path]) => path.includes("node_modules/@tiptap/"));
+    const tiptap = Object.entries(lock.packages).filter(([path]) => /(?:^|\/)node_modules\/@tiptap\/[^/]+$/.test(path));
     assert.ok(tiptap.length > 0);
     const version = lock.packages["node_modules/@tiptap/core"].version!;
     assert.match(version, /^3\.\d+\.\d+$/);

@@ -1,5 +1,7 @@
+import { translate, useInterfaceLanguage, setInterfaceLanguage } from "../shared/i18n";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri } from "@tauri-apps/api/core";
 import type { AppSection, ArchiveItem, EditorContentSidecarInput, EditorDocument, Note, ProjectCard, SaveStatus, TagRow } from "./types";
 import * as dataService from "../services/dataService";
 import * as noteExportService from "../services/noteExportService";
@@ -12,6 +14,7 @@ import type { SearchNoteResult } from "../services/searchService";
 import type { SemanticSearchResult } from "../services/embeddingService";
 import type { InternalNoteLink } from "../shared/internalNoteLink";
 import { EditorArea } from "../features/editor/EditorArea";
+import { EDITOR_TOOLBAR_MIN_WIDTH } from "../features/editor/editorToolbarLayout";
 import { MainSidebar } from "../features/navigation/MainSidebar";
 import type { PageShellSidebarProps } from "../features/navigation/PageShell";
 import { NewNoteModal } from "../features/notes/NewNoteModal";
@@ -29,11 +32,14 @@ import { AppZoomProvider } from "../shared/AppZoomContext";
 import { LocalProfileModal } from "../shared/LocalProfileModal";
 import { APP_SHORTCUTS, matchesAppShortcut } from "../shared/appShortcuts";
 import { useAppZoom } from "../shared/useAppZoom";
-import { shouldTemporarilyHideNoteList } from "../shared/physicalLayout";
+import { minimumCompactEditorWindowWidth, resolveEditorWorkspacePresentation, type EditorWorkspaceWidths } from "../shared/editorWorkspaceWidth";
+import { panelPointerScale, useWorkspacePanelResize } from "../shared/useWorkspacePanelResize";
+import { useEditorWindowMinimum } from "../shared/useEditorWindowMinimum";
 import { usePhysicalViewportWidth } from "../shared/usePhysicalViewportWidth";
 import { clearLegacyUiSettings, migrateLegacyUiSettings } from "../services/legacyUiSettingsMigration";
 import { DEFAULT_UI_SETTINGS, getUiSettings, normalizeUiSettings, updateUiSettings as persistUiSettings, type UiSettings } from "../services/uiSettingsService";
 import { PendingNoteSaves } from "./noteAutosaveCoordinator";
+import { flushPreparedEditorSaves, type EditorSavePreparationControl } from "../features/editor/editorSavePreparation";
 import { interceptCloseRequest, waitForCloseFlush } from "./closeFlush";
 import { restoreWorkspaceBackup } from "./backupImportCoordinator";
 import { LazyArchivePage, LazyProjectsPage, LazyRagChatPage, LazySettingsPage, LazyTagsPage } from "./lazyFeatures";
@@ -102,6 +108,7 @@ function sortNotesForDisplay(notes: Note[]) {
 }
 
 export function AppShell() {
+  useInterfaceLanguage();
   const [activeSection, setActiveSection] = useState<AppSection>("notes");
   const [settingsTarget, setSettingsTarget] = useState<"semantic-search" | undefined>();
   const [notes, setNotes] = useState<Note[]>([]);
@@ -124,6 +131,7 @@ export function AppShell() {
   const [firstRunRequired, setFirstRunRequired] = useState(false);
   const [needsProfileName, setNeedsProfileName] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const chatRequestRef = useRef({ generation: 0, open: false });
   const [editorSelectionText, setEditorSelectionText] = useState("");
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isNewNoteModalOpen, setIsNewNoteModalOpen] = useState(false);
@@ -137,6 +145,8 @@ export function AppShell() {
   const [uiSettings, setUiSettings] = useState<UiSettings>(DEFAULT_UI_SETTINGS);
   const saveTimeoutRef = useRef<number | null>(null);
   const pendingSavesRef = useRef(new PendingNoteSaves<PendingNoteSave>());
+  const editorPreparationRef = useRef<EditorSavePreparationControl | null>(null);
+  const unpreparedNoteIdRef = useRef<string | null>(null);
   const saveSequenceRef = useRef(0);
   const bulkDeleteInProgressRef = useRef(false);
   const notesGenerationRef = useRef(0);
@@ -145,6 +155,7 @@ export function AppShell() {
   const settingsHydratedRef = useRef(false);
   const settingsSaveTimeoutRef = useRef<number | null>(null);
   const settingsSaveInFlightRef = useRef<Promise<void> | null>(null);
+  const settingsDragRef = useRef(false);
   const uiSettingsRef = useRef<UiSettings>(DEFAULT_UI_SETTINGS);
   const searchRequestIdRef = useRef(0);
   const secondaryDataRequestRef = useRef(0);
@@ -152,7 +163,10 @@ export function AppShell() {
   const openedArchivedNoteIdRef = useRef<string | null>(null);
   const appZoom = useAppZoom({
     onZoomChange: showToast,
-    onZoomPercentChange: (appZoomPercent) => updateUiSettings({ appZoomPercent }),
+    onZoomPercentChange: (appZoomPercent) => {
+      if (!canApplyEditorLayout({ zoomPercent: appZoomPercent })) return false;
+      updateUiSettings({ appZoomPercent }); return true;
+    },
     zoomPercent: uiSettings.appZoomPercent,
   });
   const theme = uiSettings.theme;
@@ -160,18 +174,72 @@ export function AppShell() {
   const listWidth = uiSettings.listWidth;
   const chatWidth = uiSettings.chatWidth;
   const isSidebarCollapsed = uiSettings.sidebarCollapsed;
-  const physicalViewportWidth = usePhysicalViewportWidth(appZoom.zoomPercent);
-  const hideNoteListForChat = shouldTemporarilyHideNoteList({
-    chatOpen: isChatOpen,
-    chatWidth,
-    listWidth,
-    physicalWidth: physicalViewportWidth,
-    sidebarCollapsed: isSidebarCollapsed,
-    sidebarWidth,
-  });
+  const physicalViewportWidth = usePhysicalViewportWidth(appZoom.zoomPercent, appZoom.useCssZoomFallback);
 
   const scopedNotes = notes.filter((note) => !note.archivedAt && (!projectScope || note.projectId === projectScope.id));
   const activeNote = notes.find((note) => note.id === activeNoteId && (!projectScope || note.projectId === projectScope.id)) ?? scopedNotes[0] ?? null;
+  const editorLayout: EditorWorkspaceWidths = { sidebarWidth, listWidth, chatWidth, sidebarCollapsed: isSidebarCollapsed, chatOpen: isChatOpen, focus: isFocusMode, zoomPercent: appZoom.zoomPercent };
+  const editorLayoutActive = activeSection === "notes" && Boolean(activeNote);
+  const editorMinimumWidth = editorLayoutActive ? Math.max(900, minimumCompactEditorWindowWidth(editorLayout)) : 900;
+  const editorWindow = useEditorWindowMinimum(editorMinimumWidth, () => showToast(translate("ui.d5e7c6ee949e")));
+  const editorPresentation = resolveEditorWorkspacePresentation(editorLayout, physicalViewportWidth);
+  const hideNoteListForChat = editorLayoutActive && editorPresentation.hideList;
+  const editorSidebarCollapsed = editorLayoutActive ? editorPresentation.sidebarCollapsed : isSidebarCollapsed;
+  const fittedEditorWidths = activeNote ? editorPresentation.widths
+    : { sidebarWidth: isSidebarCollapsed ? 74 : sidebarWidth, listWidth, chatWidth: isChatOpen ? chatWidth : 0 };
+
+  function canApplyEditorLayout(patch: Partial<EditorWorkspaceWidths>) {
+    if (!editorLayoutActive || resolveEditorWorkspacePresentation({ ...editorLayout, ...patch }, physicalViewportWidth).ribbonFits) return true;
+    showToast(translate("ui.45216521a7b3"));
+    return false;
+  }
+
+  async function openEditorChat() {
+    if (uiSettingsRef.current.lastSection !== "notes") return;
+    const request = { generation: chatRequestRef.current.generation + 1, open: !chatRequestRef.current.open };
+    chatRequestRef.current = request;
+    if (!request.open) { setIsChatOpen(false); return; }
+    try {
+      const minimum = Math.max(900, minimumCompactEditorWindowWidth({ ...editorLayout, chatOpen: true, focus: false }));
+      if (!isTauri() && minimum > physicalViewportWidth) throw new Error("Unsupported editor width");
+      await editorWindow.prepareWidth(minimum, () => chatRequestRef.current === request);
+      if (chatRequestRef.current === request && uiSettingsRef.current.lastSection === "notes") { setIsFocusMode(false); setIsChatOpen(true); }
+    } catch {
+      if (chatRequestRef.current !== request) return;
+      chatRequestRef.current = { ...request, open: false };
+      showToast(translate("ui.be470076e7ac"));
+    }
+  }
+
+  function dismissEditorChat() {
+    chatRequestRef.current = { generation: chatRequestRef.current.generation + 1, open: false };
+    setIsChatOpen(false);
+  }
+
+  async function revealNoteList() {
+    dismissEditorChat();
+    try {
+      await editorWindow.prepareWidth(Math.max(900, Math.ceil(EDITOR_TOOLBAR_MIN_WIDTH * appZoom.zoomPercent / 100 + 74 + 260)));
+      setIsFocusMode(false);
+    } catch { showToast(translate("ui.c8f93ef06f78")); }
+  }
+
+  function exitEditorFocus() {
+    setIsFocusMode(false);
+  }
+
+  const panelResize = useWorkspacePanelResize({
+    configuration: (key, page) => {
+      const limits = { sidebarWidth: [190, 360], listWidth: [260, 560], chatWidth: [300, 620] } as const;
+      const [minimum, maximum] = limits[key];
+      const otherPanels = Object.entries(fittedEditorWidths).reduce((sum, [name, width]) => sum + (name === key ? 0 : width), 0);
+      const room = physicalViewportWidth - otherPanels - EDITOR_TOOLBAR_MIN_WIDTH * appZoom.zoomPercent / 100;
+      return { value: page ? uiSettingsRef.current[key] : fittedEditorWidths[key], minimum, maximum: page ? maximum : Math.max(minimum, Math.min(maximum, room)), zoom: panelPointerScale(appZoom.zoomPercent, appZoom.useCssZoomFallback) };
+    },
+    onBegin: () => { settingsDragRef.current = true; if (settingsSaveTimeoutRef.current !== null) { window.clearTimeout(settingsSaveTimeoutRef.current); settingsSaveTimeoutRef.current = null; } },
+    onFinish: () => { settingsDragRef.current = false; scheduleUiSettingsSave(uiSettingsRef.current); },
+    onCommit: (key, value) => updateUiSettings({ [key]: value }),
+  });
 
   useEffect(() => {
     notes.forEach((note) => noteContentVersionsRef.current.set(note.id, note.contentVersion));
@@ -195,6 +263,7 @@ export function AppShell() {
         const nextSettings = normalizeUiSettings(migration.settings);
         settingsHydratedRef.current = true;
         uiSettingsRef.current = nextSettings;
+        setInterfaceLanguage(nextSettings.language);
         setUiSettings(nextSettings);
         setActiveSection(nextSettings.lastSection);
 
@@ -205,7 +274,7 @@ export function AppShell() {
       } catch (error) {
         if (!isCancelled) {
           settingsHydratedRef.current = true;
-          showToast(`Не удалось открыть настройки интерфейса: ${String(error)}`);
+          showToast(translate("ui.e26e3de104c3", { p0: String(error) }));
         }
       } finally {
         if (!isCancelled) setIsSettingsLoading(false);
@@ -240,7 +309,7 @@ export function AppShell() {
         setFirstRunRequired(firstRun.required);
         setNeedsProfileName(firstRun.needsProfileName ?? firstRun.required);
       } catch (error) {
-        showToast(`Не удалось открыть локальную базу: ${String(error)}`);
+        showToast(translate("ui.acb336a784b5", { p0: String(error) }));
       } finally {
         if (!isCancelled) {
           setIsDataLoading(false);
@@ -391,11 +460,11 @@ export function AppShell() {
           return;
         }
         if (isFocusMode) {
-          setIsFocusMode(false);
+          void exitEditorFocus();
           return;
         }
         if (isChatOpen) {
-          setIsChatOpen(false);
+          dismissEditorChat();
         }
       }
 
@@ -411,6 +480,7 @@ export function AppShell() {
       if (matchesAppShortcut(event, "search")) {
         event.preventDefault();
         activateSection("notes");
+        if (hideNoteListForChat) void revealNoteList();
         window.setTimeout(() => document.getElementById("note-search")?.focus(), 0);
       }
 
@@ -429,7 +499,7 @@ export function AppShell() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [isChatOpen, isFocusMode, isNewNoteModalOpen]);
+  }, [isChatOpen, isFocusMode, isNewNoteModalOpen, hideNoteListForChat]);
 
   function showToast(message: string, action?: ToastAction | null) {
     setToastMessage(message);
@@ -437,15 +507,14 @@ export function AppShell() {
   }
 
   function updateUiSettings(patch: Partial<UiSettings> | ((currentSettings: UiSettings) => Partial<UiSettings>)) {
-    setUiSettings((currentSettings) => {
-      const nextPatch = typeof patch === "function" ? patch(currentSettings) : patch;
-      const nextSettings = normalizeUiSettings({
-        ...currentSettings,
-        ...nextPatch,
-      });
-      uiSettingsRef.current = nextSettings;
-      return nextSettings;
-    });
+    const previous = uiSettingsRef.current;
+    const requested = typeof patch === "function" ? patch(previous) : patch;
+    const nextSettings = normalizeUiSettings({ ...previous, ...requested });
+    const candidateLayout = { ...editorLayout, sidebarCollapsed: nextSettings.sidebarCollapsed, zoomPercent: nextSettings.appZoomPercent };
+    if (nextSettings.appZoomPercent !== previous.appZoomPercent && !canApplyEditorLayout(candidateLayout)) return;
+    uiSettingsRef.current = nextSettings;
+    setInterfaceLanguage(nextSettings.language);
+    setUiSettings(nextSettings);
   }
 
   function activateSection(section: AppSection) {
@@ -454,6 +523,7 @@ export function AppShell() {
   }
 
   function scheduleUiSettingsSave(settings: UiSettings) {
+    if (settingsDragRef.current) return;
     if (settingsSaveTimeoutRef.current !== null) {
       window.clearTimeout(settingsSaveTimeoutRef.current);
     }
@@ -468,10 +538,10 @@ export function AppShell() {
     const normalizedSettings = normalizeUiSettings(settings);
     const savePromise = persistUiSettings(normalizedSettings)
       .then((savedSettings) => {
-        uiSettingsRef.current = savedSettings;
+        if (uiSettingsRef.current === settings) uiSettingsRef.current = savedSettings;
       })
       .catch((error) => {
-        showToast(`Не удалось сохранить настройки интерфейса: ${String(error)}`);
+        showToast(translate("ui.f04c4bb97b8e", { p0: String(error) }));
       })
       .finally(() => {
         if (settingsSaveInFlightRef.current === savePromise) {
@@ -502,6 +572,8 @@ export function AppShell() {
 
   function applyWorkspaceSnapshot(snapshot: dataService.WorkspaceSnapshot, reloadActiveEditor = false) {
     if (reloadActiveEditor) {
+      editorPreparationRef.current?.discard();
+      unpreparedNoteIdRef.current = null;
       setEditorReloadGeneration((generation) => generation + 1);
     }
     noteContentVersionsRef.current = new Map(snapshot.notes.map((note) => [note.id, note.contentVersion]));
@@ -542,7 +614,12 @@ export function AppShell() {
   }
 
   async function flushPendingSave() {
-    if (bulkDeleteInProgressRef.current) throw new Error("Удаление заметок ещё выполняется");
+    if (bulkDeleteInProgressRef.current) throw new Error(translate("ui.c052fe56fb04"));
+    await flushPreparedEditorSaves(() => editorPreparationRef.current, flushNoteWrites, () => pendingSavesRef.current.hasPending());
+  }
+
+  async function flushNoteWrites() {
+    if (bulkDeleteInProgressRef.current) throw new Error(translate("ui.c052fe56fb04"));
     if (saveTimeoutRef.current !== null) {
       window.clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
@@ -570,20 +647,21 @@ export function AppShell() {
         } catch (error) {
           setSaveStatus("error");
           showToast(
-            error instanceof dataService.NotePersistenceError ? error.message : "Не удалось сохранить заметку",
-            { label: "Повторить", onClick: () => { void flushPendingSave().catch(() => undefined); } },
+            error instanceof dataService.NotePersistenceError ? error.message : translate("ui.344ef700939b"),
+            { label: translate("ui.5189135a6110"), onClick: () => { void flushPendingSave().catch(() => undefined); } },
           );
           throw error;
         }
       },
       (_pendingSave, savedNote, hasNewerSave) => {
         noteContentVersionsRef.current.set(savedNote.id, savedNote.contentVersion);
-        if (hasNewerSave) {
+        const preparingNewerSave = unpreparedNoteIdRef.current === savedNote.id && editorPreparationRef.current?.hasPending();
+        if (hasNewerSave || preparingNewerSave) {
           setNotes((currentNotes) => currentNotes.map((note) =>
             note.id === savedNote.id ? { ...note, contentVersion: savedNote.contentVersion } : note,
           ));
           setSearchRevision((revision) => revision + 1);
-          setSaveStatus("saving");
+          setSaveStatus(editorPreparationRef.current?.getStatus() === "error" ? "error" : "saving");
         } else {
           replaceNote(savedNote);
           setSaveStatus("saved");
@@ -615,9 +693,9 @@ export function AppShell() {
       setSaveStatus("error");
       showToast(
         flushResult === "timeout"
-          ? "Сохранение не завершилось. Окно оставлено открытым, чтобы не потерять изменения"
-          : "Не удалось сохранить заметку. Окно оставлено открытым, чтобы не потерять изменения",
-        { label: "Повторить", onClick: () => { void flushPendingSave().catch(() => undefined); } },
+          ? translate("ui.7ab7ee45805a")
+          : translate("ui.1ddc60b2d404"),
+        { label: translate("ui.5189135a6110"), onClick: () => { void flushPendingSave().catch(() => undefined); } },
       );
       isClosingRef.current = false;
       return;
@@ -650,6 +728,7 @@ export function AppShell() {
     contentSidecars: EditorContentSidecarInput[],
   ) {
     if (bulkDeleteInProgressRef.current || !notes.some((note) => note.id === noteId)) return;
+    if (unpreparedNoteIdRef.current === noteId) unpreparedNoteIdRef.current = null;
     const currentNote = notes.find((note) => note.id === noteId);
     const shouldPreserveFallbackContent = Boolean(
       currentNote?.editorLoadFallbackReason && !contentMarkdown.trim() && !plainText.trim() && currentNote.contentMarkdown.trim(),
@@ -695,12 +774,20 @@ export function AppShell() {
     );
 
     setSaveStatus("saving");
-    if (saveTimeoutRef.current !== null) {
-      window.clearTimeout(saveTimeoutRef.current);
-    }
-    saveTimeoutRef.current = window.setTimeout(() => {
-      void flushPendingSave().catch(() => undefined);
-    }, 850);
+    if (saveTimeoutRef.current === null) scheduleAutosave();
+  }
+
+  function scheduleAutosave() {
+    if (saveTimeoutRef.current !== null) window.clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = window.setTimeout(() => { void flushPendingSave().catch(() => undefined); }, 850);
+  }
+
+  function markEditorDirty(noteId: string) {
+    if (bulkDeleteInProgressRef.current || !notes.some((note) => note.id === noteId)) return false;
+    unpreparedNoteIdRef.current = noteId;
+    setSaveStatus("saving");
+    scheduleAutosave();
+    return true;
   }
 
   function mergeRuntimeSidecars(currentSidecars: Note["contentSidecars"], nextSidecars: EditorContentSidecarInput[]): Note["contentSidecars"] {
@@ -731,10 +818,13 @@ export function AppShell() {
         setSettingsTarget(undefined);
       }
       activateSection(section);
-      if (section === "notes") setProjectScope(null);
+      if (section === "notes") {
+        setProjectScope(null);
+        if (resolveEditorWorkspacePresentation({ ...editorLayout, focus: false }, physicalViewportWidth).hideList) await revealNoteList();
+      }
       if (section !== "notes") {
         setIsFocusMode(false);
-        setIsChatOpen(false);
+        dismissEditorChat();
       }
     })();
   }
@@ -745,7 +835,7 @@ export function AppShell() {
       activateSection("notes");
       setProjectScope(null);
       setIsFocusMode(false);
-      setIsChatOpen(false);
+      dismissEditorChat();
       setIsNewNoteModalOpen(true);
     })();
   }
@@ -761,9 +851,9 @@ export function AppShell() {
       setQuery("");
       setIsNewNoteModalOpen(false);
       await refreshSecondaryData();
-      showToast("Заметка создана");
+      showToast(translate("ui.93b548bec9b8"));
     } catch (error) {
-      showToast(`Не удалось создать заметку: ${String(error)}`);
+      showToast(translate("ui.262f7f5c9526", { p0: String(error) }));
     }
   }
 
@@ -774,8 +864,8 @@ export function AppShell() {
     setNotes((currentNotes) => sortNotesForDisplay([completion.note, ...currentNotes]));
     setActiveNoteId(completion.note.id);
     setFirstRunRequired(false);
-    void refreshSecondaryData().catch(() => showToast("Заметка создана, но список проектов обновится после перезапуска"));
-    showToast("Первая заметка создана");
+    void refreshSecondaryData().catch(() => showToast(translate("ui.bb24cfe51c59")));
+    showToast(translate("ui.d771cf8c37df"));
   }
 
   async function openNote(noteId: string, archivedHint?: boolean, failureMessage?: string) {
@@ -794,7 +884,7 @@ export function AppShell() {
         setNotes((currentNotes) => sortNotesForDisplay([loadedNote, ...currentNotes.filter((note) => note.id !== noteId)]));
       } catch (error) {
         if (navigationId !== navigationSequenceRef.current) return false;
-        showToast(failureMessage ?? `Не удалось открыть заметку: ${String(error)}`);
+        showToast(failureMessage ?? translate("ui.02bdd9ddf8eb", { p0: String(error) }));
         return false;
       }
     }
@@ -810,7 +900,7 @@ export function AppShell() {
     const opened = await openNote(
       result.noteId,
       result.archived,
-      "Заметка больше недоступна. Сохранённый фрагмент остаётся в источниках.",
+      translate("ui.dba7bddb64af"),
     );
     if (opened) {
       setSemanticOpenTarget({ ...result });
@@ -825,7 +915,7 @@ export function AppShell() {
         : note)));
       setSearchRevision((revision) => revision + 1);
     } catch (error) {
-      showToast(`Не удалось переименовать заметку: ${String(error)}`);
+      showToast(translate("ui.a1b79b9781c1", { p0: String(error) }));
       throw error;
     }
   }
@@ -839,9 +929,9 @@ export function AppShell() {
         setNotes((currentNotes) => sortNotesForDisplay([duplicatedNote, ...currentNotes.filter((note) => note.id !== duplicatedNote.id)]));
         setActiveNoteId(duplicatedNote.id);
         setSearchRevision((revision) => revision + 1);
-        showToast("Заметка дублирована");
+        showToast(translate("ui.8688c7ea76e4"));
       })
-      .catch((error) => showToast(`Не удалось дублировать заметку: ${String(error)}`));
+      .catch((error) => showToast(translate("ui.f3436dcf123b", { p0: String(error) })));
   }
 
   function toggleNotePin(noteId: string) {
@@ -849,16 +939,16 @@ export function AppShell() {
       .toggleNotePin(noteId)
       .then((updatedNote) => {
         replaceNote(updatedNote);
-        showToast(updatedNote.pinned ? "Заметка закреплена" : "Заметка откреплена");
+        showToast(updatedNote.pinned ? translate("ui.3a8bbb0cae2d") : translate("ui.31b00f51be5a"));
       })
-      .catch((error) => showToast(`Не удалось обновить закрепление: ${String(error)}`));
+      .catch((error) => showToast(translate("ui.bb36783c8da5", { p0: String(error) })));
   }
 
   async function moveNote(noteId: string, project: string) {
     const updatedNote = await dataService.moveNoteToProject(noteId, project);
     replaceNote(updatedNote);
     await refreshSecondaryData();
-    showToast(`Заметка добавлена в «${project}»`);
+    showToast(translate("ui.69ef2ce7599f", { p0: project }));
   }
 
   async function createProjectForNote(noteId: string, title: string) {
@@ -866,8 +956,8 @@ export function AppShell() {
     try {
       await moveNote(noteId, project.title);
     } catch {
-      showToast("Проект создан, но заметка не добавлена. Повторите добавление.");
-      throw new Error("Проект создан, но заметка не добавлена. Повторите добавление.");
+      showToast(translate("ui.372af5f8869c"));
+      throw new Error(translate("ui.372af5f8869c"));
     }
   }
 
@@ -875,7 +965,7 @@ export function AppShell() {
     const updatedNote = await dataService.removeNoteFromProject(noteId);
     replaceNote(updatedNote);
     await refreshSecondaryData();
-    showToast("Заметка убрана из проекта");
+    showToast(translate("ui.f95e929dceda"));
   }
 
   function removeNote(noteId: string, mode: "archive" | "delete") {
@@ -892,30 +982,30 @@ export function AppShell() {
         }
         await refreshSecondaryData();
         setSearchRevision((revision) => revision + 1);
-        showToast(mode === "archive" ? "Заметка архивирована" : "Заметка удалена");
+        showToast(mode === "archive" ? translate("ui.ed4ea3dc416e") : translate("ui.894f97c52af9"));
       })
-      .catch(() => showToast(mode === "archive" ? "Не удалось архивировать заметку." : "Не удалось удалить заметку."));
+      .catch(() => showToast(mode === "archive" ? translate("ui.3f60c459b7e2") : translate("ui.37bfcf9a1de7")));
   }
 
   function showExportSuccess(result: dataService.ExportResult, message: string) {
-    showToast(message, { label: "Показать в проводнике", onClick: () => {
-      void dataService.revealExportedItem(result.path).catch(() => showToast("Не удалось показать файл в проводнике."));
+    showToast(message, { label: translate("ui.75c6f3f481c5"), onClick: () => {
+      void dataService.revealExportedItem(result.path).catch(() => showToast(translate("ui.30b7fa486aea")));
     } });
   }
 
   async function exportNote(noteId: string, format: NoteExportFormat) {
     const result = await exportAfterFlush(flushPendingSave, () => noteExportService.exportNote(noteId, format));
-    if (result) showExportSuccess(result, "Заметка сохранена.");
+    if (result) { updateUiSettings({ lastNoteExportFormat: format }); showExportSuccess(result, translate("ui.79fc5c3f4512")); }
   }
 
   async function exportProject(project: ProjectCard) {
     const result = await exportAfterFlush(flushPendingSave, () => noteExportService.exportProject(project.id, project.title));
-    if (result) showExportSuccess(result, "Проект сохранён.");
+    if (result) showExportSuccess(result, translate("ui.8964c58dc99d"));
   }
 
   function storeAttachment(file: File, kind: "file" | "image", options: dataService.StoreAttachmentOptions = {}) {
     if (!activeNote) {
-      return Promise.reject(new Error("Нет активной заметки"));
+      return Promise.reject(new Error(translate("ui.bcd79dc36f4e")));
     }
     return dataService.storeAttachment(activeNote.id, file, kind, options).then(async (result) => {
       setNotes((currentNotes) =>
@@ -928,7 +1018,7 @@ export function AppShell() {
 
   function pickAndStoreAttachment(kind: "file" | "image") {
     if (!activeNote) {
-      return Promise.reject(new Error("Нет активной заметки"));
+      return Promise.reject(new Error(translate("ui.bcd79dc36f4e")));
     }
     return dataService.pickAndStoreAttachment(activeNote.id, kind).then(async (result) => {
       if (!result) {
@@ -945,7 +1035,7 @@ export function AppShell() {
   function createProject(title: string, description: string) {
     return dataService.createProject(title, description).then((project) => {
       setProjects((currentProjects) => [...currentProjects, project]);
-      showToast("Проект создан");
+      showToast(translate("ui.65599191b39e"));
       return project;
     });
   }
@@ -956,13 +1046,13 @@ export function AppShell() {
       setProjectScope((current) => current?.id === project.id ? { id: project.id, title: project.title } : current);
       setNotes((currentNotes) => currentNotes.map((note) => note.projectId === project.id ? { ...note, project: project.title } : note));
       setSearchRevision((revision) => revision + 1);
-      showToast("Проект обновлён");
+      showToast(translate("ui.a33792a44a8c"));
       return project;
     });
   }
 
   async function archiveProject(projectId: string) {
-    if (!await tryFlushPendingSave()) throw new Error("Не удалось сохранить заметку");
+    if (!await tryFlushPendingSave()) throw new Error(translate("ui.344ef700939b"));
     await dataService.archiveProject(projectId);
     const loadedNotes = await dataService.listNotes("");
     setNotes(loadedNotes);
@@ -970,7 +1060,7 @@ export function AppShell() {
     setActiveNoteId((currentId) => loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? "");
     await refreshSecondaryData();
     setSearchRevision((revision) => revision + 1);
-    showToast("Проект и его активные заметки архивированы");
+    showToast(translate("ui.7754c777ead2"));
   }
 
   async function persistTag(value: TagEditorValue) {
@@ -978,10 +1068,10 @@ export function AppShell() {
       const tag = await dataService.createTag(value.name, value.color, value.customColor);
       setTags((currentTags) => [...currentTags, tag].sort((first, second) => first.name.localeCompare(second.name, "ru-RU")));
       setSearchRevision((revision) => revision + 1);
-      showToast("Тег создан");
+      showToast(translate("ui.adb55b60b418"));
       return tag;
     } catch (error) {
-      showToast(`Не удалось создать тег: ${String(error)}`);
+      showToast(translate("ui.73ce18a9a488", { p0: String(error) }));
       throw error;
     }
   }
@@ -999,7 +1089,7 @@ export function AppShell() {
       setTags(await dataService.listTags());
       setSearchRevision((revision) => revision + 1);
     } catch (error) {
-      showToast(`Не удалось изменить теги заметки: ${String(error)}`);
+      showToast(translate("ui.976a3033eb5c", { p0: String(error) }));
       throw error;
     }
   }
@@ -1008,8 +1098,8 @@ export function AppShell() {
     try {
       replaceNote(await dataService.makeNoteTagPrimary(noteId, tagId));
     } catch {
-      showToast("Не удалось изменить порядок тегов.");
-      throw new Error("Не удалось изменить порядок тегов.");
+      showToast(translate("ui.0b6df95078ed"));
+      throw new Error(translate("ui.0b6df95078ed"));
     }
   }
 
@@ -1026,9 +1116,9 @@ export function AppShell() {
       if (updatedTag) setNotes((currentNotes) => replaceTagInNotes(currentNotes, updatedTag));
       if (updatedTag && searchTagId === tagId) setQuery(updatedTag.name);
       setSearchRevision((revision) => revision + 1);
-      showToast("Тег обновлён");
+      showToast(translate("ui.1d9efa9c4d98"));
     } catch (error) {
-      showToast(`Не удалось обновить тег: ${String(error)}`);
+      showToast(translate("ui.df20b07eeaf9", { p0: String(error) }));
       throw error;
     }
   }
@@ -1041,8 +1131,8 @@ export function AppShell() {
         setNotes((currentNotes) => removeTagFromNotes(currentNotes, tagId));
         setSearchRevision((revision) => revision + 1);
       })
-      .then(() => showToast("Тег удалён"))
-      .catch((error) => showToast(`Не удалось удалить тег: ${String(error)}`));
+      .then(() => showToast(translate("ui.1d3848e2b2aa")))
+      .catch((error) => showToast(translate("ui.d40cbfc0662f", { p0: String(error) })));
   }
 
   async function mergeTags(sourceTagId: string, targetTagId: string) {
@@ -1052,9 +1142,9 @@ export function AppShell() {
       setTags(nextTags);
       if (targetTag) setNotes((currentNotes) => mergeTagInNotes(currentNotes, sourceTagId, targetTag));
       setSearchRevision((revision) => revision + 1);
-      showToast("Теги объединены");
+      showToast(translate("ui.cd7c4f57e08b"));
     } catch (error) {
-      showToast(`Не удалось объединить теги: ${String(error)}`);
+      showToast(translate("ui.9444abe5d02f", { p0: String(error) }));
       throw error;
     }
   }
@@ -1068,7 +1158,7 @@ export function AppShell() {
       setProjectScope(null);
       setSearchTagId(tag.id);
       setQuery(tag.name);
-      showToast(`Открыты заметки с тегом «${tag.name}»`);
+      showToast(translate("ui.a8a3fe7cbf27", { p0: tag.name }));
     })();
   }
 
@@ -1092,7 +1182,7 @@ export function AppShell() {
     setActiveNoteId((currentId) => loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? "");
     await refreshSecondaryData();
     setSearchRevision((revision) => revision + 1);
-    showToast(item.kind === "Проект" ? "Проект восстановлен" : "Заметка восстановлена");
+    showToast(item.kind === "Проект" ? translate("ui.24c163213d90") : translate("ui.c96faa8dad87"));
   }
 
   async function deleteArchiveItem(item: ArchiveItem) {
@@ -1105,11 +1195,11 @@ export function AppShell() {
     setActiveNoteId((currentId) => loadedNotes.some((note) => note.id === currentId) ? currentId : loadedNotes[0]?.id ?? "");
     await refreshSecondaryData();
     setSearchRevision((revision) => revision + 1);
-    showToast(item.kind === "Проект" ? "Проект и его заметки удалены" : "Заметка удалена");
+    showToast(item.kind === "Проект" ? translate("ui.4ccfdb7fc920") : translate("ui.894f97c52af9"));
   }
 
   async function deleteProject(projectId: string) {
-    if (!await tryFlushPendingSave()) throw new Error("Не удалось сохранить заметку перед удалением проекта.");
+    if (!await tryFlushPendingSave()) throw new Error(translate("ui.ec91c6cbc5a9"));
     const affected = notes.filter((note) => note.projectId === projectId).map((note) => note.id);
     await pendingSavesRef.current.deleteAfterInFlight(() => dataService.deleteProject(projectId), affected);
     affected.forEach(forgetNoteChat);
@@ -1119,7 +1209,7 @@ export function AppShell() {
     if (projectScope?.id === projectId) setProjectScope(null);
     await refreshSecondaryData();
     setSearchRevision((revision) => revision + 1);
-    showToast("Проект и его заметки удалены");
+    showToast(translate("ui.4ccfdb7fc920"));
   }
 
   async function createBackup() {
@@ -1140,12 +1230,14 @@ export function AppShell() {
         flushPendingSave,
         importBackup: dataService.importBackup,
         invalidatePendingSaves: () => {
+          editorPreparationRef.current?.discard();
+          unpreparedNoteIdRef.current = null;
           pendingSavesRef.current.clear();
           saveSequenceRef.current += 1;
         },
         refreshExternalViews: () => setWorkspaceReloadGeneration((generation) => generation + 1),
       });
-      showToast("Резервная копия восстановлена");
+      showToast(translate("ui.05d9a7026a3c"));
       return result;
     } finally {
       noteChatJobs.resume();
@@ -1154,14 +1246,18 @@ export function AppShell() {
   }
 
   async function deleteAllNotes() {
-    if (bulkDeleteInProgressRef.current) throw new Error("Удаление заметок ещё выполняется");
+    if (bulkDeleteInProgressRef.current) throw new Error(translate("ui.c052fe56fb04"));
     bulkDeleteInProgressRef.current = true;
+    const preparation = editorPreparationRef.current;
+    preparation?.suspend();
     if (saveTimeoutRef.current !== null) {
       window.clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
     }
     try {
       const result = await pendingSavesRef.current.deleteAfterInFlight(dataService.deleteAllNotes);
+      preparation?.discard();
+      unpreparedNoteIdRef.current = null;
       noteChatJobs.reset();
       noteChatDrafts.reset();
       notesGenerationRef.current += 1;
@@ -1180,50 +1276,52 @@ export function AppShell() {
       setSearchStatus("idle");
       setSemanticOpenTarget(null);
       setEditorSelectionText("");
-      setIsChatOpen(false);
+      dismissEditorChat();
       setSaveStatus("saved");
       setEditorReloadGeneration((generation) => generation + 1);
       setWorkspaceReloadGeneration((generation) => generation + 1);
       setSearchRevision((revision) => revision + 1);
-      void refreshSecondaryData().catch(() => showToast("Заметки удалены. Не удалось обновить счётчики проектов и тегов."));
+      void refreshSecondaryData().catch(() => showToast(translate("ui.7fce9f660059")));
       return result;
     } finally {
       bulkDeleteInProgressRef.current = false;
+      preparation?.resume();
       // A failed transaction retains drafts and resumes the usual autosave.
-      if (pendingSavesRef.current.hasPending()) {
+      if (pendingSavesRef.current.hasPending() || preparation?.hasPending()) {
         saveTimeoutRef.current = window.setTimeout(() => { void flushPendingSave().catch(() => undefined); }, 850);
       }
     }
   }
 
   async function importMarkdown(notesToImport: Parameters<typeof dataService.importMarkdown>[0]) {
-    if (!await tryFlushPendingSave()) throw new Error("Сначала сохраните текущую заметку");
+    if (!await tryFlushPendingSave()) throw new Error(translate("ui.21039e268694"));
     const importedNotes = await dataService.importMarkdown(notesToImport);
     setNotes((currentNotes) => sortNotesForDisplay([...importedNotes, ...currentNotes]));
     setActiveNoteId(importedNotes[0]?.id ?? activeNoteId);
     setProjectScope(null);
     setQuery("");
     activateSection("notes");
-    void refreshSecondaryData().catch(() => showToast("Импорт завершён, но список проектов обновится после перезапуска"));
+    void refreshSecondaryData().catch(() => showToast(translate("ui.44ea7e805f93")));
     setSearchRevision((revision) => revision + 1);
-    showToast(`Импортировано заметок: ${importedNotes.length}`);
+    showToast(translate("ui.31be0c866c30", { p0: importedNotes.length }));
     return importedNotes.length;
   }
 
   function toggleFocusMode() {
+    if (isFocusMode) { void exitEditorFocus(); return; }
     setIsFocusMode((currentValue) => {
       const nextValue = !currentValue;
       if (nextValue) {
-        setIsChatOpen(false);
+        dismissEditorChat();
       }
       return nextValue;
     });
   }
 
   const workspaceStyle: WorkspaceStyle = {
-    "--sbw": `${isFocusMode ? 0 : isSidebarCollapsed ? 74 : sidebarWidth}px`,
-    "--listw": `${isFocusMode || hideNoteListForChat ? 0 : listWidth}px`,
-    "--chatw": `${isFocusMode || !isChatOpen ? 0 : chatWidth}px`,
+    "--sbw": `${fittedEditorWidths.sidebarWidth}px`,
+    "--listw": `${fittedEditorWidths.listWidth}px`,
+    "--chatw": `${fittedEditorWidths.chatWidth}px`,
   };
   const sharedFooter = (
     <SharedOverlays
@@ -1251,7 +1349,7 @@ export function AppShell() {
       onSaveProfileName={(localProfileName) => {
         updateUiSettings({ localProfileName });
         setIsProfileNameModalOpen(false);
-        showToast("Имя локального профиля обновлено");
+        showToast(translate("ui.8b4a972f733a"));
       }}
       toastAction={toastAction}
       toastMessage={toastMessage}
@@ -1262,10 +1360,9 @@ export function AppShell() {
     localProfileName: uiSettings.localProfileName,
     onEditLocalProfile: () => setIsProfileNameModalOpen(true),
     onReset: () => updateUiSettings({ sidebarWidth: 250 }),
-    onResize: (deltaX) =>
-      updateUiSettings((currentSettings) => ({
-        sidebarWidth: clamp(currentSettings.sidebarWidth + deltaX, 190, 360),
-      })),
+    onResize: panelResize.move,
+    onResizeStart: (handle) => panelResize.begin("sidebarWidth", handle),
+    onResizeEnd: panelResize.end,
     onToggleCollapse: () =>
       updateUiSettings((currentSettings) => ({
         sidebarCollapsed: !currentSettings.sidebarCollapsed,
@@ -1304,7 +1401,7 @@ export function AppShell() {
   if (activeSection === "projects") {
     return renderLazyFeaturePage(
       "projects",
-      "проекты",
+      translate("ui.587175da7db8"),
       <LazyProjectsPage onArchiveProject={archiveProject} onDeleteProject={deleteProject} onExportProject={exportProject} onCreateProject={createProject} onNavigate={navigate} onNewNote={openNewNoteModal} onOpenProject={openProjectNotes} onToast={showToast} onUpdateProject={updateProject} projects={projects} sidebar={sharedPageSidebar} />,
     );
   }
@@ -1312,7 +1409,7 @@ export function AppShell() {
   if (activeSection === "rag") {
     return renderLazyFeaturePage(
       "rag",
-      "ИИ-чат по базе",
+      translate("ui.ea00b57395d6"),
       <LazyRagChatPage
         dataReloadGeneration={workspaceReloadGeneration}
         onNavigate={navigate}
@@ -1346,7 +1443,7 @@ export function AppShell() {
   if (activeSection === "tags") {
     return renderLazyFeaturePage(
       "tags",
-      "теги",
+      translate("ui.10fea873df71"),
       <LazyTagsPage
         onCreateTag={createTag}
         onDeleteTag={deleteTag}
@@ -1365,7 +1462,7 @@ export function AppShell() {
   if (activeSection === "archive") {
     return renderLazyFeaturePage(
       "archive",
-      "архив",
+      translate("ui.0d2913c148e2"),
       <LazyArchivePage
         archiveItems={archiveItems}
         onDeleteItem={deleteArchiveItem}
@@ -1381,8 +1478,10 @@ export function AppShell() {
   if (activeSection === "settings") {
     return renderLazyFeaturePage(
       "settings",
-      "настройки",
+      translate("ui.f121faf421c8"),
       <LazySettingsPage
+        language={uiSettings.language}
+        onLanguageChange={(language) => updateUiSettings({ language })}
         initialTarget={settingsTarget}
         appZoomPercent={appZoom.zoomPercent}
         onApplyZoom={appZoom.setZoom}
@@ -1409,13 +1508,14 @@ export function AppShell() {
 
   return renderAppFrame(
       <div
-        className={`workspace ${isSidebarCollapsed ? "collapse-sb" : ""} ${isFocusMode ? "focus" : ""} ${isChatOpen ? "chat-open" : ""} ${hideNoteListForChat ? "workspace-hide-list-for-chat" : ""}`}
+        className={`workspace ${editorSidebarCollapsed ? "collapse-sb" : ""} ${isFocusMode ? "focus" : ""} ${isChatOpen ? "chat-open" : ""} ${hideNoteListForChat ? "workspace-hide-list-for-chat" : ""}`}
+        data-panel-layout="editor"
         style={workspaceStyle}
       >
-        <SidebarPanel className="workspace-sidebar-panel" collapsed={isSidebarCollapsed} open={!isFocusMode} restoreFocusSelector='[data-tooltip="Выйти из режима фокуса"], [data-tooltip="Чат по заметке"]'>
+        <SidebarPanel className="workspace-sidebar-panel" collapsed={editorSidebarCollapsed} open={!isFocusMode} restoreFocusSelector='[data-note-control="focus-exit"], [data-note-control="chat"]'>
             <MainSidebar
               activeSection="notes"
-              collapsed={isSidebarCollapsed}
+              collapsed={editorSidebarCollapsed}
               localProfileName={uiSettings.localProfileName}
               onEditLocalProfile={() => setIsProfileNameModalOpen(true)}
               onNavigate={navigate}
@@ -1428,32 +1528,31 @@ export function AppShell() {
               }
             />
         </SidebarPanel>
-            {!isSidebarCollapsed && !isFocusMode ? (
+            {!editorSidebarCollapsed && !isFocusMode ? (
               <ResizeHandle
                 className="resize-sb"
-                label="Изменить ширину сайдбара"
+                label={translate("ui.edfdc72b827b")}
                 onReset={() => updateUiSettings({ sidebarWidth: 250 })}
-                onResize={(deltaX) =>
-                  updateUiSettings((currentSettings) => ({
-                    sidebarWidth: clamp(currentSettings.sidebarWidth + deltaX, 190, 360),
-                  }))
-                }
+                onResize={panelResize.move}
+                onResizeStart={(handle) => panelResize.begin("sidebarWidth", handle)}
+                onResizeEnd={panelResize.end}
               />
             ) : null}
-        <SidebarPanel className="workspace-list-panel" open={!isFocusMode && !hideNoteListForChat} restoreFocusSelector='[data-tooltip="Выйти из режима фокуса"], [data-tooltip="Чат по заметке"]'>
+        <SidebarPanel className="workspace-list-panel" open={!isFocusMode && !hideNoteListForChat} restoreFocusSelector='[data-note-control="focus-exit"], [data-note-control="chat"]'>
             <NoteListPanel
               activeNoteId={activeNote?.id ?? ""}
               includeArchivedSearch={includeArchivedSearch}
               notes={scopedNotes}
               onQueryChange={(value) => { setSearchTagId(null); setQuery(value); }}
-              onSelectNote={(noteId) => void openNote(noteId)}
+              onSelectNote={(noteId) => { void openNote(noteId); }}
               onToggleArchivedSearch={() => setIncludeArchivedSearch((includeArchived) => !includeArchived)}
               onTogglePin={toggleNotePin}
               onDuplicateNote={duplicateNote}
               onArchiveNote={(id) => removeNote(id, "archive")}
               onDeleteNote={(id) => removeNote(id, "delete")}
               onExportNote={exportNote}
-              onRestoreNote={(id) => { void dataService.restoreNote(id).then(async () => { setNotes(await dataService.listNotes("")); await refreshSecondaryData(); setSearchRevision((revision) => revision + 1); showToast("Заметка восстановлена"); }).catch(() => showToast("Не удалось восстановить заметку.")); }}
+              exportFormat={uiSettings.lastNoteExportFormat}
+              onRestoreNote={(id) => { void dataService.restoreNote(id).then(async () => { setNotes(await dataService.listNotes("")); await refreshSecondaryData(); setSearchRevision((revision) => revision + 1); showToast(translate("ui.c96faa8dad87")); }).catch(() => showToast(translate("ui.06912082a96c"))); }}
               projects={projects}
               projectScope={projectScope}
               onClearProjectScope={() => setProjectScope(null)}
@@ -1464,17 +1563,19 @@ export function AppShell() {
         </SidebarPanel>
             {!isFocusMode && !hideNoteListForChat ? <ResizeHandle
               className="resize-list"
-              label="Изменить ширину списка заметок"
+              label={translate("ui.8a268dbeaa7a")}
               onReset={() => updateUiSettings({ listWidth: 376 })}
-              onResize={(deltaX) =>
-                updateUiSettings((currentSettings) => ({
-                  listWidth: clamp(currentSettings.listWidth + deltaX, 260, 560),
-                }))
-              }
+              onResize={panelResize.move}
+              onResizeStart={(handle) => panelResize.begin("listWidth", handle)}
+              onResizeEnd={panelResize.end}
             /> : null}
 
         {activeNote ? (
           <EditorArea
+            language={uiSettings.language}
+            savePreparationRef={editorPreparationRef}
+            onEditorDirty={markEditorDirty}
+            onPreparationError={() => setSaveStatus("error")}
             documentReloadGeneration={editorReloadGeneration}
             isFocusMode={isFocusMode}
             note={activeNote}
@@ -1487,8 +1588,9 @@ export function AppShell() {
             onEditorChange={updateNoteEditor}
             editorContentOffset={uiSettings.editorContentOffset}
             editorContentWidth={uiSettings.editorContentWidth}
-            onExitFocus={() => setIsFocusMode(false)}
+            onExitFocus={() => { void exitEditorFocus(); }}
             onExportNote={exportNote}
+            exportFormat={uiSettings.lastNoteExportFormat}
             onEditorPageLayoutChange={(layout) => updateUiSettings(layout)}
             onEditorPageLayoutReset={() =>
               updateUiSettings({
@@ -1501,9 +1603,9 @@ export function AppShell() {
             onRemoveNoteFromProject={removeNoteFromProject}
             onMakeNoteTagPrimary={makeNoteTagPrimary}
             onImportMarkdown={importMarkdown}
-            onOpenChat={() => setIsChatOpen(true)}
+            onOpenChat={() => { void openEditorChat(); }}
             onOpenAttachment={dataService.openAttachment}
-            onOpenNote={(noteId, fragment) => { void openNote(noteId, undefined, "Заметка по ссылке больше недоступна.").then((opened) => { if (opened) setInternalOpenTarget({ noteId, fragment, navigationId: navigationSequenceRef.current }); }); }}
+            onOpenNote={(noteId, fragment) => { void openNote(noteId, undefined, translate("ui.fc675519d3e3")).then((opened) => { if (opened) setInternalOpenTarget({ noteId, fragment, navigationId: navigationSequenceRef.current }); }); }}
             onOpenSettingsModels={() => {
               navigate("settings");
             }}
@@ -1525,26 +1627,25 @@ export function AppShell() {
         ) : (
           <section className="editor-col empty-editor-state">
             <div className="empty-state-card">
-              <b>{isDataLoading ? "Открываем локальную базу…" : "Заметок не найдено"}</b>
-              <span>{isDataLoading ? "SQLite готовит рабочее пространство NoteFlow." : "Создайте новую заметку"}</span>
+              <b>{isDataLoading ? translate("ui.01fd5059cd3a") : translate("ui.03dffa60ca10")}</b>
+              <span>{isDataLoading ? translate("ui.76fd25744d15") : translate("ui.38aa4fc4c087")}</span>
             </div>
           </section>
         )}
 
-        <SidebarPanel className="workspace-chat-panel" open={isChatOpen && !isFocusMode && Boolean(activeNote)} restoreFocusSelector='[data-tooltip="Выйти из режима фокуса"], [data-tooltip="Чат по заметке"]'>
+        <SidebarPanel className="workspace-chat-panel" keepMounted open={isChatOpen && !isFocusMode && Boolean(activeNote)} restoreFocusSelector='[data-note-control="focus-exit"], [data-note-control="chat"]'>
         {activeNote ? (
           <NoteChatPanel
+            language={uiSettings.language}
             note={activeNote}
-            onClose={() => setIsChatOpen(false)}
+            onClose={dismissEditorChat}
             onOpenAiSettings={() => {
               navigate("settings");
             }}
             onResetWidth={() => updateUiSettings({ chatWidth: 380 })}
-            onResize={(deltaX) =>
-              updateUiSettings((currentSettings) => ({
-                chatWidth: clamp(currentSettings.chatWidth + deltaX, 300, 620),
-              }))
-            }
+            onResize={panelResize.move}
+            onResizeStart={(handle) => panelResize.begin("chatWidth", handle)}
+            onResizeEnd={panelResize.end}
             selectedText={editorSelectionText}
             onToast={showToast}
           />
@@ -1562,6 +1663,7 @@ interface AppFrameProps {
 }
 
 function AppFrame({ children, footer, useCssZoomFallback, zoomPercent }: AppFrameProps) {
+  useInterfaceLanguage();
   const zoomFactor = zoomPercent / 100;
   const zoomStyle: AppZoomStyle = {
     "--app-zoom": String(zoomFactor),
@@ -1599,6 +1701,7 @@ interface SharedOverlaysProps {
 }
 
 function SharedOverlays({ needsProfileName, onSaveFirstRunProfile, isFirstRunOpen, replayTraining, isNewNoteModalOpen, isProfileNameModalOpen, localProfileName, toastAction, toastMessage, onCloseNewNote, onCloseProfileName, onCreateNote, onCompleteFirstRun, onDismissFirstRun, onSaveProfileName }: SharedOverlaysProps) {
+  useInterfaceLanguage();
   return (
     <>
       {isFirstRunOpen ? <FirstRunModal onClose={onDismissFirstRun} onCreate={onCompleteFirstRun} onSaveProfile={onSaveFirstRunProfile} needsProfileName={needsProfileName} initialName={localProfileName} open replay={replayTraining} /> : null}

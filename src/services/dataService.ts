@@ -1,3 +1,6 @@
+import { translate } from "../shared/i18n";
+import { getInterfaceLanguage } from "../shared/i18n";
+import { localizeUiMessage } from "../shared/uiMessages";
 import { invoke } from "./safeInvoke";
 import { getAttachmentPolicy, validateAttachmentBytes, validateAttachmentSize } from "./attachmentPolicy";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -51,7 +54,7 @@ async function invokeNotePersistence<T>(command: string, args: Record<string, un
     }
     throw new NotePersistenceError({
       code: "transaction",
-      message: "Не удалось атомарно сохранить заметку",
+      message: translate("ui.c9ebdd281c65"),
     });
   }
 }
@@ -388,7 +391,7 @@ function mapWorkspace(snapshot: WorkspaceSnapshotDto): WorkspaceSnapshot {
 
 function mapExportResult(result: ExportResultDto): ExportResult {
   return {
-    message: result.message,
+    message: localizeUiMessage(getInterfaceLanguage(), result.message),
     path: result.path,
     relativePath: result.relativePath,
   };
@@ -672,9 +675,9 @@ export async function storeAttachment(noteId: string, file: File, kind: "file" |
 export async function pickAndStoreAttachment(noteId: string, kind: "file" | "image") {
   const sourcePath = await open({
     directory: false,
-    filters: kind === "image" ? [{ name: "Изображения", extensions: ["png", "jpg", "jpeg", "webp"] }] : undefined,
+    filters: kind === "image" ? [{ name: translate("ui.0a6258a5f30f"), extensions: ["png", "jpg", "jpeg", "webp"] }] : undefined,
     multiple: false,
-    title: kind === "image" ? "Выберите изображение" : "Выберите файл",
+    title: kind === "image" ? translate("ui.a44ab1f23736") : translate("ui.5450bb7c2b70"),
   });
   if (!sourcePath) {
     return null;
@@ -723,9 +726,9 @@ export async function exportProjectZip(projectId: string) {
 export async function createBackup() {
   return runBackupExport(
     () => save({
-      title: "Создать резервную копию NoteFlow",
+      title: translate("ui.9593af9e2b8d"),
       defaultPath: `NoteFlow-backup-${new Intl.DateTimeFormat("sv-SE").format(new Date())}.zip`,
-      filters: [{ name: "Резервная копия NoteFlow", extensions: ["zip"] }],
+      filters: [{ name: translate("ui.212d147a222b"), extensions: ["zip"] }],
     }),
     async (path) => mapExportResult(await invoke<ExportResultDto>("create_backup_at_path", { path })),
   );

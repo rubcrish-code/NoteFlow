@@ -2740,7 +2740,7 @@
 }
 
 .image-action-panel button {
-  background: var(--field-bg);
+  background: var(--button-bg);
   border: 1px solid var(--field-border);
   border-radius: 8px;
   color: var(--text);
@@ -2751,7 +2751,7 @@
 }
 
 .image-action-panel button:hover {
-  background: var(--field-bg-hover);
+  background: var(--button-bg-hover);
   border-color: color-mix(in srgb, var(--accent) 20%, var(--field-border));
 }
 
@@ -5562,7 +5562,7 @@
 }
 
 .zoom-reset-btn {
-  background: var(--panel);
+  background: var(--button-bg);
   box-shadow: var(--shadow-sm);
   color: var(--accent);
   font-size: 12.5px;
@@ -5572,7 +5572,7 @@
 
 .zoom-step-btn:hover:not(:disabled),
 .zoom-reset-btn:hover {
-  background: var(--asoft);
+  background: var(--button-bg-hover);
   color: var(--accent);
 }
 
@@ -6300,7 +6300,11 @@
 }
 
 .date-picker-nav button {
-  background: var(--surface-hover);
+  background: var(--button-bg);
+}
+
+.date-picker-nav button:hover {
+  background: var(--button-bg-hover);
 }
 
 .date-picker-nav svg {
@@ -6492,7 +6496,7 @@
 .secondary-btn,
 .new-note-actions .cancel,
 .font-action.secondary {
-  background: var(--field-bg);
+  background: var(--button-bg);
   border-color: var(--field-border);
 }
 
@@ -6501,7 +6505,7 @@
 .secondary-btn:hover,
 .new-note-actions .cancel:hover,
 .font-action.secondary:hover {
-  background: var(--field-bg-hover);
+  background: var(--button-bg-hover);
   border-color: color-mix(in srgb, var(--accent) 18%, var(--field-border));
 }
 
@@ -6636,7 +6640,7 @@
 
 .image-align-actions {
   align-items: center;
-  background: var(--field-bg);
+  background: var(--button-bg);
   border: 1px solid var(--field-border);
   border-radius: 9px;
   display: inline-flex;
@@ -6668,7 +6672,7 @@
 }
 
 .image-align-actions button:hover {
-  background: var(--field-bg-hover);
+  background: var(--button-bg-hover);
 }
 
 .image-align-actions button.active:hover,
@@ -6829,7 +6833,7 @@
 .note-menu-actions-list button,
 .note-menu-projects button,
 .block-menu-item {
-  background: var(--field-bg);
+  background: var(--button-bg);
   border-color: transparent;
 }
 
@@ -7453,6 +7457,10 @@
   background: var(--button-secondary-bg);
   border-color: var(--button-border);
   color: var(--text);
+}
+
+.semantic-search-button.secondary:hover:not(:disabled) {
+  background: var(--button-bg-hover);
 }
 
 .semantic-search-button:disabled {

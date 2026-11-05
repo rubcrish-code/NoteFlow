@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import * as embeddingService from "../../services/embeddingService";
 import type { EmbeddingIndexStatus, EmbeddingProfile, SemanticSearchResult } from "../../services/embeddingService";
@@ -21,6 +22,7 @@ import { isRagHistoryOverlayMode, resolveRagPanelVisibility, transitionRagOverla
 import { useRagOverlayBounds } from "./useRagOverlayBounds";
 import { ragDrafts } from "./ragDrafts";
 import { SidebarPanel } from "../../shared/SidebarPanel";
+import { uiMessage } from "../../shared/uiMessages";
 
 interface RagChatWorkspaceProps {
   conversationWidth: number;
@@ -58,6 +60,7 @@ export function RagChatWorkspace({
   preferredSourcesCollapsed,
   sourcesWidth,
 }: RagChatWorkspaceProps) {
+  useInterfaceLanguage();
   const [chats, setChats] = useState<RagChat[]>([]);
   const activeChatId = useSyncExternalStore(ragDrafts.subscribe, ragDrafts.activeId);
   const setActiveChatId = (value: string | ((current: string) => string)) => ragDrafts.setActive(value);
@@ -208,7 +211,7 @@ export function RagChatWorkspace({
     ragDrafts.reconcileGeneration(dataReloadGeneration);
     void Promise.all([refreshChats(), refreshModelStatuses(() => !cancelled), listProjects().then((items) => { if (!cancelled) setProjects(items); })])
       .catch((error) => {
-        if (!cancelled) onToastRef.current(`Не удалось загрузить ИИ-чат по базе: ${errorText(error)}`);
+        if (!cancelled) onToastRef.current(translate("ui.ed174248829a", { p0: errorText(error) }));
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
@@ -237,7 +240,7 @@ export function RagChatWorkspace({
     try {
       let chat = activeChat;
       if (!chat) {
-        const created = await ragChatService.createRagChat("Новый чат");
+        const created = await ragChatService.createRagChat(translate("ui.c44ad59fc33d"));
         chat = created;
         ragDrafts.transferNewChat(created.id);
         setChats((current) => [created, ...current]);
@@ -277,7 +280,7 @@ export function RagChatWorkspace({
         if (historyRequestIdRef.current === requestId) {
           setMessages([]);
           setActiveSources([]);
-          onToastRef.current(`Не удалось загрузить историю чата: ${errorText(error)}`);
+          onToastRef.current(translate("ui.36b83f7c7d4b", { p0: errorText(error) }));
         }
       })
       .finally(() => {
@@ -309,7 +312,7 @@ export function RagChatWorkspace({
       setMessages([]);
       setActiveSources([]);
     } catch (error) {
-      onToast(`Не удалось создать чат: ${errorText(error)}`);
+      onToast(translate("ui.5df255930454", { p0: errorText(error) }));
     }
   }
 
@@ -317,11 +320,11 @@ export function RagChatWorkspace({
     const question = draft.trim();
     if (!question || ragJobs.busy(activeChatId) || scopeBusyRef.current) return;
     if (activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone) {
-      onToast("Выберите хотя бы один проект или заметки вне проектов.");
+      onToast(translate("ui.4f8579f7ae46"));
       return;
     }
     if (!generatorStatus?.hasProvider || !generatorStatus.model) {
-      onToast("Подключите модель ответа в разделе «Модели ИИ».");
+      onToast(translate("ui.f3a20e4ebaa8"));
       onOpenModelSettings();
       return;
     }
@@ -334,7 +337,7 @@ export function RagChatWorkspace({
         const accepted = await acceptNoteAiPrivacy("local");
         setGeneratorStatus(accepted);
       } catch (error) {
-        onToast(`Не удалось подтвердить локальную обработку: ${errorText(error)}`);
+        onToast(translate("ui.e3fac52d765f", { p0: errorText(error) }));
         return;
       }
     }
@@ -356,7 +359,7 @@ export function RagChatWorkspace({
       await sendRagInBackground(chat, question, selectedProfile?.id ?? null, canRetrieve);
     } catch {
       ragDrafts.recoverIfEmpty(chat?.id ?? activeChatId, question);
-      onToast("Не удалось создать чат. Повторите попытку.");
+      onToast(translate("ui.fc2e062e7e69"));
     }
   }
 
@@ -374,7 +377,7 @@ export function RagChatWorkspace({
       setPendingPrivacyQuestion("");
       await submitQuestion(question);
     } catch (error) {
-      onToast(`Не удалось подтвердить обработку: ${errorText(error)}`);
+      onToast(translate("ui.90132677c89c", { p0: errorText(error) }));
     }
   }
 
@@ -385,7 +388,7 @@ export function RagChatWorkspace({
       setChats((current) => current.map((chat) => chat.id === renamed.id ? renamed : chat));
       setPendingDialog(null);
     } catch (error) {
-      onToast(`Не удалось переименовать чат: ${errorText(error)}`);
+      onToast(translate("ui.58195ae79e27", { p0: errorText(error) }));
     }
   }
 
@@ -405,7 +408,7 @@ export function RagChatWorkspace({
       }
       setPendingDialog(null);
     } catch (error) {
-      onToast(`Не удалось удалить чат: ${errorText(error)}`);
+      onToast(translate("ui.eaa640b9e563", { p0: errorText(error) }));
     }
   }
 
@@ -417,7 +420,7 @@ export function RagChatWorkspace({
       setCopiedMessageId(message.id);
       window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? "" : current), 1500);
     } catch {
-      onToast("Не удалось скопировать");
+      onToast(translate("ui.f400e0b540f3"));
     }
   }
 
@@ -430,15 +433,14 @@ export function RagChatWorkspace({
 
   return (
     <div className={`rag-page rag-production-chat rag-layout-${layoutMode} ${!sourcesVisible ? "sources-collapsed" : ""} ${!historyVisible ? "conversations-collapsed" : ""}`} style={pageStyle}>
-      <SidebarPanel className={`rag-history-panel ${historyIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`} open={historyVisible} restoreFocusSelector='[aria-label="Показать историю чатов"]'>
-          <aside aria-label="История диалогов" className={`rag-conversations ${historyIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`}>
+      <SidebarPanel className={`rag-history-panel ${historyIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`} open={historyVisible} restoreFocusSelector='[data-rag-control="history"]'>
+          <aside aria-label={translate("ui.4d0383e165ba")} className={`rag-conversations ${historyIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`}>
             <button className="secondary-btn rag-new-chat" onClick={() => void createChat()} type="button">
               <Icon name="plus" />
-              Новый чат
-            </button>
+              {translate("ui.c44ad59fc33d")}</button>
             <div className="rag-conversation-head">
-              <span>Недавние чаты</span>
-              <button aria-label="Скрыть историю чатов" className="icon-close-btn" data-tooltip="Скрыть историю" onClick={closeHistory} type="button">
+              <span>{translate("ui.654d8592b00a")}</span>
+              <button aria-label={translate("ui.a6bdc81119a7")} className="icon-close-btn" data-tooltip={translate("ui.63d0aea645c8")} onClick={closeHistory} type="button">
                 <Icon name={historyIsOverlay ? "x" : "back"} />
               </button>
             </div>
@@ -455,8 +457,8 @@ export function RagChatWorkspace({
                   <button
                     aria-expanded={openChatMenuId === chat.id}
                     aria-haspopup="menu"
-                    aria-label={`Действия: ${chat.title}`}
-                    data-tooltip="Действия с чатом"
+                    aria-label={translate("ui.4a8109e62ea5", { p0: chat.title })}
+                    data-tooltip={translate("ui.536378f2725c")}
                     className="rag-history-menu-button"
                     onClick={(event) => {
                       chatMenuAnchorRef.current = event.currentTarget;
@@ -468,7 +470,7 @@ export function RagChatWorkspace({
                   </button>
                   <MenuPopover
                     anchorRef={chatMenuAnchorRef}
-                    ariaLabel={`Действия с чатом «${chat.title}»`}
+                    ariaLabel={translate("ui.9148eed4d60f", { p0: chat.title })}
                     className="rag-history-menu"
                     isOpen={openChatMenuId === chat.id}
                     onClose={closeChatMenu}
@@ -478,43 +480,42 @@ export function RagChatWorkspace({
                         setRenameDraft(chat.title);
                         setPendingDialog({ kind: "rename", chat });
                         setOpenChatMenuId("");
-                      }} role="menuitem" type="button">Переименовать</button>
+                      }} role="menuitem" type="button">{translate("ui.194306e20807")}</button>
                       <button className="danger" onClick={() => {
                         setPendingDialog({ kind: "delete", chat });
                         setOpenChatMenuId("");
-                      }} role="menuitem" type="button">Удалить</button>
+                      }} role="menuitem" type="button">{translate("ui.be99b1361201")}</button>
                   </MenuPopover>
                 </div>
               ))}
-              {!isLoading && chats.length === 0 ? <div className="rag-history-empty">Создайте первый чат по базе заметок.</div> : null}
+              {!isLoading && chats.length === 0 ? <div className="rag-history-empty">{translate("ui.dfa9a489bf00")}</div> : null}
             </div>
           </aside>
       </SidebarPanel>
-      {historyVisible && !historyIsOverlay ? <ResizeHandle className="rag-conversation-resize" label="Изменить ширину истории диалогов" onReset={onConversationReset} onResize={onConversationResize} /> : null}
+      {historyVisible && !historyIsOverlay ? <ResizeHandle className="rag-conversation-resize" label={translate("ui.abfae06156dc")} onReset={onConversationReset} onResize={onConversationResize} /> : null}
 
       <main className="rag-main-chat">
         <header className="rag-chat-header" ref={headerRef}>
           <div className="rag-chat-top">
             <div className="rag-chat-title">
               {!historyVisible ? (
-                <button aria-label="Показать историю чатов" className="icon-close-btn" data-tooltip="Показать историю" onClick={openHistory} type="button">
+                <button aria-label={translate("ui.89dd83d87d36")} className="icon-close-btn" data-tooltip={translate("ui.491f00fb8444")} data-rag-control="history" onClick={openHistory} type="button">
                   <Icon name="forward" />
                 </button>
               ) : null}
               <div>
-                <b>{activeChat?.title ?? "Новый чат"}</b>
-                <span>{activeChat?.projectIds ? activeChat.includeStandalone ? activeChat.projectIds.length ? "По проектам и заметкам вне проектов" : "По заметкам вне проектов" : activeChat.projectIds.length ? "По выбранным проектам" : "Выберите область поиска" : "По всей базе заметок"}</span>
+                <b>{activeChat?.title ?? translate("ui.c44ad59fc33d")}</b>
+                <span>{activeChat?.projectIds ? activeChat.includeStandalone ? activeChat.projectIds.length ? translate("ui.bdfc8e48e6c4") : translate("ui.25bdb17e9ee8") : activeChat.projectIds.length ? translate("ui.c3318c6be945") : translate("ui.9b59e7ab7d49") : translate("ui.a69221069214")}</span>
               </div>
             </div>
             <div className="rag-top-actions">
               <ProjectScopeSelector busy={scopeBusy} includeStandalone={activeChat?.includeStandalone ?? false} onChange={changeProjectScope} projects={projects} selectedIds={activeChat?.projectIds ?? null} />
-              <button aria-label="Настроить модели" className="icon-close-btn" data-tooltip="Настроить модели" onClick={onOpenModelSettings} type="button">
+              <button aria-label={translate("ui.12f204378198")} className="icon-close-btn" data-tooltip={translate("ui.12f204378198")} onClick={onOpenModelSettings} type="button">
                 <Icon name="gear" />
               </button>
               {!sourcesVisible ? (
-                <button aria-label="Источники ответа" className="secondary-btn compact" data-tooltip="Источники ответа" onClick={openSources} type="button">
-                  <Icon name="doc" /> Источники
-                </button>
+                <button aria-label={translate("ui.00a4b900d44c")} className="secondary-btn compact" data-tooltip={translate("ui.00a4b900d44c")} data-rag-control="sources" onClick={openSources} type="button">
+                  <Icon name="doc" /> {translate("ui.d0578b52b359")}</button>
               ) : null}
             </div>
           </div>
@@ -531,12 +532,12 @@ export function RagChatWorkspace({
         </header>
 
         <div className="rag-chat-scroll" ref={messagesRef}>
-          {isHistoryLoading ? <div className="rag-chat-empty">Загружаем историю…</div> : null}
+          {isHistoryLoading ? <div className="rag-chat-empty">{translate("ui.efb18c179df6")}</div> : null}
           {!isHistoryLoading && messages.length === 0 ? (
             <div className="rag-chat-empty">
               <span className="semantic-empty-icon"><Icon name="chat" /></span>
-              <b>Новый чат по базе знаний</b>
-              <p>Задайте вопрос. NoteFlow найдёт релевантные фрагменты и покажет их как проверяемые источники.</p>
+              <b>{translate("ui.f71ccf769fdb")}</b>
+              <p>{translate("ui.711dc6295b80")}</p>
             </div>
           ) : null}
           <div className="rag-thread">
@@ -554,7 +555,7 @@ export function RagChatWorkspace({
                         onOpenResult(source);
                       }}
                     />
-                    <button aria-label={copiedMessageId === message.id ? "Скопировано" : "Скопировать сообщение"} className="note-chat-copy chat-copy-icon" data-tooltip={copiedMessageId === message.id ? "Скопировано" : "Скопировать"} onClick={() => void copyMessage(message)} type="button">
+                    <button aria-label={copiedMessageId === message.id ? translate("ui.d2d08c715ee6") : translate("ui.efb6957fa025")} className="note-chat-copy chat-copy-icon" data-tooltip={copiedMessageId === message.id ? translate("ui.d2d08c715ee6") : translate("ui.f02956c16588")} onClick={() => void copyMessage(message)} type="button">
                       <Icon name={copiedMessageId === message.id ? "check" : "copy"} />
                     </button>
                     {message.sources.length > 0 ? (
@@ -562,14 +563,14 @@ export function RagChatWorkspace({
                         setActiveSources(message.sources);
                         openSources();
                       }} type="button">
-                        <Icon name="doc" /> Источники: {message.sources.length}
+                        <Icon name="doc" /> {" " + translate("ui.15f7c4fbcb6e") + " "}{message.sources.length}
                       </button>
                     ) : null}
                   </>
                 ) : (
                   <>
                     <span className="plain-chat-text">{message.content}</span>
-                    <button aria-label={copiedMessageId === message.id ? "Скопировано" : "Скопировать сообщение"} className="note-chat-copy chat-copy-icon" data-tooltip={copiedMessageId === message.id ? "Скопировано" : "Скопировать"} onClick={() => void copyMessage(message)} type="button">
+                    <button aria-label={copiedMessageId === message.id ? translate("ui.d2d08c715ee6") : translate("ui.efb6957fa025")} className="note-chat-copy chat-copy-icon" data-tooltip={copiedMessageId === message.id ? translate("ui.d2d08c715ee6") : translate("ui.f02956c16588")} onClick={() => void copyMessage(message)} type="button">
                       <Icon name={copiedMessageId === message.id ? "check" : "copy"} />
                     </button>
                   </>
@@ -577,18 +578,18 @@ export function RagChatWorkspace({
               </article>
             ))}
             {visibleGeneration.phase === "retrieving" ? (
-              <div className="rag-answer loading"><span className="button-spinner" /> Ищу по базе…</div>
+              <div className="rag-answer loading"><span className="button-spinner" /> {" " + translate("ui.81a43df7561d")}</div>
             ) : null}
             {visibleGeneration.phase === "generating" ? (
-              <div className="rag-answer loading" aria-live="polite">{job?.text ? <ChatMarkdown content={job.text} /> : <><span className="button-spinner" /> Формирую ответ…</>}</div>
+              <div className="rag-answer loading" aria-live="polite">{job?.text ? <ChatMarkdown content={job.text} /> : <><span className="button-spinner" /> {" " + translate("ui.dd6c09269b5b")}</>}</div>
             ) : null}
-            {visibleGeneration.phase === "stopping" ? <div className="rag-answer loading">Останавливаем…</div> : null}
-            {visibleGeneration.phase === "stopped" ? <div className="rag-answer">Запрос ИИ остановлен</div> : null}
+            {visibleGeneration.phase === "stopping" ? <div className="rag-answer loading">{translate("ui.4046ae274af7")}</div> : null}
+            {visibleGeneration.phase === "stopped" ? <div className="rag-answer">{translate("ui.8e7391a0a35c")}</div> : null}
             {visibleGeneration.phase === "error" ? (
               <div className="rag-answer error" role="alert">
                 <span>{visibleGeneration.message}</span>
                 {visibleGeneration.retryable ? (
-                  <button className="ghost-btn compact" onClick={() => void retryGeneration()} type="button">Повторить</button>
+                  <button className="ghost-btn compact" onClick={() => void retryGeneration()} type="button">{translate("ui.5189135a6110")}</button>
                 ) : null}
               </div>
             ) : null}
@@ -596,9 +597,9 @@ export function RagChatWorkspace({
         </div>
 
         <div className="rag-input-wrap" ref={composerRef}>
-          <div className="rag-stage-note">Ответ будет основан только на найденных заметках и снабжён проверяемыми ссылками.</div>
+          <div className="rag-stage-note">{translate("ui.313062440ce1")}</div>
           <ChatComposer
-            ariaLabel="Сообщение по всей базе заметок"
+            ariaLabel={translate("ui.b30b25ef49a9")}
             className="rag-input"
             disabled={scopeBusy || (activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone) || !generatorStatus?.hasProvider || !generatorStatus.model}
             isSubmitting={generationBusy}
@@ -606,20 +607,20 @@ export function RagChatWorkspace({
             onSubmit={() => void sendQuestion()}
             onStop={() => void ragJobs.stop(activeChatId)}
             placeholder={!generatorStatus?.hasProvider || !generatorStatus.model
-                ? "Сначала подключите модель ответа"
-                : activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone ? "Выберите область поиска"
-                : activeChat?.projectIds ? "Спросить по выбранной области…" : "Спросить по всем заметкам…"}
+                ? translate("ui.ea3225cf30d7")
+                : activeChat?.projectIds?.length === 0 && !activeChat.includeStandalone ? translate("ui.9b59e7ab7d49")
+                : activeChat?.projectIds ? translate("ui.7bb6653dfd7e") : translate("ui.7142b85b171a")}
             value={draft}
           />
         </div>
       </main>
 
-      {sourcesVisible && !sourcesIsOverlay ? <ResizeHandle className="rag-sources-resize" label="Изменить ширину источников RAG" onReset={onSourcesReset} onResize={onSourcesResize} /> : null}
-      <SidebarPanel className={`rag-source-panel ${sourcesIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`} open={sourcesVisible} restoreFocusSelector='[aria-label="Источники ответа"]'>
-          <aside aria-label="Источники ответа" className={`rag-sources-panel ${sourcesIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`}>
+      {sourcesVisible && !sourcesIsOverlay ? <ResizeHandle className="rag-sources-resize" label={translate("ui.5f151a3672c3")} onReset={onSourcesReset} onResize={onSourcesResize} /> : null}
+      <SidebarPanel className={`rag-source-panel ${sourcesIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`} open={sourcesVisible} restoreFocusSelector='[data-rag-control="sources"]'>
+          <aside aria-label={translate("ui.00a4b900d44c")} className={`rag-sources-panel ${sourcesIsOverlay || layoutMode !== "wide" ? "rag-panel-overlay" : ""}`}>
             <div className="rag-sources-panel-head">
-              <span className="rag-sources-panel-title"><b>Источники</b><span>{activeSources.length > 0 ? formatRussianCount(activeSources.length, FRAGMENT_COUNT_FORMS) : "Пока нет результатов"}</span></span>
-              <button aria-label="Скрыть источники" className="rag-sources-close" data-tooltip="Скрыть источники" onClick={closeSources} type="button"><Icon name="x" /></button>
+              <span className="rag-sources-panel-title"><b>{translate("ui.d0578b52b359")}</b><span>{activeSources.length > 0 ? formatRussianCount(activeSources.length, FRAGMENT_COUNT_FORMS) : translate("ui.ad1dfb46bb8d")}</span></span>
+              <button aria-label={translate("ui.8f744aa61ec3")} className="rag-sources-close" data-tooltip={translate("ui.8f744aa61ec3")} onClick={closeSources} type="button"><Icon name="x" /></button>
             </div>
             <div className="rag-source-list">
               {activeSources.map((source) => (
@@ -639,8 +640,8 @@ export function RagChatWorkspace({
               {activeSources.length === 0 ? (
                 <div className="rag-source-empty">
                   <span className="page-empty-icon"><Icon name="doc" /></span>
-                  <b>Источников пока нет</b>
-                  <span>После вопроса здесь появятся заметки и найденные фрагменты.</span>
+                  <b>{translate("ui.6dc7d10779ee")}</b>
+                  <span>{translate("ui.6c6bcd1d6e64")}</span>
                 </div>
               ) : null}
             </div>
@@ -649,38 +650,38 @@ export function RagChatWorkspace({
 
       {pendingPrivacyQuestion ? (
         <SettingsModalShell
-          description="Для ответа выбранной модели будут отправлены только найденные фрагменты ваших заметок. API-ключ остаётся в защищённом хранилище ОС."
+          description={translate("ui.e0296ddc1797")}
           dismissOnBackdrop={false}
-          footer={<div className="settings-modal-footer-actions"><button className="ghost-btn" onClick={() => setPendingPrivacyQuestion("")} type="button">Отмена</button><button className="primary-btn" onClick={() => void confirmPrivacyAndSend()} type="button">Продолжить</button></div>}
+          footer={<div className="settings-modal-footer-actions"><button className="ghost-btn" onClick={() => setPendingPrivacyQuestion("")} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="primary-btn" onClick={() => void confirmPrivacyAndSend()} type="button">{translate("ui.a42aee58d60a")}</button></div>}
           onClose={() => setPendingPrivacyQuestion("")}
           size="compact"
-          title="Передать фрагменты модели?"
+          title={translate("ui.03f725c71f46")}
           titleId="rag-privacy-title"
         >
-          <div className="settings-confirm-note">Подтверждение сохранится для внешних AI-запросов этого локального профиля.</div>
+          <div className="settings-confirm-note">{uiMessage(getInterfaceLanguage(), "externalRequestsConfirmation")}</div>
         </SettingsModalShell>
       ) : null}
       {pendingDialog?.kind === "rename" ? (
         <SettingsModalShell
-          footer={<div className="settings-modal-footer-actions"><button className="ghost-btn" onClick={() => setPendingDialog(null)} type="button">Отмена</button><button className="primary-btn" disabled={!renameDraft.trim()} onClick={() => void confirmRename()} type="button">Сохранить</button></div>}
+          footer={<div className="settings-modal-footer-actions"><button className="ghost-btn" onClick={() => setPendingDialog(null)} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="primary-btn" disabled={!renameDraft.trim()} onClick={() => void confirmRename()} type="button">{translate("ui.b4d30cae5289")}</button></div>}
           onClose={() => setPendingDialog(null)}
           size="compact"
-          title="Переименовать чат"
+          title={translate("ui.982c79415f43")}
           titleId="rag-rename-title"
         >
-          <label className="field">Название<input autoFocus maxLength={120} onChange={(event) => setRenameDraft(event.currentTarget.value)} value={renameDraft} /></label>
+          <label className="field">{translate("ui.0918b4ba9268")}<input autoFocus maxLength={120} onChange={(event) => setRenameDraft(event.currentTarget.value)} value={renameDraft} /></label>
         </SettingsModalShell>
       ) : null}
       {pendingDialog?.kind === "delete" ? (
         <SettingsModalShell
-          description={`Чат «${pendingDialog.chat.title}» и его история будут удалены.`}
+          description={translate("ui.7e5c8ea3de3b", { p0: pendingDialog.chat.title })}
           dismissOnBackdrop={false}
-          footer={<div className="settings-modal-footer-actions"><button className="ghost-btn" onClick={() => setPendingDialog(null)} type="button">Отмена</button><button className="danger-btn" onClick={() => void confirmDelete()} type="button">Удалить чат</button></div>}
+          footer={<div className="settings-modal-footer-actions"><button className="ghost-btn" onClick={() => setPendingDialog(null)} type="button">{translate("ui.8fbe9b75cbdf")}</button><button className="danger-btn" onClick={() => void confirmDelete()} type="button">{translate("ui.78b90e5d570a")}</button></div>}
           onClose={() => setPendingDialog(null)}
           size="compact"
-          title="Удалить чат?"
+          title={translate("ui.9e4eb2ef9443")}
           titleId="rag-delete-title"
-        ><div className="settings-confirm-note">Заметки и смысловой индекс не изменятся.</div></SettingsModalShell>
+        ><div className="settings-confirm-note">{translate("ui.c901cd837637")}</div></SettingsModalShell>
       ) : null}
     </div>
   );
@@ -707,29 +708,30 @@ function ModelStatusBar({
   selectedProfile,
   selectedProfileId,
 }: ModelStatusBarProps) {
-  if (isLoading) return <div className="rag-model-status loading">Проверяем подключённые модели…</div>;
+  useInterfaceLanguage();
+  if (isLoading) return <div className="rag-model-status loading">{translate("ui.9fae5e881a72")}</div>;
   const needsUpdate = selectedProfile && indexStatus?.status !== "current";
   return (
-    <section aria-label="Состояние моделей и базы" className={`rag-model-status ${!selectedProfile || !generatorStatus?.canUse ? "requires-setup" : "ready"}`}>
+    <section aria-label={translate("ui.8df3add24d61")} className={`rag-model-status ${!selectedProfile || !generatorStatus?.canUse ? "requires-setup" : "ready"}`}>
       <div className="rag-model-summary">
         <span className={`rag-status-dot ${generatorStatus?.canUse ? "ok" : "warn"}`} />
         <span className="rag-generator-summary">
-          {generatorStatus?.hasProvider ? generatorStatus.providerName : "Модель ответа не подключена"}
+          {generatorStatus?.hasProvider ? generatorStatus.providerName : translate("ui.ca9fb6f6abc0")}
         </span>
         <span aria-hidden="true" className="rag-summary-separator">·</span>
         <Icon name="search" />
         {profiles.length > 1 ? (
-          <select aria-label="Модель смыслового поиска" onChange={(event) => onProfileChange(event.currentTarget.value)} value={selectedProfileId}>
+          <select aria-label={translate("ui.787668671f7e")} onChange={(event) => onProfileChange(event.currentTarget.value)} value={selectedProfileId}>
             {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
           </select>
-        ) : <span>{selectedProfile ? selectedProfile.name : "Смысловой поиск не настроен"}</span>}
-        {selectedProfile ? <span className="rag-locality-label">{selectedProfile.locality === "local" ? "локально" : "облачно"}</span> : null}
+        ) : <span>{selectedProfile ? selectedProfile.name : translate("ui.29c131ec9499")}</span>}
+        {selectedProfile ? <span className="rag-locality-label">{selectedProfile.locality === "local" ? translate("ui.57e6b898dfe7") : translate("ui.ba8ac2a308df")}</span> : null}
         <span aria-hidden="true" className="rag-summary-separator">·</span>
         <span className={`rag-index-label ${needsUpdate ? "warning" : ""}`}>{indexStatusLabel(indexStatus)}</span>
       </div>
       {!selectedProfile ? (
-        <button className="ghost-btn compact rag-setup-action" onClick={onOpenSettings} type="button">Настроить</button>
-      ) : selectedProfile.locality === "cloud" && !selectedProfile.hasCloudConsent ? <button className="ghost-btn compact" onClick={onOpenSettings} type="button">Разрешить обработку</button> : null}
+        <button className="ghost-btn compact rag-setup-action" onClick={onOpenSettings} type="button">{translate("ui.d71875872c7e")}</button>
+      ) : selectedProfile.locality === "cloud" && !selectedProfile.hasCloudConsent ? <button className="ghost-btn compact" onClick={onOpenSettings} type="button">{translate("ui.a3bc50387304")}</button> : null}
     </section>
   );
 }
@@ -744,22 +746,22 @@ function formatChatDate(value: string) {
 }
 
 function indexStatusLabel(status?: EmbeddingIndexStatus) {
-  if (!status) return "Статус индекса недоступен";
-  if (status.status === "current") return "База актуальна";
-  if (status.status === "indexing") return "База обновляется";
-  if (status.status === "partial") return "Ожидает повторной обработки";
-  if (status.status === "failed") return "Ошибка обновления";
-  return `Ожидает обработки${status.pendingChunks ? `: ${status.pendingChunks}` : ""}`;
+  if (!status) return translate("ui.8fda1088007b");
+  if (status.status === "current") return translate("ui.601e3fcdce36");
+  if (status.status === "indexing") return translate("ui.91ac93af9688");
+  if (status.status === "partial") return translate("ui.997e399d965b");
+  if (status.status === "failed") return translate("ui.3a8e10c64052");
+  return translate("ui.6615f10b30b1", { p0: status.pendingChunks ? `: ${status.pendingChunks}` : "" });
 }
 
 function matchLabel(matchType: SemanticSearchResult["matchType"]) {
-  if (matchType === "exact") return "Точное совпадение";
-  if (matchType === "lexical") return "По тексту";
-  if (matchType === "hybrid") return "Текст и смысл";
-  if (matchType === "metadata") return "Данные заметки";
-  return "По смыслу";
+  if (matchType === "exact") return translate("ui.8a076a34cb98");
+  if (matchType === "lexical") return translate("ui.32cee9c6386d");
+  if (matchType === "hybrid") return translate("ui.0eb10c31359b");
+  if (matchType === "metadata") return translate("ui.cfb155f46077");
+  return translate("ui.7bf1157b39c8");
 }
 
 function errorText(error: unknown) {
-  return error instanceof Error && error.message ? error.message : typeof error === "string" ? error : "Неизвестная ошибка";
+  return error instanceof Error && error.message ? error.message : typeof error === "string" ? error : translate("ui.2d55ddef0ce5");
 }

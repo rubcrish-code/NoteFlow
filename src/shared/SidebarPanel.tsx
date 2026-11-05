@@ -7,15 +7,18 @@ interface SidebarPanelProps {
   className: string;
   collapsed?: boolean;
   open: boolean;
+  keepMounted?: boolean;
   restoreFocusSelector?: string;
 }
 
 // Retain the closing subtree without owning its data or background request lifecycle.
-export function SidebarPanel({ children, className, collapsed = false, open, restoreFocusSelector }: SidebarPanelProps) {
+export function SidebarPanel({ children, className, collapsed = false, open, keepMounted = false, restoreFocusSelector }: SidebarPanelProps) {
   const [retained, setRetained] = useState(open);
   const [ready, setReady] = useState(false);
   const [moving, setMoving] = useState(false);
   const previousLayout = useRef({ open, collapsed });
+  const hasOpened = useRef(open);
+  if (open) hasOpened.current = true;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => setReady(true), []);
 
@@ -56,6 +59,6 @@ export function SidebarPanel({ children, className, collapsed = false, open, res
   }, [open, retained]);
 
   return <div aria-hidden={!open} className={`sidebar-panel ${className}`} data-panel-animate={ready} data-panel-moving={moving} data-panel-open={open} hidden={!open && !retained} inert={!open} ref={ref}>
-    {open || retained ? children : null}
+    {keepMounted && hasOpened.current || open || retained ? children : null}
   </div>;
 }

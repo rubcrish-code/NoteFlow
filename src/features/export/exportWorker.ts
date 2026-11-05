@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import type { ExportDocument, NoteExportFormat } from "./exportDocument";
 
 export function generateInWorker(format: Exclude<NoteExportFormat, "md">, input: ExportDocument): Promise<Uint8Array> {
@@ -8,7 +9,7 @@ export function generateInWorker(format: Exclude<NoteExportFormat, "md">, input:
       window.clearTimeout(timer);
       worker.terminate();
       if (bytes) resolve(bytes);
-      else reject(new Error(`Не удалось создать ${format.toUpperCase()}.`));
+      else reject(new Error(translate("ui.e76971ccd48e", { p0: format.toUpperCase() })));
     }
     worker.onmessage = (event: MessageEvent<{ bytes?: Uint8Array; error?: boolean }>) => finish(event.data.bytes);
     worker.onerror = () => finish();

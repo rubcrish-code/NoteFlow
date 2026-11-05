@@ -80,7 +80,7 @@ describe("Phase A organization UI", () => {
     await render(note, { id: activeProject.id, title: activeProject.title });
     const card = container.querySelector<HTMLElement>(".card")!;
     assert.ok(card.classList.contains("on"));
-    assert.equal(card.style.getPropertyValue("--note-accent"), "#E05272");
+    assert.equal(card.style.getPropertyValue("--note-accent"), "#F472B6");
     assert.equal(card.querySelector(".card-project")?.textContent, "Работа");
     assert.ok(card.querySelector(".card-project"));
     assert.equal(card.querySelector(".card-icon"), null);
@@ -146,7 +146,7 @@ describe("Phase A organization UI", () => {
     })));
     await act(async () => buttonByText("Заметки", container.querySelector(".archive-filters")!).click());
     assert.equal(container.querySelectorAll(".archive-row").length, 1);
-    assert.equal(container.querySelector<HTMLElement>(".archive-row")?.style.getPropertyValue("--note-accent"), "#E05272");
+    assert.equal(container.querySelector<HTMLElement>(".archive-row")?.style.getPropertyValue("--note-accent"), "#F472B6");
     await act(async () => buttonByText("Все", container.querySelector(".archive-filters")!).click());
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Действия с «Старый»"]')!.click());
     await act(async () => buttonByText("Удалить", document.querySelector(".row-actions-menu")!).click());

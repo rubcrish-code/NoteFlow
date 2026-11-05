@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 import type { RagMessageSource } from "../../services/ragChatService";
 
 export interface RagCitationTextSegment {
@@ -79,8 +80,8 @@ export function ragAnswerForClipboard(markdown: string, sources: readonly RagMes
 }
 
 export function ragCitationLabel(source: RagMessageSource) {
-  const title = source.noteTitle.trim() || "Без названия";
-  return `Источник ${source.citationNumber}: ${title}`;
+  const title = source.noteTitle.trim() || translate("ui.f5db3a12b79c");
+  return translate("ui.218da5811d3e", { p0: source.citationNumber, p1: title });
 }
 
 function sourceMap(sources: readonly RagMessageSource[]) {

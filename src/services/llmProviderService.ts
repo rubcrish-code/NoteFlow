@@ -1,4 +1,6 @@
+import { getInterfaceLanguage } from "../shared/i18n";
 import { invoke } from "./safeInvoke";
+import { localizeUiMessage, uiMessage } from "../shared/uiMessages";
 
 export const LLM_MODEL_LIST_TIMEOUT_MS = 15_000;
 export const LLM_TEST_CONNECTION_TIMEOUT_MS = 10_000;
@@ -212,7 +214,7 @@ function isStringArray(value: unknown): value is string[] {
 function validateModelsResultDto(value: unknown): LlmModelsResultDto {
   const dto = value as Partial<LlmModelsResultDto> | null;
   if (!dto || typeof dto.status !== "string" || typeof dto.message !== "string" || !isStringArray(dto.models)) {
-    throw new Error("LLM provider returned an unexpected models DTO.");
+    throw new Error(uiMessage(getInterfaceLanguage(), "invalidModelsResponse"));
   }
   return {
     status: dto.status,
@@ -246,7 +248,7 @@ function validateConnectionTestResultDto(value: unknown): LlmConnectionTestResul
     typeof dto.embeddingsOk !== "boolean" ||
     typeof dto.isLocal !== "boolean"
   ) {
-    throw new Error("LLM provider returned an unexpected connection-test DTO.");
+    throw new Error(uiMessage(getInterfaceLanguage(), "invalidConnectionResponse"));
   }
   return {
     status: dto.status,
@@ -278,12 +280,12 @@ function mapProvider(dto: LlmProviderDto): LlmProvider {
     customHeadersJson: dto.customHeadersJson,
     isDefault: dto.isDefault,
     lastStatus: normalizeProviderStatus(dto.lastStatus),
-    statusMessage: dto.statusMessage ?? undefined,
+    statusMessage: dto.statusMessage == null ? undefined : localizeUiMessage(getInterfaceLanguage(), dto.statusMessage),
     lastCheckedAt: dto.lastCheckedAt ?? undefined,
     createdAt: dto.createdAt,
     updatedAt: dto.updatedAt,
     isLocal: dto.isLocal,
-    privacyNotice: dto.privacyNotice,
+    privacyNotice: localizeUiMessage(getInterfaceLanguage(), dto.privacyNotice),
   };
 }
 
@@ -296,7 +298,7 @@ function mapModelsResult(value: unknown): LlmModelsResult {
   })) ?? dto.models.map((id) => ({ id, supportsChat: null, supportsEmbeddings: null }));
   return {
     status: normalizeActionStatus(dto.status),
-    message: dto.message,
+    message: localizeUiMessage(getInterfaceLanguage(), dto.message),
     models: dto.models,
     options,
   };
@@ -306,7 +308,7 @@ function mapTestResult(value: unknown): LlmConnectionTestResult {
   const dto = validateConnectionTestResultDto(value);
   return {
     status: normalizeActionStatus(dto.status),
-    message: dto.message,
+    message: localizeUiMessage(getInterfaceLanguage(), dto.message),
     checkedAt: dto.checkedAt,
     models: dto.models,
     chatOk: dto.chatOk,
@@ -434,7 +436,7 @@ export async function listLlmModels(providerId: string, trace?: LlmNetworkTraceC
     await withInvokeTimeout(
       traceInvoke<LlmModelsResultDto>(command, { providerId }, trace),
       LLM_MODEL_LIST_TIMEOUT_MS,
-      "Timeout: список моделей не был получен за 15 секунд. Проверьте Base URL, endpoint и состояние локального сервера.",
+      uiMessage(getInterfaceLanguage(), "modelsListTimeout15s"),
     ),
   );
 }
@@ -472,7 +474,7 @@ export async function listLlmModelsForDraft(input: DraftLlmProviderInput, trace?
     await withInvokeTimeout(
       traceInvoke<LlmModelsResultDto>(command, { request: draftRequest(input) }, trace),
       LLM_MODEL_LIST_TIMEOUT_MS,
-      "Timeout: список моделей не был получен за 15 секунд. Проверьте Base URL, endpoint и состояние локального сервера.",
+      uiMessage(getInterfaceLanguage(), "modelsListTimeout15s"),
     ),
   );
 }
@@ -489,7 +491,7 @@ export async function testLlmProvider(providerId: string, trace?: LlmNetworkTrac
     await withInvokeTimeout(
       traceInvoke<LlmConnectionTestResultDto>(command, { providerId }, trace),
       LLM_TEST_CONNECTION_TIMEOUT_MS,
-      "Timeout: проверка подключения не завершилась за 10 секунд. Проверьте, запущена ли локальная модель и доступен ли endpoint.",
+      uiMessage(getInterfaceLanguage(), "connectionTestTimeout10s"),
     ),
   );
 }
@@ -508,7 +510,7 @@ export async function testLlmProviderDraft(input: DraftLlmProviderInput, trace?:
     await withInvokeTimeout(
       traceInvoke<LlmConnectionTestResultDto>(command, { request: draftRequest(input) }, trace),
       LLM_TEST_CONNECTION_TIMEOUT_MS,
-      "Timeout: проверка подключения не завершилась за 10 секунд. Проверьте, запущена ли локальная модель и доступен ли endpoint.",
+      uiMessage(getInterfaceLanguage(), "connectionTestTimeout10s"),
     ),
   );
 }

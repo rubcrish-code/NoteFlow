@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { after, afterEach, it } from "node:test";
 import { JSDOM } from "jsdom";
-import { act, createElement as h } from "react";
+import { act, createElement as h, Profiler, useState } from "react";
+import { MenuPopover } from "../src/shared/MenuPopover";
 import { Editor } from "@tiptap/core";
 import { CellSelection, TableMap } from "@tiptap/pm/tables";
 import { closeHistory } from "@tiptap/pm/history";
@@ -19,6 +20,8 @@ import type { EditorDocument } from "../src/app/types";
 
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost", pretendToBeVisual: true });
 const previous = new Map<string, PropertyDescriptor | undefined>();
+previous.set("ResizeObserver", Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver"));
+Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: class { observe() {} unobserve() {} disconnect() {} } });
 for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, HTMLInputElement: dom.window.HTMLInputElement, Element: dom.window.Element, Node: dom.window.Node, DOMParser: dom.window.DOMParser, MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window), IS_REACT_ACT_ENVIRONMENT: true })) {
   previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 }
@@ -141,6 +144,127 @@ it("FTS-driven search keeps query focus and navigates matches without changing t
     assert.equal(container.querySelector('[role="search"]'), null);
     assert.equal(editor.view.dom.querySelector(".note-search-match"), null);
     assert.deepEqual(editor.getJSON(), before);
+  } finally { await act(async () => root.unmount()); }
+});
+it("search counter does not rerender for position-only changes and reads fresh ranges when navigating", async () => {
+  const editor = create("<p>слово слово</p>");
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  let commits = 0;
+  try {
+    await act(async () => root.render(h(Profiler, { id: "search", onRender: () => { commits++; } }, h(NoteSearchBar, { editor, initialQuery: "слово" }))));
+    commits = 0;
+    await act(async () => { editor.commands.insertContentAt(1, "префикс "); });
+    assert.equal(commits, 0, "unchanged count/index must not compare/render the DecorationSet");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Следующее совпадение"]')!.click());
+    assert.equal(noteSearchKey.getState(editor.state)!.index, 1);
+    assert.equal(container.querySelector('[role="status"]')?.textContent, "2 из 2");
+    await act(async () => { editor.commands.insertContentAt(1, "слово "); });
+    assert.equal(container.querySelector('[role="status"]')?.textContent, "3 из 3");
+  } finally { await act(async () => root.unmount()); }
+});
+it("physical Ctrl+F opens NoteFlow search in a Russian keyboard layout and ignores other fields", async () => {
+  const editor = create("<p>Текст</p>");
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  const other = document.createElement("input"); document.body.append(other);
+  try {
+    await act(async () => root.render(h(NoteSearchBar, { editor })));
+    const unrelated = new dom.window.KeyboardEvent("keydown", { key: "а", code: "KeyF", ctrlKey: true, bubbles: true, cancelable: true });
+    await act(async () => { other.dispatchEvent(unrelated); });
+    assert.equal(unrelated.defaultPrevented, false);
+    assert.equal(container.querySelector('[role="search"]'), null);
+    const find = new dom.window.KeyboardEvent("keydown", { key: "а", code: "KeyF", ctrlKey: true, bubbles: true, cancelable: true });
+    await act(async () => { editor.view.dom.dispatchEvent(find); });
+    assert.equal(find.defaultPrevented, true);
+    assert.ok(container.querySelector('[role="search"]'));
+  } finally { await act(async () => root.unmount()); }
+});
+it("Enter and Shift+Enter navigate in opposite directions without changing the document", async () => {
+  const editor = create("<p>Текст текст текст</p>"), before = editor.getJSON();
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(h(NoteSearchBar, { editor, initialQuery: "текст" })));
+    const input = container.querySelector("input")!;
+    for (const [shiftKey, expected] of [[false, 1], [true, 0], [true, 2]] as const) {
+      const event = new dom.window.KeyboardEvent("keydown", { key: "Enter", shiftKey, bubbles: true, cancelable: true });
+      await act(async () => { input.dispatchEvent(event); });
+      assert.equal(event.defaultPrevented, true);
+      assert.equal(noteSearchKey.getState(editor.state)!.index, expected);
+    }
+    assert.deepEqual(editor.getJSON(), before);
+  } finally { await act(async () => root.unmount()); }
+});
+it("find shortcuts do not consume an active IME composition", async () => {
+  const editor = create("<p>Текст</p>");
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(h(NoteSearchBar, { editor })));
+    const event = new dom.window.KeyboardEvent("keydown", { key: "Process", code: "KeyF", ctrlKey: true, isComposing: true, bubbles: true, cancelable: true });
+    await act(async () => { editor.view.dom.dispatchEvent(event); });
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(container.querySelector('[role="search"]'), null);
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("Escape closes a formatting popover before find when the editor retains focus", async () => {
+  const editor = create("<p>Текст Текст</p>");
+  const before = editor.getJSON(); let updates = 0; editor.on("update", () => updates++);
+  const anchor = document.body.appendChild(document.createElement("button"));
+  const anchorRef = { current: anchor };
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
+  function Harness() {
+    const [open, setOpen] = useState(true);
+    return h("div", null,
+      h(NoteSearchBar, { editor, initialQuery: "Текст" }),
+      h(MenuPopover, { anchorRef, ariaLabel: "Formatting", isOpen: open, onClose: () => setOpen(false), role: "dialog" }, h("button", null, "Action")));
+  }
+  try {
+    await act(async () => root.render(h(Harness)));
+    await act(async () => { editor.view.focus(); editor.view.dom.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    assert.equal(document.querySelector(".nf-popover"), null);
+    assert.ok(document.querySelector('[role="search"]'));
+    await act(async () => { editor.view.focus(); editor.view.dom.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    assert.equal(document.querySelector('[role="search"]'), null);
+    assert.deepEqual(editor.getJSON(), before);
+    assert.equal(updates, 0);
+  } finally { await act(async () => root.unmount()); }
+});
+it("Escape closes only note search and restores editor focus and selection without autosave", async () => {
+  const editor = create("<p>Текст текст</p>"); editor.commands.setTextSelection({ from: 2, to: 5 });
+  const before = editor.getJSON(), selection = editor.state.selection.toJSON(); let updates = 0, bubbled = 0;
+  editor.on("update", () => updates++);
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  const listener = () => { bubbled++; }; document.addEventListener("keydown", listener);
+  try {
+    await act(async () => root.render(h(NoteSearchBar, { editor, initialQuery: "текст" })));
+    const input = container.querySelector("input")!; input.focus();
+    await act(async () => {
+      input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      await new Promise<void>(resolve => dom.window.requestAnimationFrame(() => dom.window.requestAnimationFrame(() => resolve())));
+    });
+    assert.equal(container.querySelector('[role="search"]'), null);
+    assert.equal(editor.view.hasFocus(), true);
+    assert.equal(bubbled, 0);
+    assert.equal(updates, 0);
+    assert.deepEqual(editor.getJSON(), before);
+    assert.deepEqual(editor.state.selection.toJSON(), selection);
+  } finally { document.removeEventListener("keydown", listener); await act(async () => root.unmount()); }
+});
+it("Ctrl+F reveals an FTS-driven query and refocuses the already open input", async () => {
+  const editor = create("<p>Текст текст</p>");
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  try {
+    await act(async () => root.render(h(NoteSearchBar, { editor, initialQuery: "текст" })));
+    assert.ok(container.querySelector(".from-list"));
+    for (let i = 0; i < 2; i++) {
+      await act(async () => {
+        editor.view.dom.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "а", code: "KeyF", ctrlKey: true, bubbles: true, cancelable: true }));
+        await new Promise<void>(resolve => dom.window.requestAnimationFrame(() => resolve()));
+      });
+      assert.equal(container.querySelector(".from-list"), null);
+      assert.equal(document.activeElement, container.querySelector("input"));
+      assert.equal(container.querySelector<HTMLInputElement>("input")!.value, "текст");
+    }
   } finally { await act(async () => root.unmount()); }
 });
 for (const scale of [1, 1.6]) it(`search uses word coordinates in its own scroll container at ${scale * 100}% and recomputes after resize`, async () => {

@@ -1,3 +1,4 @@
+import { translate } from "../../shared/i18n";
 export interface FontFamilyOption {
   label: string;
   preview: string;
@@ -5,7 +6,7 @@ export interface FontFamilyOption {
 }
 
 export const fontFamilyOptions: FontFamilyOption[] = [
-  { label: "Системный", preview: "-apple-system, BlinkMacSystemFont, \"Inter\", \"Segoe UI\", sans-serif", value: "" },
+  { get label() { return translate("ui.bb86915009ae"); }, preview: "-apple-system, BlinkMacSystemFont, \"Inter\", \"Segoe UI\", sans-serif", value: "" },
   { label: "Arial", preview: "Arial, sans-serif", value: "Arial, sans-serif" },
   { label: "Georgia", preview: "Georgia, serif", value: "Georgia, serif" },
   { label: "Times New Roman", preview: "\"Times New Roman\", Times, serif", value: "\"Times New Roman\", Times, serif" },
@@ -26,7 +27,7 @@ export function findFontFamilyValue(fontFamily: string) {
 }
 
 export function getFontFamilyLabel(fontFamily: string) {
-  return fontFamilyOptions.find((option) => option.value === fontFamily)?.label ?? "Системный";
+  return fontFamilyOptions.find((option) => option.value === fontFamily)?.label ?? translate("ui.bb86915009ae");
 }
 
 export function normalizeFontSizeValue(fontSize: string) {

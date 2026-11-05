@@ -24,3 +24,22 @@ dist-ssr
 *.sw?
 
 /releases/
+
+# Local profiles, secrets and runtime artifacts (never source fixtures).
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.pem
+*.p12
+*.pfx
+*.key
+credentials.json
+.codex-run/
+playwright-report/
+test-results/

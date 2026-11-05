@@ -90,7 +90,7 @@ async function description(modal, text, singleLine) {
 try {
   for (const viewport of [1100, 1440, 1920]) for (const zoom of [100, 160]) for (const theme of ["light", "dark"]) {
     const id = `${viewport}-${zoom}-${theme}`;
-    await page.setViewportSize({ width: viewport, height: viewport === 1100 ? 700 : 900 });
+    await page.setViewportSize({ width: Math.max(viewport, 360 + 420 + 430 + 820 * zoom / 100), height: viewport === 1100 ? 700 : 900 });
     await page.goto(`http://127.0.0.1:1420/scripts/qa/rc5-final-ui.html?reset=1&zoom=${zoom}&theme=${theme}`);
     await page.locator(".tiptap").waitFor(); await page.waitForTimeout(900);
     const baseline = await geometry(); validGeometry(baseline, baseline);
@@ -119,6 +119,9 @@ try {
     await page.locator(".note-chat .nc-top .x").click(); await page.waitForTimeout(330);
     await page.locator(".sb .col").click();
     await page.getByRole("button", { name: "Настройки", exact: true }).click(); await page.waitForTimeout(330);
+    // The ribbon constrains Notes only. Keep the original narrow Settings/RAG
+    // matrix; expanding those viewports would weaken unrelated regressions.
+    await page.setViewportSize({ width: viewport, height: viewport === 1100 ? 700 : 900 });
     await page.locator(".sb .col").click(); await page.waitForTimeout(330);
     validGeometry(await geometry(), baseline); record(`navigate-during-motion-${id}`);
     const settingsCopy = [["Основные", "Профиль и основные сведения о локальной работе NoteFlow"], ["Внешний вид", "Тема приложения настраивается только в этом разделе"], ["Данные и экспорт", "Резервные копии профиля, импорт и восстановление данных"], ["Горячие клавиши", "Сочетания, которые уже работают в приложении. На macOS используйте ⌘ вместо Ctrl"], ["О приложении", "Локальные заметки, Markdown-first редактор и ИИ-инструменты с контролем приватности"]];

@@ -1,3 +1,4 @@
+import { translate } from "./i18n";
 export type AppShortcutId = "focus" | "newNote" | "search" | "sidebar";
 
 export interface ShortcutReference {
@@ -13,18 +14,18 @@ interface RegisteredAppShortcut extends ShortcutReference {
 }
 
 export const APP_SHORTCUTS: readonly RegisteredAppShortcut[] = [
-  { id: "newNote", key: "n", localizedKey: "т", keys: ["Ctrl", "N"], label: "Создать заметку" },
-  { id: "search", key: "k", localizedKey: "л", keys: ["Ctrl", "K"], label: "Перейти к поиску" },
-  { id: "sidebar", key: "b", localizedKey: "и", keys: ["Ctrl", "B"], label: "Свернуть или развернуть сайдбар" },
-  { id: "focus", key: "\\", keys: ["Ctrl", "\\"], label: "Режим фокуса" },
+  { id: "newNote", key: "n", localizedKey: "т", keys: ["Ctrl", "N"], get label() { return translate("ui.6c929f117cf6"); } },
+  { id: "search", key: "k", localizedKey: "л", keys: ["Ctrl", "K"], get label() { return translate("ui.5027ce55f494"); } },
+  { id: "sidebar", key: "b", localizedKey: "и", keys: ["Ctrl", "B"], get label() { return translate("ui.dc5a9e15bb26"); } },
+  { id: "focus", key: "\\", keys: ["Ctrl", "\\"], get label() { return translate("ui.92b9fcc46d13"); } },
 ];
 
 export const EDITOR_SHORTCUTS: readonly ShortcutReference[] = [
-  { id: "bold", keys: ["Ctrl", "B"], label: "Жирный" },
-  { id: "italic", keys: ["Ctrl", "I"], label: "Курсив" },
-  { id: "underline", keys: ["Ctrl", "U"], label: "Подчёркнутый" },
-  { id: "undo", keys: ["Ctrl", "Z"], label: "Отменить" },
-  { id: "redo", keys: ["Ctrl", "Y"], label: "Повторить" },
+  { id: "bold", keys: ["Ctrl", "B"], get label() { return translate("ui.00a3cbfbbccb"); } },
+  { id: "italic", keys: ["Ctrl", "I"], get label() { return translate("ui.c05eb6bbb430"); } },
+  { id: "underline", keys: ["Ctrl", "U"], get label() { return translate("ui.5cca865d2a07"); } },
+  { id: "undo", keys: ["Ctrl", "Z"], get label() { return translate("ui.7c47f7292ba4"); } },
+  { id: "redo", keys: ["Ctrl", "Y"], get label() { return translate("ui.5189135a6110"); } },
 ];
 
 export function matchesAppShortcut(event: KeyboardEvent, shortcutId: AppShortcutId) {

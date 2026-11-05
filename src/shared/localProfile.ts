@@ -1,3 +1,4 @@
+import { translate } from "./i18n";
 import { graphemeLength, takeGraphemes } from "./graphemes";
 
 export const DEFAULT_LOCAL_PROFILE_NAME = "Пользователь";
@@ -10,10 +11,10 @@ export function normalizeLocalProfileName(value: string) {
 export function validateLocalProfileName(value: string) {
   const normalized = normalizeLocalProfileName(value);
   if (!normalized) {
-    return "Введите имя локального профиля";
+    return translate("ui.d22800573a2a");
   }
   if (graphemeLength(value.trim().replace(/\s+/gu, " ")) > LOCAL_PROFILE_NAME_MAX_LENGTH) {
-    return `Не больше ${LOCAL_PROFILE_NAME_MAX_LENGTH} символов`;
+    return translate("ui.f79030ac0813", { p0: LOCAL_PROFILE_NAME_MAX_LENGTH });
   }
   return "";
 }

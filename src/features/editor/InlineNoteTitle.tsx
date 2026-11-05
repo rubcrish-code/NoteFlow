@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { normalizeEntityName, validateEntityName } from "../../shared/entityName";
 import { EntityNameCounter } from "../../shared/EntityNameCounter";
@@ -9,6 +10,7 @@ interface InlineNoteTitleProps {
 }
 
 export function InlineNoteTitle({ noteId, onRename, title }: InlineNoteTitleProps) {
+  useInterfaceLanguage();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const cancelledRef = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -58,7 +60,7 @@ export function InlineNoteTitle({ noteId, onRename, title }: InlineNoteTitleProp
 
   return (
     <><h1
-      aria-label="Название заметки"
+      aria-label={translate("ui.40023f7ec93f")}
       className="ed-title ed-title-editable"
       contentEditable={!isSaving ? "plaintext-only" : false}
       onBlur={() => { setIsEditing(false); void commit(); }}
@@ -70,6 +72,6 @@ export function InlineNoteTitle({ noteId, onRename, title }: InlineNoteTitleProp
       suppressContentEditableWarning
     >
       {title}
-    </h1>{isEditing || error ? <EntityNameCounter value={draft} /> : null}{error ? <span className="field-error" role="alert">{error}</span> : null}</>
+    </h1>{isEditing || error ? <EntityNameCounter value={draft} error={error} legacy={draft === title} /> : null}</>
   );
 }

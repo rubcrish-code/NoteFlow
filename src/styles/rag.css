@@ -91,7 +91,7 @@
 }
 
 .rag-new-chat {
-  background: transparent;
+  background: var(--button-bg);
   border-color: var(--border-default);
   box-shadow: none;
   color: var(--text-primary);
@@ -116,7 +116,7 @@
 .rag-page button > svg { display: block; flex-shrink: 0; }
 
 .rag-new-chat:hover {
-  background: var(--surface-hover);
+  background: var(--button-bg-hover);
   border-color: var(--border-strong);
 }
 
@@ -317,6 +317,8 @@
 }
 
 .rag-chat-scroll {
+  /* Grid reflow must not move the user's reading position via browser anchoring. */
+  overflow-anchor: none;
   padding: clamp(var(--space-6), 5cqi, var(--space-10)) clamp(var(--space-4), 7cqi, 72px);
   scrollbar-gutter: stable;
 }

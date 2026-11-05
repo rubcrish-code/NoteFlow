@@ -14,6 +14,9 @@ import { applyEditorFormattingValue, runEditorFormattingCommand } from "../src/f
 import type { EditorToolbarActionId } from "../src/features/editor/editorToolbarLayout";
 import { scrollToNoteHeading } from "../src/features/editor/headingAnchors";
 import { PendingNoteSaves } from "../src/app/noteAutosaveCoordinator";
+import type { EditorSavePreparationControl } from "../src/features/editor/editorSavePreparation";
+import { noteSearchKey } from "../src/features/editor/noteSearch";
+import { fragmentNavigationKey } from "../src/features/editor/fragmentNavigation";
 
 // Only synthetic fixtures run here; an executable sentinel avoids a false XSS pass from disabled scripts.
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost", pretendToBeVisual: true, runScripts: "dangerously" });
@@ -378,7 +381,7 @@ describe("Phase C actual editor behavior", () => {
     for (const command of ["bold", "italic", "inline-code", "underline", "strike"] as const) assert.equal(runEditorFormattingCommand(editor, command), true);
     const types = editor.getJSON().content![0].content![0].marks!.map((mark) => mark.type).sort();
     assert.deepEqual(types, ["bold", "code", "italic", "strike", "underline"]);
-    assert.match(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, /<code>Сочетание<\/code>/);
+    assert.match(serializeEditorDocumentForStorage(editor.getJSON() as EditorDocument).contentMarkdown, /`Сочетание`/);
     editor.commands.setContent(reload(editor.getJSON() as EditorDocument));
     assert.equal(editor.getText(), "Сочетание");
     assert.deepEqual(editor.getJSON().content![0].content![0].marks!.map((mark) => mark.type).sort(), types);
@@ -598,6 +601,61 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const editor = (container.querySelector(".tiptap") as HTMLElement & { editor: Editor }).editor;
     return { props, editor, container, render };
   }
+  it("explicit native Markdown paste reads text only without importing clipboard assets", async () => {
+    const { editor } = await mount();
+    let reads = 0;
+    mockIPC((command, args) => {
+      if (command !== "read_editor_clipboard") return [];
+      reads++;
+      assert.deepEqual(args, { noteId: "phase-c", plainTextOnly: true });
+      return { text: "**Native Markdown**", html: "", attachments: [], failedFiles: 0 };
+    });
+    const original = Object.getOwnPropertyDescriptor(globalThis, "isTauri");
+    Object.defineProperty(globalThis, "isTauri", { configurable: true, value: true });
+    try {
+      await act(async () => editor.commands.selectAll());
+      await act(async () => editor.view.dom.dispatchEvent(new dom.window.MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+      const command = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Вставить как Markdown");
+      assert.ok(command);
+      await act(async () => command.click());
+      assert.equal(reads, 1);
+      assert.equal(editor.view.dom.querySelector("strong")?.textContent, "Native Markdown");
+      assert.equal(editor.view.dom.querySelector('[data-type="fileAttachment"]'), null);
+    } finally {
+      if (original) Object.defineProperty(globalThis, "isTauri", original); else Reflect.deleteProperty(globalThis, "isTauri");
+    }
+  });
+  it("mounted asynchronous preparation preserves selection and reloads a same-ID restore without replaying the old draft", async () => {
+    const { props, editor, container, render } = await mount();
+    const control: { current: EditorSavePreparationControl | null } = { current: null };
+    const saved: ReturnType<typeof serializeEditorDocumentForStorage>[] = [];
+    props.savePreparationRef = control; props.onEditorDirty = () => true;
+    props.onEditorChange = (_id, doc, html) => saved.push(serializeEditorDocumentForStorage(doc, html));
+    await render();
+    await act(async () => { editor.commands.insertContent(" **новый текст**"); await control.current!.flush(); });
+    assert.equal(saved.length, 1); assert.deepEqual(saved[0].editorDocument, JSON.parse(JSON.stringify(editor.getJSON())));
+    const domNode = container.querySelector(".tiptap"), selection = editor.state.selection.toJSON();
+    props.note = { ...props.note, contentVersion: 2, editorDocument: saved[0].editorDocument }; await render();
+    assert.equal(container.querySelector(".tiptap"), domNode); assert.deepEqual(editor.state.selection.toJSON(), selection);
+    await act(async () => editor.commands.insertContent("НЕ ДОЛЖНО ВЕРНУТЬСЯ"));
+    props.note = { ...noteWith("Восстановленный текст"), contentVersion: 3 }; props.documentReloadGeneration += 1;
+    await render(); await act(async () => { await control.current!.flush(); });
+    assert.equal(editor.getText(), "Восстановленный текст"); assert.equal(saved.length, 1);
+    props.note = noteWith("Другая заметка", "other"); await render(); assert.equal(editor.getText(), "Другая заметка");
+  });
+  it("passive search/source/selection transactions do not schedule worker snapshots or autosave", async () => {
+    const { props, editor, render } = await mount();
+    const control: { current: EditorSavePreparationControl | null } = { current: null }; let saves = 0, dirty = 0;
+    props.savePreparationRef = control; props.onEditorDirty = () => { dirty++; return true; }; props.onEditorChange = () => { saves++; };
+    await render(); const before = editor.getJSON();
+    await act(async () => {
+      editor.view.dispatch(editor.state.tr.setMeta(noteSearchKey, { query: "строка" }));
+      editor.view.dispatch(editor.state.tr.setMeta(fragmentNavigationKey, { from: 1, to: 7 }).setMeta("addToHistory", false));
+      editor.commands.setTextSelection({ from: 2, to: 6 });
+      await control.current!.flush();
+    });
+    assert.deepEqual(editor.getJSON(), before); assert.equal(dirty, 0); assert.equal(saves, 0); assert.equal(control.current!.hasPending(), false);
+  });
   it("note-menu Markdown import updates the existing note without calling new-note persistence", async () => {
     const { File } = await import("node:buffer");
     const { props, editor, container, render } = await mount();
@@ -901,7 +959,8 @@ describe("Phase C mounted EditorArea synchronization and context menu", () => {
     const menu = document.querySelector('[aria-label="Форматирование текста"]'); assert.ok(menu);
     const children = Array.from(menu.children);
     assert.deepEqual(children.slice(0, 3).map((child) => child.textContent), ["Вырезать", "Копировать", "Вставить"]);
-    assert.equal(children[3].getAttribute("role"), "separator");
+    assert.equal(children[3].textContent, "Вставить как Markdown");
+    assert.equal(children[4].getAttribute("role"), "separator");
     assert.ok(menu.querySelector("[data-context-action]"));
     assert.match(menu.textContent ?? "", /Ссылка на заметку/);
     assert.deepEqual(editor.state.selection.toJSON(), selection);

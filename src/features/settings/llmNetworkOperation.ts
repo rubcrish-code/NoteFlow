@@ -1,3 +1,6 @@
+import { translate, getInterfaceLanguage } from "../../shared/i18n";
+import { uiMessage } from "../../shared/uiMessages";
+
 export type LlmNetworkAction = "listModels" | "testConnection";
 export type LlmNetworkTargetKind = "draft" | "provider";
 
@@ -6,8 +9,8 @@ export function modelDiscoveryFeedbackFromConnectionTest(result: { status: "succ
     return { state: "error" as const, message: result.message };
   }
   return result.models.length > 0
-    ? { state: "success" as const, message: `Получено моделей: ${result.models.length}` }
-    : { state: "empty" as const, message: "Endpoint доступен, но список моделей пуст" };
+    ? { state: "success" as const, message: translate("ui.49d5707d469b", { p0: result.models.length }) }
+    : { state: "empty" as const, message: uiMessage(getInterfaceLanguage(), "modelListEmpty") };
 }
 
 export interface LlmNetworkOperation {

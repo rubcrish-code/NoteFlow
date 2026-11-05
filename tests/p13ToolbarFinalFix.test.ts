@@ -44,10 +44,9 @@ describe("P1.3 final toolbar correction", () => {
     assert.equal(wide.overflowActions.length, 0);
   });
 
-  it("renders separators from adjacent action groups and keeps overflow selection-safe", () => {
+  it("renders separators from adjacent action groups and keeps direct controls selection-safe", () => {
     assert.match(formattingToolbarSource, /nextTool\.group !== tool\.group/);
-    assert.match(formattingToolbarSource, /previousTool\.group !== tool\.group/);
-    assert.match(formattingToolbarSource, /overflowActions\.length > 0/);
+    assert.doesNotMatch(formattingToolbarSource, /toolbar-overflow|isOverflowMenuOpen/);
     assert.match(formattingToolbarSource, /onMouseDown=\{\(event\) => event\.preventDefault\(\)\}/);
     assert.match(menuPopoverSource, /menuitemcheckbox/);
     assert.match(menuPopoverSource, /menuitemradio/);

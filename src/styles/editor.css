@@ -11,24 +11,50 @@
 }
 
 .toolbar {
-  gap: 1px;
-  min-width: 0;
-  overflow: hidden;
-  padding-inline: var(--space-3);
+  --toolbar-density: distributed;
+  gap: 0;
+  min-width: 820px;
+  overflow: visible;
+  padding-inline: 8px;
+  justify-content: flex-start;
 }
 
 .toolbar .tb {
-  min-width: 30px;
+  flex: 0 0 24px;
+  min-width: 24px;
+  width: 24px;
 }
 
 .toolbar .font-menu-anchor {
-  flex-basis: 0;
+  flex: 0 0 30px;
   min-width: 30px;
 }
+.toolbar .font-menu-anchor .tb { flex-basis: 30px; width: 30px; }
 
 .toolbar-slot,
 .toolbar-overflow-slot {
   flex: 0 0 auto;
+}
+
+/* Distribute tool cells, not dividers. Fixed targets stay centered in one continuous grid. */
+.toolbar-single-row .toolbar-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex: 1 1 24px;
+  min-width: 24px;
+}
+
+.toolbar-single-row .toolbar-slot-font {
+  flex: 1.25 1 30px;
+  min-width: 30px;
+}
+
+.toolbar-single-row .toolbar .tb-sep {
+  position: absolute;
+  right: 0;
+  margin: 0;
 }
 
 .toolbar-overflow-slot {
@@ -45,6 +71,15 @@
 
 .toolbar-overflow-menu {
   max-height: min(380px, calc(100vh - var(--space-8)));
+}
+
+.note-export-formats .markdown-export-hint {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-xs-size);
+  font-weight: var(--font-weight-regular);
+  line-height: 1.5;
 }
 
 .toolbar-overflow-menu button {
@@ -110,13 +145,17 @@
   transition: background-color var(--motion-fast) var(--ease-standard);
 }
 
-.entity-name-counter { color: var(--text-secondary); font-size: var(--text-xs-size); }
+.entity-name-counter { color: var(--text-secondary); display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: start; column-gap: var(--space-2); font-size: var(--text-xs-size); font-weight: var(--font-weight-regular); line-height: 18px; min-height: 18px; min-width: 0; }
+.entity-name-count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.entity-name-counter .entity-name-feedback { margin: 0; min-width: 0; font-size: inherit; line-height: inherit; overflow-wrap: anywhere; }
 .entity-name-counter.exceeded { color: var(--danger); }
 .entity-name-counter .field-error { display: block; }
 
 .ed-body a[data-note-link] { border-bottom-style: dashed; text-decoration-style: dashed; }
 .note-fragment-target { background: color-mix(in srgb, var(--accent) 22%, var(--panel)); outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); border-radius: 2px; }
-.note-link-picker input { width: 100%; min-width: 0; }
+.note-link-picker input { width: 100%; min-width: 0; flex: 0 0 auto; min-height: var(--control-height-default); scroll-margin-block: var(--space-2); }
+.note-link-picker .nf-modal-body { padding-top: var(--space-2); }
+.export-format-notice { color: var(--text-secondary); font-size: var(--text-sm-size); line-height: 1.55; margin-bottom: 0; }
 .note-link-options { max-height: min(320px, 45vh); overflow-y: auto; margin-top: var(--space-3); }
 .note-link-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-3); }
 .note-link-pagination > span { color: var(--text-secondary); font-size: 12px; }
@@ -231,6 +270,15 @@
 .ed-tag-add:hover {
   background: var(--surface-hover);
   color: var(--text-primary);
+}
+
+.ed-tag-chip[style*="--tag-color"] button:hover {
+  background: color-mix(in srgb, var(--tag-foreground) 16%, transparent);
+  color: inherit;
+}
+
+[data-theme="dark"] .ed-tag-chip[style*="--tag-color"] button:hover {
+  background: color-mix(in srgb, var(--tag-dark-foreground) 16%, transparent);
 }
 
 .ed-tag-popover {

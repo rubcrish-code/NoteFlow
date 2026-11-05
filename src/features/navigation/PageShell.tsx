@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "../../shared/i18n";
 import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { AppSection } from "../../app/types";
 import { ResizeHandle } from "../../shared/ResizeHandle";
@@ -11,6 +12,8 @@ export interface PageShellSidebarProps {
   onEditLocalProfile: () => void;
   onReset: () => void;
   onResize: (deltaX: number) => void;
+  onResizeStart?: (handle: HTMLDivElement) => void;
+  onResizeEnd?: () => void;
   onToggleCollapse: () => void;
   width: number;
 }
@@ -38,6 +41,7 @@ export function PageShell({
   onToast,
   sidebar,
 }: PageShellProps) {
+  useInterfaceLanguage();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const contentRef = useRef<HTMLElement>(null);
   const pageLayoutMode = getPageLayoutMode(useObservedPhysicalElementWidth(contentRef));
@@ -47,11 +51,11 @@ export function PageShell({
   };
 
   return (
-    <div className={`page-shell ${resolvedCollapsed ? "collapse-sb" : ""}`} style={shellStyle}>
+    <div className={`page-shell ${resolvedCollapsed ? "collapse-sb" : ""}`} data-panel-layout="page" style={shellStyle}>
       <MainSidebar
         activeSection={activeSection}
         collapsed={resolvedCollapsed}
-        localProfileName={sidebar?.localProfileName ?? "Локальный профиль"}
+        localProfileName={sidebar?.localProfileName ?? translate("ui.91616dd5b60d")}
         onEditLocalProfile={sidebar?.onEditLocalProfile ?? (() => undefined)}
         onNavigate={onNavigate}
         onNewNote={onNewNote}
@@ -59,7 +63,7 @@ export function PageShell({
         onToggleCollapse={sidebar?.onToggleCollapse ?? (() => setIsSidebarCollapsed((value) => !value))}
       />
       {!resolvedCollapsed && sidebar ? (
-        <ResizeHandle className="page-resize-sb" label="Изменить ширину сайдбара" onReset={sidebar.onReset} onResize={sidebar.onResize} />
+        <ResizeHandle className="page-resize-sb" label={translate("ui.edfdc72b827b")} onReset={sidebar.onReset} onResize={sidebar.onResize} onResizeStart={sidebar.onResizeStart} onResizeEnd={sidebar.onResizeEnd} />
       ) : null}
       <main className={`simple-page page-layout-${pageLayoutMode} ${contentClassName}`} data-page-layout={pageLayoutMode} ref={contentRef}>{children}</main>
     </div>

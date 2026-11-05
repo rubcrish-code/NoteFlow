@@ -189,6 +189,92 @@
   line-height: var(--text-sm-line);
 }
 
+.settings-preference-row--language {
+  min-height: 60px;
+  padding-block: 11px;
+}
+
+.settings-profile-preferences {
+  container: language-preferences / inline-size;
+}
+
+.interface-language-control {
+  background: var(--button-bg);
+  border: 1px solid var(--border-default);
+  border-radius: 21px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: 38px;
+  isolation: isolate;
+  max-width: 100%;
+  padding: 2px;
+  position: relative;
+  width: 224px;
+}
+
+.interface-language-control::before {
+  background: #3b82f6;
+  border-radius: 18px;
+  bottom: 2px;
+  content: "";
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 160ms ease-out;
+  width: calc((100% - 4px) / 2);
+  z-index: -1;
+}
+
+.interface-language-control[data-language="en"]::before {
+  transform: translateX(100%);
+}
+
+.interface-language-segment {
+  cursor: pointer;
+  display: grid;
+  min-width: 0;
+  position: relative;
+}
+
+.interface-language-segment input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.interface-language-segment span {
+  align-items: center;
+  border-radius: 18px;
+  color: var(--text-primary);
+  display: flex;
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  justify-content: center;
+  padding-inline: var(--space-2);
+  transition: color 160ms ease-out, background-color 160ms ease-out;
+}
+
+.interface-language-segment:hover input:not(:checked) + span {
+  background: var(--button-bg-hover);
+}
+
+.interface-language-segment input:checked + span {
+  color: #fff;
+}
+
+.interface-language-segment input:focus-visible + span {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interface-language-control::before,
+  .interface-language-segment span {
+    transition: none;
+  }
+}
+
 .shortcut-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -239,6 +325,30 @@
 .settings-layout-narrow .settings-preference-row > :last-child:not(.settings-preference-copy) {
   grid-column: 2;
   justify-self: start;
+}
+
+@container language-preferences (max-width: 469px) {
+  .settings-preference-row--language {
+    align-items: center;
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .settings-preference-row--language > .interface-language-control {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+@container language-preferences (min-width: 470px) {
+  .settings-layout-narrow .settings-preference-row--language {
+    align-items: center;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+  }
+
+  .settings-layout-narrow .settings-preference-row--language > .interface-language-control {
+    grid-column: 3;
+    justify-self: end;
+  }
 }
 
 .settings-layout-narrow .shortcut-row {

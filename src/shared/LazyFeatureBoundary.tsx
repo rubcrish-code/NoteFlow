@@ -1,3 +1,4 @@
+import { translate, useInterfaceLanguage } from "./i18n";
 import { Component, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
 
 interface LazyFeatureBoundaryProps {
@@ -37,6 +38,7 @@ class LazyFeatureErrorBoundary extends Component<LazyFeatureErrorBoundaryProps, 
 }
 
 export function LazyFeatureBoundary({ children, errorFallback, loadingFallback }: LazyFeatureBoundaryProps) {
+  useInterfaceLanguage();
   return (
     <LazyFeatureErrorBoundary fallback={errorFallback}>
       <Suspense fallback={loadingFallback}>{children}</Suspense>
@@ -45,6 +47,7 @@ export function LazyFeatureBoundary({ children, errorFallback, loadingFallback }
 }
 
 export function FeatureLoadState({ kind, label }: FeatureLoadStateProps) {
+  useInterfaceLanguage();
   const failed = kind === "error";
   const [showLoading, setShowLoading] = useState(false);
 
@@ -58,8 +61,8 @@ export function FeatureLoadState({ kind, label }: FeatureLoadStateProps) {
       {!failed && showLoading ? <span aria-hidden="true" className="button-spinner" /> : null}
       {failed || showLoading ? (
         <div>
-          <b>{failed ? `Не удалось открыть ${label}` : `Открываем ${label}…`}</b>
-          <span>{failed ? "Перезапустите NoteFlow и попробуйте ещё раз." : "Рабочая область останется на месте."}</span>
+          <b>{failed ? translate("ui.b2d96d3467be", { p0: label }) : translate("ui.a934846414f1", { p0: label })}</b>
+          <span>{failed ? translate("ui.62c815f87e65") : translate("ui.b18e53195053")}</span>
         </div>
       ) : null}
     </section>

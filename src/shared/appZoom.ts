@@ -1,3 +1,4 @@
+import { translate } from "./i18n";
 export const APP_ZOOM_DEFAULT = 100;
 export const APP_ZOOM_MIN = 80;
 export const APP_ZOOM_MAX = 160;
@@ -66,5 +67,5 @@ export function getZoomActionFromKey(event: AppZoomKeyEventLike): AppZoomAction 
 }
 
 export function formatAppZoomToast(zoomPercent: number) {
-  return `Масштаб: ${normalizeAppZoom(zoomPercent)}%`;
+  return translate("ui.3a9770a02666", { p0: normalizeAppZoom(zoomPercent) });
 }

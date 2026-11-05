@@ -2,6 +2,7 @@ import type { Editor } from "@tiptap/react";
 import type { EditorToolbarActionId } from "./editorToolbarLayout";
 import type { EditorCommandSubmit } from "./EditorCommandPopover";
 import { sanitizeMarkdownLinkHref } from "../../shared/safeLinkHref";
+import { toggleSelectedEditorBlock } from "./editorBlockCommands";
 
 export function runEditorFormattingCommand(editor: Editor, id: EditorToolbarActionId): boolean {
   const chain = editor.chain().focus();
@@ -21,8 +22,9 @@ export function runEditorFormattingCommand(editor: Editor, id: EditorToolbarActi
     case "ul": return chain.toggleBulletList().run();
     case "ol": return chain.toggleOrderedList().run();
     case "task": return chain.toggleTaskList().run();
-    case "quote": return chain.toggleBlockquote().run();
-    case "code-block": return chain.toggleCodeBlock().run();
+    case "table": return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+    case "quote": return chain.command(({ tr }) => toggleSelectedEditorBlock(tr, "blockquote")).run();
+    case "code-block": return chain.command(({ tr }) => toggleSelectedEditorBlock(tr, "codeBlock")).run();
     case "clear": return chain.unsetAllMarks().clearNodes().run();
     default: return false;
   }

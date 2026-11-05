@@ -15,7 +15,7 @@
         "title": "NoteFlow",
         "width": 1440,
         "height": 900,
-        "minWidth": 1100,
+        "minWidth": 900,
         "minHeight": 700,
         "resizable": true,
         "maximized": true,

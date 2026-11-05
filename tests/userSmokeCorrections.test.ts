@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readLocalizedSource as readFileSync } from "./helpers/readLocalizedSource";
 import { describe, it } from "node:test";
 import type { Note, TagRow } from "../src/app/types";
 import { buildCalendarDays, getCalendarKeyboardTarget, moveIsoMonth } from "../src/features/notes/NoteDatePicker";
@@ -138,7 +138,7 @@ describe("final user smoke corrective pass", () => {
 
   it("validates tag creation and uses a deterministic curated palette", () => {
     assert.equal(TAG_COLOR_PALETTE.length, 10);
-    assert.equal(DEFAULT_TAG_PALETTE_ITEM.hex, "#3B6EF2");
+    assert.equal(DEFAULT_TAG_PALETTE_ITEM.hex, "#60A5FA");
     assert.equal(normalizeTagName("  Важные   идеи "), "Важные идеи");
     assert.equal(validateTagName([workTag], undefined, ""), "Введите название тега");
     assert.equal(validateTagName([workTag], undefined, " работа "), "Тег с таким названием уже существует");

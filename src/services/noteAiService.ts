@@ -1,5 +1,7 @@
+import { getInterfaceLanguage } from "../shared/i18n";
 import { invoke } from "./safeInvoke";
-import type { Note } from "../app/types";
+import type { AppLanguage, Note } from "../app/types";
+import { localizeUiMessage, uiMessage } from "../shared/uiMessages";
 import { streamArguments, type AiRequestControl } from "./aiBackground";
 import { isTauri } from "@tauri-apps/api/core";
 
@@ -124,7 +126,7 @@ function normalizeNoteChatRole(value: string): NoteChatRole {
   return value === "assistant" ? "assistant" : "user";
 }
 
-function mapStatus(dto: NoteAiStatusDto): NoteAiStatus {
+function mapStatus(dto: NoteAiStatusDto, language: AppLanguage): NoteAiStatus {
   return {
     hasProvider: dto.hasProvider,
     providerName: dto.providerName ?? undefined,
@@ -132,16 +134,16 @@ function mapStatus(dto: NoteAiStatusDto): NoteAiStatus {
     isLocal: dto.isLocal,
     privacyScope: normalizePrivacyScope(dto.privacyScope),
     privacyAccepted: dto.privacyAccepted,
-    privacyNotice: dto.privacyNotice,
+    privacyNotice: localizeUiMessage(language, dto.privacyNotice),
     canUse: dto.canUse,
-    message: dto.message,
+    message: localizeUiMessage(language, dto.message),
   };
 }
 
 function mapResponse(dto: NoteAiResponseDto): NoteAiResponse {
   return {
     status: normalizeStatus(dto.status),
-    message: dto.message,
+    message: localizeUiMessage(getInterfaceLanguage(), dto.message),
     response: dto.response,
     providerName: dto.providerName,
     model: dto.model,
@@ -179,12 +181,12 @@ function withInvokeTimeout<T>(request: Promise<T>, timeoutMs: number, message: s
   });
 }
 
-export async function getNoteAiStatus() {
-  return mapStatus(await invoke<NoteAiStatusDto>("get_note_ai_status"));
+export async function getNoteAiStatus(language: AppLanguage = getInterfaceLanguage()) {
+  return mapStatus(await invoke<NoteAiStatusDto>("get_note_ai_status"), language);
 }
 
-export async function acceptNoteAiPrivacy(privacyScope: NoteAiPrivacyScope) {
-  return mapStatus(await invoke<NoteAiStatusDto>("accept_note_ai_privacy", { privacyScope }));
+export async function acceptNoteAiPrivacy(privacyScope: NoteAiPrivacyScope, language: AppLanguage = getInterfaceLanguage()) {
+  return mapStatus(await invoke<NoteAiStatusDto>("accept_note_ai_privacy", { privacyScope }), language);
 }
 
 export async function listNoteChatMessages(noteId: string) {
@@ -209,7 +211,7 @@ export async function runNoteAi(request: NoteAiRequest, control?: AiRequestContr
     await withInvokeTimeout(
       control && isTauri() ? invoke<NoteAiResponseDto>("run_note_ai_stream", { request, ...streamArguments(control) }) : invoke<NoteAiResponseDto>("run_note_ai", { request }),
       NOTE_AI_TIMEOUT_MS,
-      "Timeout: AI-запрос по текущей заметке не завершился за 45 секунд. Проверьте, доступна ли модель.",
+      uiMessage(getInterfaceLanguage(), "noteAiTimeout45s"),
       control && isTauri() ? () => {
         void invoke<void>("cancel_ai_operation", { requestId: control.requestId }).catch(() => undefined);
       } : undefined,

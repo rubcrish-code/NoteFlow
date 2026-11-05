@@ -1,4 +1,7 @@
+import { translate, getInterfaceLanguage } from "../shared/i18n";
 import { invoke as tauriInvoke, type InvokeArgs } from "@tauri-apps/api/core";
+import { localizeUiMessage } from "../shared/uiMessages";
+import { publicErrorMessage } from "../shared/i18n/publicErrors";
 
 export class PublicCommandError extends Error {
   readonly code: string;
@@ -26,8 +29,8 @@ export async function invoke<T>(command: string, args?: InvokeArgs): Promise<T> 
     return await tauriInvoke<T>(command, args);
   } catch (error) {
     if (isPublicError(error)) {
-      throw new PublicCommandError(error.code, error.message, error.retryable === true);
+      throw new PublicCommandError(error.code, getInterfaceLanguage() === "en" ? publicErrorMessage(error.code, "en") ?? localizeUiMessage("en", error.message) : localizeUiMessage("ru", error.message), error.retryable === true);
     }
-    throw new PublicCommandError("IPC_FAILED", "Не удалось выполнить операцию. Попробуйте ещё раз.", true);
+    throw new PublicCommandError("IPC_FAILED", translate("ui.6be11e608acc"), true);
   }
 }

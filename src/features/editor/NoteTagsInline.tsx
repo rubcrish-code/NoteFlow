@@ -1,10 +1,12 @@
+import { localizeUiMessage } from "../../shared/uiMessages";
+import { translate, useInterfaceLanguage, getInterfaceLanguage } from "../../shared/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { NoteTag, TagRow } from "../../app/types";
 import { Icon } from "../../shared/Icon";
 import { useFloatingPopoverPosition } from "../../shared/useFloatingPopoverPosition";
 import { TagEditorModal, type TagEditorValue } from "../tags/TagEditorModal";
-import { getTagDisplayColor, tagColorStyle } from "../tags/tagPalette";
+import { tagColorStyle } from "../tags/tagPalette";
 
 interface NoteTagsInlineProps {
   noteId: string;
@@ -17,6 +19,7 @@ interface NoteTagsInlineProps {
 }
 
 export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMakePrimary, options, tags }: NoteTagsInlineProps) {
+  useInterfaceLanguage();
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [query, setQuery] = useState("");
@@ -66,7 +69,7 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMake
     try {
       await onSetTag(noteId, tagId, assigned);
     } catch {
-      setError("Не удалось изменить теги заметки.");
+      setError(translate("ui.803b6f15ba9b"));
     } finally {
       setPendingTagId("");
     }
@@ -79,7 +82,7 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMake
     try {
       await onMakePrimary(noteId, tagId);
     } catch {
-      setError("Не удалось изменить порядок тегов.");
+      setError(translate("ui.0b6df95078ed"));
     } finally {
       setPendingTagId("");
     }
@@ -92,10 +95,10 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMake
           <span className={`tag tag-${tag.color} ed-tag-chip`} key={tag.id} style={tagColorStyle(tag)}>
             <span>{tag.name}</span>
             <button
-              aria-label={`Убрать тег «${tag.name}» с этой заметки`}
+              aria-label={translate("ui.543fe47d8b58", { p0: tag.name })}
               disabled={Boolean(pendingTagId)}
               onClick={() => void changeTag(tag.id, false)}
-              title="Убрать с этой заметки"
+              title={translate("ui.2593f4bb9b17")}
               type="button"
             ><Icon name="x" /></button>
           </span>
@@ -104,17 +107,17 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMake
         <button
           aria-expanded={isOpen}
           aria-haspopup="dialog"
-          aria-label="Добавить тег к заметке"
+          aria-label={translate("ui.50c70959191e")}
           className="ed-tag-add"
           onClick={() => { setError(""); setQuery(""); setIsOpen((current) => !current); }}
           ref={anchorRef}
-          title="Добавить тег"
+          title={translate("ui.d4c17779d21e")}
           type="button"
         ><Icon name="plus" /></button>
       </div>
       {isOpen ? createPortal(
         <div
-          aria-label="Теги заметки"
+          aria-label={translate("ui.6640b6c47303")}
           className="nf-popover ed-tag-popover"
           ref={popoverRef}
           role="dialog"
@@ -122,7 +125,7 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMake
         >
           <label className="ed-tag-search">
             <Icon name="search" />
-            <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Найти тег…" ref={searchRef} value={query} />
+            <input onChange={(event) => setQuery(event.currentTarget.value)} placeholder={translate("ui.8ca89883e780")} ref={searchRef} value={query} />
           </label>
           <div className="ed-tag-options">
             {matchingOptions.map((tag) => (
@@ -133,21 +136,20 @@ export function NoteTagsInline({ noteId, noteDate, onCreateTag, onSetTag, onMake
                   onClick={() => void changeTag(tag.id, !assignedIds.has(tag.id))}
                   type="button"
                 >
-                  <span className="tag-dot" style={{ backgroundColor: getTagDisplayColor(tag) }} />
+                  <span className="tag-dot" style={tagColorStyle(tag)} />
                   <span>{tag.name}</span>
                   {assignedIds.has(tag.id) ? <Icon name="check" /> : null}
                 </button>
                 {assignedIds.has(tag.id) && tags[0]?.id !== tag.id ? (
-                  <button className="ed-tag-primary-action" disabled={Boolean(pendingTagId)} onClick={() => void makePrimary(tag.id)} type="button">Сделать основным</button>
+                  <button className="ed-tag-primary-action" disabled={Boolean(pendingTagId)} onClick={() => void makePrimary(tag.id)} type="button">{translate("ui.12606cfe703d")}</button>
                 ) : null}
               </div>
             ))}
-            {matchingOptions.length === 0 ? <span className="ed-tag-empty">Теги не найдены</span> : null}
+            {matchingOptions.length === 0 ? <span className="ed-tag-empty">{translate("ui.27b94d452795")}</span> : null}
           </div>
-          {error ? <span className="field-error" role="alert">{error}</span> : null}
+          {error ? <span className="field-error" role="alert">{localizeUiMessage(getInterfaceLanguage(), error)}</span> : null}
           <button className="ed-tag-create" onClick={() => { setIsOpen(false); setIsCreating(true); }} type="button">
-            <Icon name="plus" /> Новый тег
-          </button>
+            <Icon name="plus" /> {translate("ui.764e4b9bd472")}</button>
         </div>,
         document.body,
       ) : null}

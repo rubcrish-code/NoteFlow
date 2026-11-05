@@ -12,7 +12,7 @@ import {
 
 interface UseAppZoomOptions {
   onZoomChange: (message: string) => void;
-  onZoomPercentChange: (zoomPercent: number) => void;
+  onZoomPercentChange: (zoomPercent: number) => boolean | void;
   zoomPercent: number;
 }
 
@@ -25,8 +25,8 @@ export function useAppZoom({ onZoomChange, onZoomPercentChange, zoomPercent }: U
     (action: AppZoomAction) => {
       const nextZoom = getNextAppZoom(zoomRef.current, action);
       const shouldNotify = nextZoom !== zoomRef.current || action === "reset";
+      if (onZoomPercentChange(nextZoom) === false) return;
       zoomRef.current = nextZoom;
-      onZoomPercentChange(nextZoom);
       if (shouldNotify) {
         onZoomChange(formatAppZoomToast(nextZoom));
       }
@@ -38,8 +38,8 @@ export function useAppZoom({ onZoomChange, onZoomPercentChange, zoomPercent }: U
     (nextZoom: number) => {
       const normalizedZoom = normalizeAppZoom(nextZoom);
       const shouldNotify = normalizedZoom !== zoomRef.current;
+      if (onZoomPercentChange(normalizedZoom) === false) return;
       zoomRef.current = normalizedZoom;
-      onZoomPercentChange(normalizedZoom);
       if (shouldNotify) {
         onZoomChange(formatAppZoomToast(normalizedZoom));
       }

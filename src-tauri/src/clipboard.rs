@@ -52,6 +52,7 @@ pub struct ClipboardContent {
 pub(crate) struct ClipboardPayload {
     pub text: String,
     pub html: String,
+    pub markdown: String,
     pub files: Vec<std::path::PathBuf>,
     pub image: Option<Vec<u8>>,
 }
@@ -232,6 +233,10 @@ pub(crate) fn read_content() -> Result<ClipboardPayload, String> {
     let html = clipboard.get().html().unwrap_or_default();
     let text = clipboard.get_text().unwrap_or_default();
     #[cfg(windows)]
+    let markdown = windows::read_markdown()?;
+    #[cfg(not(windows))]
+    let markdown = String::new();
+    #[cfg(windows)]
     if sequence != windows::sequence() {
         return Err("Буфер обмена изменился. Повторите вставку.".into());
     }
@@ -239,6 +244,7 @@ pub(crate) fn read_content() -> Result<ClipboardPayload, String> {
     Ok(ClipboardPayload {
         text: content.text,
         html: content.html,
+        markdown,
         ..Default::default()
     })
 }
@@ -276,6 +282,39 @@ mod windows {
     }
     pub fn sequence() -> u32 {
         unsafe { GetClipboardSequenceNumber() }
+    }
+
+    pub fn read_markdown() -> Result<String, String> {
+        for name in ["text/markdown", "Markdown"] {
+            let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+            let format = unsafe { RegisterClipboardFormatW(name.as_ptr()) };
+            if unsafe { IsClipboardFormatAvailable(format) } == 0 {
+                continue;
+            }
+            let error = || "Не удалось прочитать Markdown из буфера обмена".to_string();
+            if unsafe { OpenClipboard(std::ptr::null_mut()) } == 0 {
+                return Err(error());
+            }
+            let _open = Open;
+            let handle = unsafe { GetClipboardData(format) };
+            if handle.is_null() {
+                return Err(error());
+            }
+            let size = unsafe { GlobalSize(handle) };
+            if size == 0 || size > MAX_TEXT_BYTES + 1 {
+                return Err(error());
+            }
+            let pointer = unsafe { GlobalLock(handle) };
+            if pointer.is_null() {
+                return Err(error());
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), size) }.to_vec();
+            unsafe {
+                GlobalUnlock(handle);
+            }
+            return decode_markdown_bytes(&bytes);
+        }
+        Ok(String::new())
     }
 
     pub fn read_assets() -> Result<Option<ClipboardPayload>, String> {
@@ -353,6 +392,20 @@ mod windows {
         }
         Ok(None)
     }
+}
+
+#[cfg(any(windows, test))]
+fn decode_markdown_bytes(bytes: &[u8]) -> Result<String, String> {
+    let error = || "Не удалось прочитать Markdown из буфера обмена".to_string();
+    if bytes.len() > MAX_TEXT_BYTES + 1 {
+        return Err(error());
+    }
+    let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+    let text = std::str::from_utf8(bytes).map_err(|_| error())?;
+    if text.contains('\0') {
+        return Err(error());
+    }
+    Ok(text.trim_start_matches('\u{feff}').to_string())
 }
 
 #[tauri::command]
@@ -458,5 +511,21 @@ mod tests {
             .expect("limit");
         assert!(!error.contains("xxx"));
         assert!(bounded_content("".into(), "x".repeat(MAX_TEXT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn markdown_clipboard_decodes_utf8_bom_and_unicode_without_debug_data() {
+        assert_eq!(
+            decode_markdown_bytes("# Русский 😀\n\n**текст**\0".as_bytes()).expect("markdown"),
+            "# Русский 😀\n\n**текст**"
+        );
+        assert_eq!(
+            decode_markdown_bytes("\u{feff}# Heading".as_bytes()).expect("BOM"),
+            "# Heading"
+        );
+        assert!(decode_markdown_bytes(&[0xff, 0xfe, 0xff]).is_err());
+        assert!(decode_markdown_bytes(b"private\0text").is_err());
+        let error = decode_markdown_bytes(&vec![b'x'; MAX_TEXT_BYTES + 2]).expect_err("bounded");
+        assert!(!error.contains("xxx"));
     }
 }
