@@ -194,6 +194,37 @@ now passes in under six seconds. The emitted production JS asset names/content
 hashes remained unchanged (16 chunks). All local frontend/Rust/security/packaging
 gates were rerun successfully; hosted confirmation on this fix is required.
 
+### Hosted Canvas Regression Follow-Up
+
+Run `41919579569` confirmed that the Vite servers remain alive through all 30
+browser suites. Twenty-nine suites passed; the image suite failed only on its
+64-by-48 bitmap annotation check. No merge was performed.
+
+The old oracle required a highly saturated blue pixel. A four-CSS-pixel stroke
+on a small bitmap upscaled for editing can be less than one intrinsic pixel
+wide. Antialiasing then blends the stroke with the red/green fixture. A local
+diagnostic on the hosted Node runtime measured maximum blue values of 136, 109
+and 91 at viewport heights 700, 900 and 1100; the old threshold rejected the last
+two. In all three cases the cropped output exactly matched every retained RGBA
+byte from the actual annotated canvas. This is evidence of an invalid test
+oracle, not annotation loss.
+
+The repeated-crop test now first verifies that the unannotated fixture has no
+blue, waits for real UI drawing to add blue, and captures an unselected canvas
+bitmap. Each crop and reopen compares SHA-256 of every retained RGBA byte against
+an independently extracted rectangular region of that bitmap. Dimensions and
+crop origin remain strict. A negative control verifies that removing the blue
+annotation cannot satisfy the pixel oracle. Two additional 64-by-48 scenarios
+at taller viewports exercise the subpixel-stroke case explicitly. No production
+image code, geometry tolerance or existing case was removed or relaxed.
+
+The updated image suite passed all 18 cases locally on Node 24.22.2 with GPU
+disabled, including both repeated crops at all three tiny-image viewport sizes.
+The previous 16-case suite also passed with default rendering. Typecheck,
+all 1009 frontend tests and the production frontend build were rerun successfully.
+A complete passing hosted run on this test correction remains the merge gate;
+the earlier full local run contained 2667 cases before the two additions.
+
 ## Remaining QA Limitations
 
 - No new Computer Use/native smoke is claimed in this publication task.
